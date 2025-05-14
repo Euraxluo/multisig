@@ -5,9 +5,24 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Check, X, ExternalLink, Clock, ArrowRight, FileText, Code, Send } from "lucide-react"
+import {
+  Check,
+  X,
+  ExternalLink,
+  Clock,
+  ArrowRight,
+  FileText,
+  Code,
+  Send,
+  Calendar,
+  Zap,
+  ListChecks,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react"
 import { useState } from "react"
 import { motion, AnimatePresence } from "framer-motion"
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible"
 
 interface TransactionDetailsDialogProps {
   open: boolean
@@ -25,6 +40,7 @@ export function TransactionDetailsDialog({
   const [activeTab, setActiveTab] = useState("details")
   const [isApproving, setIsApproving] = useState(false)
   const [isRejecting, setIsRejecting] = useState(false)
+  const [expandedBatchIndex, setExpandedBatchIndex] = useState<number | null>(null)
 
   // Mock data - in a real app, you would fetch this based on transactionId and groupId
   const transaction = {
@@ -55,6 +71,30 @@ export function TransactionDetailsDialog({
     network: "Aptos",
     nonce: 12,
     data: "0x1a2b3c4d...",
+    isBatch: false,
+    isScheduled: false,
+    isConditional: false,
+    scheduledDate: null,
+    conditionType: null,
+    conditionDetails: null,
+    batchTransactions: [
+      {
+        id: "batch-1",
+        type: "transfer",
+        recipient: "0xdef0...5678",
+        recipientName: "Team Member 1",
+        amount: 50,
+        token: "APT",
+      },
+      {
+        id: "batch-2",
+        type: "transfer",
+        recipient: "0xghi1...9012",
+        recipientName: "Team Member 2",
+        amount: 50,
+        token: "APT",
+      },
+    ],
   }
 
   const group = {
@@ -89,6 +129,10 @@ export function TransactionDetailsDialog({
 
   const userApprover = transaction.approvers.find((a) => a.name === "You")
   const canApprove = userApprover && !userApprover.approved && transaction.status === "pending"
+
+  const toggleBatchExpand = (index: number) => {
+    setExpandedBatchIndex(expandedBatchIndex === index ? null : index)
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -139,7 +183,7 @@ export function TransactionDetailsDialog({
             </div>
             <div className="text-right">
               <p className="font-medium">
-                {transaction.amount} {transaction.token}
+                {transaction.isBatch ? "Batch Transaction" : `${transaction.amount} ${transaction.token}`}
               </p>
               <div className="flex items-center text-xs text-muted-foreground justify-end">
                 <Clock className="h-3 w-3 mr-1" />
@@ -151,13 +195,19 @@ export function TransactionDetailsDialog({
           <div className="p-3 rounded-lg bg-muted/50">
             <div className="flex items-center justify-between">
               <div className="flex items-center">
-                {transaction.type === "transfer" ? (
+                {transaction.isBatch ? (
+                  <ListChecks className="h-4 w-4 mr-2 text-primary" />
+                ) : transaction.type === "transfer" ? (
                   <Send className="h-4 w-4 mr-2 text-primary" />
                 ) : (
                   <Code className="h-4 w-4 mr-2 text-primary" />
                 )}
                 <span className="text-sm font-medium">
-                  {transaction.type === "transfer" ? "Token Transfer" : "Contract Interaction"}
+                  {transaction.isBatch
+                    ? "Batch Transaction"
+                    : transaction.type === "transfer"
+                      ? "Token Transfer"
+                      : "Contract Interaction"}
                 </span>
               </div>
               <Badge variant="outline" className="text-xs">
@@ -165,17 +215,43 @@ export function TransactionDetailsDialog({
               </Badge>
             </div>
 
-            <div className="mt-2 flex items-center">
-              <div className="flex-1">
-                <p className="text-xs text-muted-foreground">From</p>
-                <p className="text-xs font-medium">{group.name}</p>
+            {!transaction.isBatch && (
+              <div className="mt-2 flex items-center">
+                <div className="flex-1">
+                  <p className="text-xs text-muted-foreground">From</p>
+                  <p className="text-xs font-medium">{group.name}</p>
+                </div>
+                <ArrowRight className="h-4 w-4 mx-2 text-muted-foreground" />
+                <div className="flex-1">
+                  <p className="text-xs text-muted-foreground">To</p>
+                  <p className="text-xs font-medium">{transaction.recipientName || transaction.recipient}</p>
+                </div>
               </div>
-              <ArrowRight className="h-4 w-4 mx-2 text-muted-foreground" />
-              <div className="flex-1">
-                <p className="text-xs text-muted-foreground">To</p>
-                <p className="text-xs font-medium">{transaction.recipientName || transaction.recipient}</p>
+            )}
+
+            {(transaction.isScheduled || transaction.isConditional) && (
+              <div className="mt-2 pt-2 border-t border-border/30">
+                <div className="flex items-center">
+                  {transaction.isScheduled ? (
+                    <Calendar className="h-4 w-4 mr-2 text-primary" />
+                  ) : (
+                    <Zap className="h-4 w-4 mr-2 text-primary" />
+                  )}
+                  <div>
+                    <p className="text-xs font-medium">
+                      {transaction.isScheduled ? "Scheduled Transaction" : "Conditional Transaction"}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {transaction.isScheduled
+                        ? `Will execute on ${formatDate(transaction.scheduledDate || "")}`
+                        : transaction.conditionType === "price"
+                          ? `Will execute when price condition is met`
+                          : `Will execute when conditions are met`}
+                    </p>
+                  </div>
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <Tabs defaultValue="details" value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -205,50 +281,156 @@ export function TransactionDetailsDialog({
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.2 }}
                   >
-                    <div className="space-y-3">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Amount</p>
-                          <p className="text-sm font-medium">
-                            {transaction.amount} {transaction.token}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Network</p>
-                          <p className="text-sm font-medium">{transaction.network}</p>
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-xs text-muted-foreground">Recipient</p>
-                        <div className="flex items-center">
-                          <p className="text-sm font-medium mr-1">{transaction.recipient}</p>
-                          <Button variant="ghost" size="icon" className="h-6 w-6">
-                            <ExternalLink className="h-3 w-3" />
-                          </Button>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Created</p>
-                          <p className="text-sm font-medium">{formatDate(transaction.createdAt)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Expires</p>
-                          <p className="text-sm font-medium">{formatDate(transaction.expiresAt)}</p>
-                        </div>
-                      </div>
-
-                      {transaction.type === "contract" && (
-                        <div>
-                          <p className="text-xs text-muted-foreground">Transaction Data</p>
-                          <div className="mt-1 p-2 bg-muted rounded-md">
-                            <p className="text-xs font-mono break-all">{transaction.data}</p>
+                    {!transaction.isBatch ? (
+                      <div className="space-y-3">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <p className="text-xs text-muted-foreground">Amount</p>
+                            <p className="text-sm font-medium">
+                              {transaction.amount} {transaction.token}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Network</p>
+                            <p className="text-sm font-medium">{transaction.network}</p>
                           </div>
                         </div>
-                      )}
-                    </div>
+
+                        <div>
+                          <p className="text-xs text-muted-foreground">Recipient</p>
+                          <div className="flex items-center">
+                            <p className="text-sm font-medium mr-1">{transaction.recipient}</p>
+                            <Button variant="ghost" size="icon" className="h-6 w-6">
+                              <ExternalLink className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <p className="text-xs text-muted-foreground">Created</p>
+                            <p className="text-sm font-medium">{formatDate(transaction.createdAt)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Expires</p>
+                            <p className="text-sm font-medium">{formatDate(transaction.expiresAt)}</p>
+                          </div>
+                        </div>
+
+                        {transaction.type === "contract" && (
+                          <div>
+                            <p className="text-xs text-muted-foreground">Transaction Data</p>
+                            <div className="mt-1 p-2 bg-muted rounded-md">
+                              <p className="text-xs font-mono break-all">{transaction.data}</p>
+                            </div>
+                          </div>
+                        )}
+
+                        {transaction.isConditional && transaction.conditionType === "price" && (
+                          <div className="p-3 rounded-lg bg-accent/30">
+                            <p className="text-xs font-medium flex items-center">
+                              <Zap className="h-4 w-4 mr-1.5 text-primary" />
+                              Price Condition
+                            </p>
+                            <p className="text-xs mt-1">
+                              This transaction will automatically execute when the price condition is met.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        <p className="text-xs font-medium flex items-center">
+                          <ListChecks className="h-4 w-4 mr-1.5 text-primary" />
+                          Batch Transaction ({transaction.batchTransactions.length} transactions)
+                        </p>
+
+                        <div className="space-y-2">
+                          {transaction.batchTransactions.map((batchTx, index) => (
+                            <Collapsible key={batchTx.id}>
+                              <div className="border rounded-lg overflow-hidden">
+                                <CollapsibleTrigger className="w-full">
+                                  <div className="flex items-center justify-between p-2 bg-muted/50">
+                                    <div className="flex items-center">
+                                      <Badge variant="outline" className="mr-2">
+                                        #{index + 1}
+                                      </Badge>
+                                      <span className="text-sm font-medium">
+                                        {batchTx.type === "transfer"
+                                          ? "Transfer"
+                                          : batchTx.type === "contract"
+                                            ? "Contract Call"
+                                            : "Custom Transaction"}
+                                      </span>
+                                      {batchTx.amount && batchTx.token && (
+                                        <Badge variant="secondary" className="ml-2">
+                                          {batchTx.amount} {batchTx.token}
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    <div>
+                                      {expandedBatchIndex === index ? (
+                                        <ChevronUp className="h-4 w-4" />
+                                      ) : (
+                                        <ChevronDown className="h-4 w-4" />
+                                      )}
+                                    </div>
+                                  </div>
+                                </CollapsibleTrigger>
+                                <CollapsibleContent>
+                                  <div className="p-3 space-y-2">
+                                    {batchTx.type === "transfer" && (
+                                      <>
+                                        <div>
+                                          <p className="text-xs text-muted-foreground">Recipient</p>
+                                          <div className="flex items-center">
+                                            <p className="text-sm font-medium mr-1">
+                                              {batchTx.recipientName || batchTx.recipient}
+                                            </p>
+                                            <Button variant="ghost" size="icon" className="h-6 w-6">
+                                              <ExternalLink className="h-3 w-3" />
+                                            </Button>
+                                          </div>
+                                        </div>
+                                        <div>
+                                          <p className="text-xs text-muted-foreground">Amount</p>
+                                          <p className="text-sm font-medium">
+                                            {batchTx.amount} {batchTx.token}
+                                          </p>
+                                        </div>
+                                      </>
+                                    )}
+                                  </div>
+                                </CollapsibleContent>
+                              </div>
+                            </Collapsible>
+                          ))}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <p className="text-xs text-muted-foreground">Created</p>
+                            <p className="text-sm font-medium">{formatDate(transaction.createdAt)}</p>
+                          </div>
+                          <div>
+                            <p className="text-xs text-muted-foreground">Expires</p>
+                            <p className="text-sm font-medium">{formatDate(transaction.expiresAt)}</p>
+                          </div>
+                        </div>
+
+                        {transaction.isScheduled && (
+                          <div className="p-3 rounded-lg bg-accent/30">
+                            <p className="text-xs font-medium flex items-center">
+                              <Calendar className="h-4 w-4 mr-1.5 text-primary" />
+                              Scheduled Batch
+                            </p>
+                            <p className="text-xs mt-1">
+                              This batch will automatically execute on {formatDate(transaction.scheduledDate || "")}.
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </motion.div>
                 </TabsContent>
               )}

@@ -3,12 +3,15 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { Wallet, Plus, Bell, Home, FileText, User } from "lucide-react"
+import { Wallet, Plus, Bell, Home, FileText, User, Save, Users, Send } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { CreateGroupDialog } from "@/components/create-group-dialog"
+import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
 import { ConnectWalletDialog } from "@/components/connect-wallet-dialog"
 import { NotificationsDialog } from "@/components/notifications-dialog"
+import { TemplateManagerDialog } from "@/components/template-manager-dialog"
 import { motion } from "framer-motion"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
 interface MobileNavbarProps {
   activeTab: string
@@ -18,7 +21,9 @@ interface MobileNavbarProps {
 export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
   const [isWalletOpen, setIsWalletOpen] = useState(false)
   const [isCreateOpen, setIsCreateOpen] = useState(false)
+  const [isCreateTxOpen, setIsCreateTxOpen] = useState(false)
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
+  const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
@@ -51,16 +56,33 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
             <Bell className="h-5 w-5" />
             <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500"></span>
           </Button>
-          <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
-            <Button
-              variant="default"
-              size="icon"
-              onClick={() => setIsCreateOpen(true)}
-              className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 transition-all"
-            >
-              <Plus className="h-5 w-5" />
-            </Button>
-          </motion.div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                <Button
+                  variant="default"
+                  size="icon"
+                  className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 transition-all"
+                >
+                  <Plus className="h-5 w-5" />
+                </Button>
+              </motion.div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setIsCreateOpen(true)}>
+                <Users className="h-4 w-4 mr-2" />
+                New Group
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsCreateTxOpen(true)}>
+                <Send className="h-4 w-4 mr-2" />
+                New Transaction
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsTemplateManagerOpen(true)}>
+                <Save className="h-4 w-4 mr-2" />
+                Manage Templates
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           <Button variant="ghost" size="icon" onClick={() => setIsWalletOpen(true)}>
             <Wallet className="h-5 w-5" />
           </Button>
@@ -90,7 +112,9 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
 
       <ConnectWalletDialog open={isWalletOpen} onOpenChange={setIsWalletOpen} />
       <CreateGroupDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
+      <CreateTransactionDialog open={isCreateTxOpen} onOpenChange={setIsCreateTxOpen} />
       <NotificationsDialog open={isNotificationsOpen} onOpenChange={setIsNotificationsOpen} />
+      <TemplateManagerDialog open={isTemplateManagerOpen} onOpenChange={setIsTemplateManagerOpen} />
     </>
   )
 }

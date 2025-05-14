@@ -6,7 +6,7 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { motion, AnimatePresence } from "framer-motion"
-import { Clock, Check, X, ArrowRight, Code, Send } from "lucide-react"
+import { Clock, Check, X, ArrowRight, Code, Send, Calendar, Zap, ListChecks } from "lucide-react"
 import { TransactionDetailsDialog } from "@/components/transaction-details-dialog"
 
 export default function Transactions() {
@@ -29,6 +29,9 @@ export default function Transactions() {
       expiresAt: "2025-04-15T12:00:00Z",
       type: "transfer",
       color: "from-primary to-purple-500",
+      isScheduled: false,
+      isConditional: false,
+      isBatch: false,
     },
     {
       id: "tx2",
@@ -45,12 +48,55 @@ export default function Transactions() {
       expiresAt: "2025-04-14T12:00:00Z",
       type: "contract",
       color: "from-blue-500 to-cyan-400",
+      isScheduled: true,
+      scheduledDate: "2025-03-20T12:00:00Z",
+      isConditional: false,
+      isBatch: false,
+    },
+    {
+      id: "tx3",
+      title: "Batch Payment",
+      description: "Monthly team payments",
+      groupId: "group-1",
+      groupName: "Team Treasury",
+      status: "pending",
+      approvals: 2,
+      requiredApprovals: 5,
+      createdAt: "2025-03-13T12:00:00Z",
+      expiresAt: "2025-04-13T12:00:00Z",
+      type: "batch",
+      color: "from-primary to-purple-500",
+      isScheduled: false,
+      isConditional: false,
+      isBatch: true,
+      batchCount: 3,
+    },
+    {
+      id: "tx4",
+      title: "Conditional Swap",
+      description: "Swap tokens when price reaches target",
+      amount: 200,
+      token: "APT",
+      groupId: "group-2",
+      groupName: "DAO Fund",
+      status: "pending",
+      approvals: 5,
+      requiredApprovals: 7,
+      createdAt: "2025-03-12T12:00:00Z",
+      expiresAt: "2025-04-12T12:00:00Z",
+      type: "contract",
+      color: "from-blue-500 to-cyan-400",
+      isScheduled: false,
+      isConditional: true,
+      conditionType: "price",
+      conditionDetails: "APT above $15",
+      isBatch: false,
     },
   ]
 
   const completedTransactions = [
     {
-      id: "tx3",
+      id: "tx5",
       title: "Contract Interaction",
       description: "Stake tokens in DeFi protocol",
       amount: 500,
@@ -64,9 +110,12 @@ export default function Transactions() {
       executedAt: "2025-03-12T15:30:00Z",
       type: "contract",
       color: "from-primary to-purple-500",
+      isScheduled: false,
+      isConditional: false,
+      isBatch: false,
     },
     {
-      id: "tx4",
+      id: "tx6",
       title: "Token Swap",
       description: "Swap APT for USDC",
       amount: 200,
@@ -80,9 +129,12 @@ export default function Transactions() {
       rejectedAt: "2025-03-07T09:15:00Z",
       type: "contract",
       color: "from-primary to-purple-500",
+      isScheduled: false,
+      isConditional: false,
+      isBatch: false,
     },
     {
-      id: "tx5",
+      id: "tx7",
       title: "Fund Project",
       description: "Send funds to project wallet",
       amount: 1000,
@@ -96,6 +148,27 @@ export default function Transactions() {
       executedAt: "2025-03-03T10:15:00Z",
       type: "transfer",
       color: "from-blue-500 to-cyan-400",
+      isScheduled: false,
+      isConditional: false,
+      isBatch: false,
+    },
+    {
+      id: "tx8",
+      title: "Batch Distribution",
+      description: "Distribute tokens to team members",
+      groupId: "group-1",
+      groupName: "Team Treasury",
+      status: "executed",
+      approvals: 6,
+      requiredApprovals: 5,
+      createdAt: "2025-02-28T12:00:00Z",
+      executedAt: "2025-03-01T14:20:00Z",
+      type: "batch",
+      color: "from-primary to-purple-500",
+      isScheduled: false,
+      isConditional: false,
+      isBatch: true,
+      batchCount: 5,
     },
   ]
 
@@ -112,6 +185,45 @@ export default function Transactions() {
   const item = {
     hidden: { opacity: 0, y: 20 },
     show: { opacity: 1, y: 0 },
+  }
+
+  const getTransactionIcon = (tx: any) => {
+    if (tx.isBatch) return <ListChecks className="h-3 w-3 mr-1" />
+    if (tx.type === "transfer") return <Send className="h-3 w-3 mr-1" />
+    if (tx.type === "contract") return <Code className="h-3 w-3 mr-1" />
+    return <Send className="h-3 w-3 mr-1" />
+  }
+
+  const getTransactionTypeText = (tx: any) => {
+    if (tx.isBatch) return "Batch Transaction"
+    if (tx.type === "transfer") return "Transfer"
+    if (tx.type === "contract") return "Contract Call"
+    return "Transaction"
+  }
+
+  const getSpecialBadge = (tx: any) => {
+    if (tx.isScheduled) {
+      return (
+        <Badge variant="outline" className="text-xs flex items-center">
+          <Calendar className="h-3 w-3 mr-1" /> Scheduled
+        </Badge>
+      )
+    }
+    if (tx.isConditional) {
+      return (
+        <Badge variant="outline" className="text-xs flex items-center">
+          <Zap className="h-3 w-3 mr-1" /> Conditional
+        </Badge>
+      )
+    }
+    if (tx.isBatch) {
+      return (
+        <Badge variant="outline" className="text-xs flex items-center">
+          <ListChecks className="h-3 w-3 mr-1" /> {tx.batchCount} Txs
+        </Badge>
+      )
+    }
+    return null
   }
 
   return (
@@ -152,24 +264,25 @@ export default function Transactions() {
                               <h3 className="font-medium text-sm">{tx.title}</h3>
                               <p className="text-xs text-muted-foreground">{tx.groupName}</p>
                             </div>
-                            <Badge variant="default" className="text-xs">
-                              Pending
-                            </Badge>
+                            <div className="flex space-x-2">
+                              {getSpecialBadge(tx)}
+                              <Badge variant="default" className="text-xs">
+                                Pending
+                              </Badge>
+                            </div>
                           </div>
                         </CardHeader>
                         <CardContent className="p-3 pt-2">
                           <div className="flex items-center justify-between mb-1.5">
                             <div className="flex items-center text-xs text-muted-foreground">
-                              {tx.type === "transfer" ? (
-                                <Send className="h-3 w-3 mr-1" />
-                              ) : (
-                                <Code className="h-3 w-3 mr-1" />
-                              )}
-                              {tx.type === "transfer" ? "Transfer" : "Contract Call"}
+                              {getTransactionIcon(tx)}
+                              {getTransactionTypeText(tx)}
                             </div>
-                            <div className="font-medium text-sm">
-                              {tx.amount} {tx.token}
-                            </div>
+                            {!tx.isBatch && (
+                              <div className="font-medium text-sm">
+                                {tx.amount} {tx.token}
+                              </div>
+                            )}
                           </div>
 
                           <div className="flex items-center justify-between mt-2">
@@ -221,31 +334,32 @@ export default function Transactions() {
                             <h3 className="font-medium text-sm">{tx.title}</h3>
                             <p className="text-xs text-muted-foreground">{tx.groupName}</p>
                           </div>
-                          <Badge variant={tx.status === "executed" ? "outline" : "destructive"} className="text-xs">
-                            {tx.status === "executed" ? "Executed" : "Rejected"}
-                          </Badge>
+                          <div className="flex space-x-2">
+                            {getSpecialBadge(tx)}
+                            <Badge variant={tx.status === "executed" ? "outline" : "destructive"} className="text-xs">
+                              {tx.status === "executed" ? "Executed" : "Rejected"}
+                            </Badge>
+                          </div>
                         </div>
                       </CardHeader>
                       <CardContent className="p-3 pt-2">
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center text-xs text-muted-foreground">
-                            {tx.type === "transfer" ? (
-                              <Send className="h-3 w-3 mr-1" />
-                            ) : (
-                              <Code className="h-3 w-3 mr-1" />
-                            )}
-                            {tx.type === "transfer" ? "Transfer" : "Contract Call"}
+                            {getTransactionIcon(tx)}
+                            {getTransactionTypeText(tx)}
                           </div>
-                          <div className="font-medium text-sm">
-                            {tx.amount} {tx.token}
-                          </div>
+                          {!tx.isBatch && (
+                            <div className="font-medium text-sm">
+                              {tx.amount} {tx.token}
+                            </div>
+                          )}
                         </div>
 
                         <div className="flex items-center justify-between mt-2">
                           <div className="text-xs text-muted-foreground">
                             {tx.status === "executed"
-                              ? `Executed: ${new Date(tx.executedAt!).toLocaleDateString()}`
-                              : `Rejected: ${new Date(tx.rejectedAt!).toLocaleDateString()}`}
+                              ? `Executed: ${new Date(tx.executedAt).toLocaleDateString()}`
+                              : `Rejected: ${new Date(tx.rejectedAt).toLocaleDateString()}`}
                           </div>
                           <Button
                             size="sm"
