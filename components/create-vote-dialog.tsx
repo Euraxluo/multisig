@@ -109,6 +109,12 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
   const [expiryDate, setExpiryDate] = useState<Date | undefined>(undefined)
   const [createTransaction, setCreateTransaction] = useState(false)
   const [selectedTransaction, setSelectedTransaction] = useState<string | undefined>(undefined)
+  const [weightType, setWeightType] = useState("manual") // manual, token, nft
+  const [tokenAddress, setTokenAddress] = useState("")
+  const [tokenSymbol, setTokenSymbol] = useState("")
+  const [weightCalculation, setWeightCalculation] = useState("linear") // linear, sqrt, quadratic
+  const [snapshotBlock, setSnapshotBlock] = useState("latest") // latest, specific
+  const [specificBlock, setSpecificBlock] = useState("")
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -128,6 +134,13 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
         setExpiryDate(undefined)
         setCreateTransaction(false)
         setSelectedTransaction(undefined)
+        // 重置新添加的状态
+        setWeightType("manual")
+        setTokenAddress("")
+        setTokenSymbol("")
+        setWeightCalculation("linear")
+        setSnapshotBlock("latest")
+        setSpecificBlock("")
       }, 300)
     }
   }, [open])
@@ -208,6 +221,13 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
       expiryDate,
       createTransaction,
       selectedTransaction,
+      // 添加新的权重相关信息
+      weightType,
+      tokenAddress: weightType === "token" ? tokenAddress : undefined,
+      tokenSymbol: weightType === "token" ? tokenSymbol : undefined,
+      weightCalculation: weightType === "token" ? weightCalculation : undefined,
+      snapshotBlock: weightType === "token" ? snapshotBlock : undefined,
+      specificBlock: weightType === "token" && snapshotBlock === "specific" ? specificBlock : undefined,
     })
 
     onOpenChange(false)
@@ -326,6 +346,108 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                           : "选民对选项进行排序投票"}
                     </p>
                   </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs font-medium">投票权重类型</Label>
+                    <Tabs value={weightType} onValueChange={setWeightType} className="w-full">
+                      <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl h-9">
+                        <TabsTrigger
+                          value="manual"
+                          className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                        >
+                          手动设置
+                        </TabsTrigger>
+                        <TabsTrigger
+                          value="token"
+                          className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                        >
+                          代币余额
+                        </TabsTrigger>
+                        <TabsTrigger
+                          value="nft"
+                          className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                        >
+                          NFT持有
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {weightType === "manual"
+                        ? "手动为每个选民设置投票权重"
+                        : weightType === "token"
+                          ? "根据选民持有的代币数量确定投票权重"
+                          : "根据选民持有的NFT数量确定投票权重"}
+                    </p>
+                  </div>
+
+                  {weightType === "token" && (
+                    <div className="space-y-3 mt-3 p-3 rounded-lg border">
+                      <div className="space-y-1">
+                        <Label htmlFor="tokenAddress" className="text-xs font-medium">
+                          代币合约地址
+                        </Label>
+                        <Input
+                          id="tokenAddress"
+                          placeholder="0x..."
+                          value={tokenAddress}
+                          onChange={(e) => setTokenAddress(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="tokenSymbol" className="text-xs font-medium">
+                          代币符号
+                        </Label>
+                        <Input
+                          id="tokenSymbol"
+                          placeholder="例如：ETH, USDC"
+                          value={tokenSymbol}
+                          onChange={(e) => setTokenSymbol(e.target.value)}
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium">权重计算方式</Label>
+                        <Select value={weightCalculation} onValueChange={setWeightCalculation}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="linear">线性 (1代币 = 1票)</SelectItem>
+                            <SelectItem value="sqrt">平方根 (票数 = √代币数)</SelectItem>
+                            <SelectItem value="quadratic">二次方 (票数 = 代币数²)</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label className="text-xs font-medium">余额快照</Label>
+                        <Select value={snapshotBlock} onValueChange={setSnapshotBlock}>
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="latest">使用最新区块</SelectItem>
+                            <SelectItem value="specific">使用特定区块</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+
+                      {snapshotBlock === "specific" && (
+                        <div className="space-y-1">
+                          <Label htmlFor="specificBlock" className="text-xs font-medium">
+                            区块高度
+                          </Label>
+                          <Input
+                            id="specificBlock"
+                            placeholder="例如：16123456"
+                            value={specificBlock}
+                            onChange={(e) => setSpecificBlock(e.target.value)}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   <div className="space-y-1">
                     <Label htmlFor="expiry" className="text-xs font-medium">

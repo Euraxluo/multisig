@@ -43,6 +43,7 @@ interface Voter {
   votedFor?: string
   timestamp?: string
   weight: number
+  tokenBalance?: number
 }
 
 interface VoteDetailsDialogProps {
@@ -125,6 +126,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         votedFor: "option-1",
         timestamp: "2025-03-20T10:15:00Z",
         weight: 1,
+        tokenBalance: 150,
       },
       {
         id: "user-2",
@@ -134,6 +136,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         votedFor: "option-1",
         timestamp: "2025-03-21T11:20:00Z",
         weight: 1,
+        tokenBalance: 80,
       },
       {
         id: "user-3",
@@ -143,6 +146,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         votedFor: "option-1",
         timestamp: "2025-03-21T14:30:00Z",
         weight: 1,
+        tokenBalance: 200,
       },
       {
         id: "user-4",
@@ -152,6 +156,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         votedFor: "option-2",
         timestamp: "2025-03-22T09:45:00Z",
         weight: 1,
+        tokenBalance: 50,
       },
       {
         id: "user-5",
@@ -161,9 +166,24 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         votedFor: "option-2",
         timestamp: "2025-03-22T16:10:00Z",
         weight: 1,
+        tokenBalance: 120,
       },
-      { id: "user-6", name: "Casey", avatar: "/placeholder.svg?height=40&width=40", voted: false, weight: 1 },
-      { id: "user-7", name: "Sam", avatar: "/placeholder.svg?height=40&width=40", voted: false, weight: 1 },
+      {
+        id: "user-6",
+        name: "Casey",
+        avatar: "/placeholder.svg?height=40&width=40",
+        voted: false,
+        weight: 1,
+        tokenBalance: 30,
+      },
+      {
+        id: "user-7",
+        name: "Sam",
+        avatar: "/placeholder.svg?height=40&width=40",
+        voted: false,
+        weight: 1,
+        tokenBalance: 90,
+      },
     ]
 
     return {
@@ -192,6 +212,13 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         total: 7,
         voted: 5,
         required: 4,
+      },
+      weightType: "token", // manual, token, nft
+      tokenInfo: {
+        address: "0x1234...5678",
+        symbol: "GOV",
+        calculation: "linear", // linear, sqrt, quadratic
+        snapshotBlock: "16123456",
       },
     }
   }
@@ -484,6 +511,32 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
               {voteData.weights.required} ({Math.round((voteData.weights.required / voteData.weights.total) * 100)}%)
             </span>
           </div>
+          {voteData.weightType === "token" && (
+            <>
+              <div className="flex items-center justify-between text-sm">
+                <span>权重类型</span>
+                <span className="font-medium">代币余额</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span>代币</span>
+                <span className="font-medium">{voteData.tokenInfo.symbol}</span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span>计算方式</span>
+                <span className="font-medium">
+                  {voteData.tokenInfo.calculation === "linear"
+                    ? "线性"
+                    : voteData.tokenInfo.calculation === "sqrt"
+                      ? "平方根"
+                      : "二次方"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between text-sm">
+                <span>快照区块</span>
+                <span className="font-medium">{voteData.tokenInfo.snapshotBlock}</span>
+              </div>
+            </>
+          )}
         </div>
       </div>
     )
@@ -601,6 +654,13 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
                   {voter.voted && voter.timestamp && (
                     <p className="text-xs text-muted-foreground">
                       投票时间: {new Date(voter.timestamp).toLocaleDateString()}
+                    </p>
+                  )}
+
+                  {voteData.weightType === "token" && voter.tokenBalance && (
+                    <p className="text-xs text-primary">
+                      {voteData.tokenInfo.symbol}: {voter.tokenBalance}
+                      <span className="ml-1 text-muted-foreground">(权重: {voter.weight})</span>
                     </p>
                   )}
                 </div>
