@@ -3,13 +3,14 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { Wallet, Plus, Bell, Home, FileText, User, Save, Users, Send } from "lucide-react"
+import { Wallet, Plus, Bell, Home, FileText, User, Save, Users, Send, Vote } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { CreateGroupDialog } from "@/components/create-group-dialog"
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
 import { ConnectWalletDialog } from "@/components/connect-wallet-dialog"
 import { NotificationsDialog } from "@/components/notifications-dialog"
 import { TemplateManagerDialog } from "@/components/template-manager-dialog"
+import { CreateVoteDialog } from "@/components/create-vote-dialog"
 import { motion } from "framer-motion"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 
@@ -24,6 +25,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
   const [isCreateTxOpen, setIsCreateTxOpen] = useState(false)
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false)
+  const [isCreateVoteOpen, setIsCreateVoteOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
@@ -71,15 +73,19 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
             <DropdownMenuContent align="end">
               <DropdownMenuItem onClick={() => setIsCreateOpen(true)}>
                 <Users className="h-4 w-4 mr-2" />
-                New Group
+                新建组
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsCreateTxOpen(true)}>
                 <Send className="h-4 w-4 mr-2" />
-                New Transaction
+                新建交易
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsCreateVoteOpen(true)}>
+                <Vote className="h-4 w-4 mr-2" />
+                新建投票
               </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsTemplateManagerOpen(true)}>
                 <Save className="h-4 w-4 mr-2" />
-                Manage Templates
+                管理模板
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -92,19 +98,25 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
       <div className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-md border-t border-border/40 flex justify-around p-1">
         <NavButton
           icon={<Home className="h-5 w-5" />}
-          label="Groups"
+          label="组"
           isActive={activeTab === "dashboard"}
           onClick={() => setActiveTab("dashboard")}
         />
         <NavButton
           icon={<FileText className="h-5 w-5" />}
-          label="Transactions"
+          label="交易"
           isActive={activeTab === "transactions"}
           onClick={() => setActiveTab("transactions")}
         />
         <NavButton
+          icon={<Vote className="h-5 w-5" />}
+          label="投票"
+          isActive={activeTab === "votes"}
+          onClick={() => setActiveTab("votes")}
+        />
+        <NavButton
           icon={<User className="h-5 w-5" />}
-          label="Profile"
+          label="我的"
           isActive={activeTab === "profile"}
           onClick={() => setActiveTab("profile")}
         />
@@ -115,6 +127,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
       <CreateTransactionDialog open={isCreateTxOpen} onOpenChange={setIsCreateTxOpen} />
       <NotificationsDialog open={isNotificationsOpen} onOpenChange={setIsNotificationsOpen} />
       <TemplateManagerDialog open={isTemplateManagerOpen} onOpenChange={setIsTemplateManagerOpen} />
+      <CreateVoteDialog open={isCreateVoteOpen} onOpenChange={setIsCreateVoteOpen} />
     </>
   )
 }

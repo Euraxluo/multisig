@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react"
 import Dashboard from "@/components/dashboard"
 import Transactions from "@/components/transactions"
+import Votes from "@/components/votes"
 import Profile from "@/components/profile"
 import { MobileNavbar } from "@/components/mobile-navbar"
 import { motion, AnimatePresence } from "framer-motion"
@@ -42,6 +43,17 @@ export default function Home() {
               transition={{ duration: 0.3 }}
             >
               <Transactions />
+            </motion.div>
+          )}
+          {activeTab === "votes" && (
+            <motion.div
+              key="votes"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Votes />
             </motion.div>
           )}
           {activeTab === "profile" && (
