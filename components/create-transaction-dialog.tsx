@@ -1,0 +1,307 @@
+"use client"
+
+import { useState, useEffect } from "react"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Textarea } from "@/components/ui/textarea"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { motion, AnimatePresence } from "framer-motion"
+import { Calendar, FileText, Code, Send } from "lucide-react"
+
+interface CreateTransactionDialogProps {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  groupId?: string
+}
+
+export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateTransactionDialogProps) {
+  const [step, setStep] = useState(1)
+  const [transactionType, setTransactionType] = useState("transfer")
+
+  // Mock data for the current group
+  const currentGroup = {
+    id: groupId || "group-1",
+    name: "Team Treasury",
+    balance: 1250,
+    token: "APT",
+  }
+
+  // Reset state when dialog opens/closes
+  useEffect(() => {
+    if (!open) {
+      setTimeout(() => {
+        setStep(1)
+        setTransactionType("transfer")
+      }, 300)
+    }
+  }, [open])
+
+  const nextStep = () => {
+    setStep(step + 1)
+  }
+
+  const prevStep = () => {
+    setStep(step - 1)
+  }
+
+  const tokens = ["APT", "USDC", "USDT"]
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[425px] p-0 gap-0 overflow-hidden">
+        <DialogHeader className="p-4 pb-0">
+          <DialogTitle>Create Transaction</DialogTitle>
+          <DialogDescription>Create a new transaction for approval by group members.</DialogDescription>
+        </DialogHeader>
+
+        <div className="relative overflow-hidden">
+          <div className="flex justify-between px-4 pt-4">
+            {[1, 2].map((i) => (
+              <div key={i} className="flex flex-col items-center" onClick={() => i < step && setStep(i)}>
+                <div
+                  className={`h-8 w-8 rounded-full flex items-center justify-center text-sm ${
+                    i < step
+                      ? "bg-primary text-primary-foreground"
+                      : i === step
+                        ? "bg-primary/20 text-primary border-2 border-primary"
+                        : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {i}
+                </div>
+                <div className="text-xs mt-1 text-muted-foreground">{i === 1 ? "Transaction Type" : "Details"}</div>
+              </div>
+            ))}
+            <div className="absolute top-[28px] left-[120px] w-[120px] h-[2px] bg-muted">
+              <div className={`h-full bg-primary transition-all ${step > 1 ? "w-full" : "w-0"}`}></div>
+            </div>
+          </div>
+
+          <AnimatePresence mode="wait">
+            {step === 1 && (
+              <motion.div
+                key="step1"
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: 20 }}
+                transition={{ duration: 0.3 }}
+                className="px-4 py-4"
+              >
+                <div className="space-y-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs font-medium">Transaction Type</Label>
+                    <Tabs value={transactionType} onValueChange={setTransactionType} className="w-full">
+                      <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl h-9">
+                        <TabsTrigger
+                          value="transfer"
+                          className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                        >
+                          <Send className="h-3 w-3 mr-1" />
+                          Transfer
+                        </TabsTrigger>
+                        <TabsTrigger
+                          value="contract"
+                          className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                        >
+                          <Code className="h-3 w-3 mr-1" />
+                          Contract
+                        </TabsTrigger>
+                        <TabsTrigger
+                          value="custom"
+                          className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+                        >
+                          <FileText className="h-3 w-3 mr-1" />
+                          Custom
+                        </TabsTrigger>
+                      </TabsList>
+                    </Tabs>
+                  </div>
+
+                  <div className="p-3 rounded-lg bg-muted/50">
+                    <p className="text-xs text-muted-foreground">Current Group</p>
+                    <p className="font-medium">{currentGroup.name}</p>
+
+                    <div className="flex items-center justify-between mt-2">
+                      <div>
+                        <p className="text-xs text-muted-foreground">Available Balance</p>
+                        <p className="font-medium">
+                          {currentGroup.balance} {currentGroup.token}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label htmlFor="title" className="text-xs font-medium">
+                      Transaction Title
+                    </Label>
+                    <div className="relative">
+                      <Input id="title" placeholder="Payment for services, Token transfer, etc." className="pl-9" />
+                      <FileText className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label htmlFor="description" className="text-xs font-medium">
+                      Description (Optional)
+                    </Label>
+                    <Textarea
+                      id="description"
+                      placeholder="Add details about this transaction"
+                      className="resize-none h-20"
+                    />
+                  </div>
+                </div>
+              </motion.div>
+            )}
+
+            {step === 2 && (
+              <motion.div
+                key="step2"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+                transition={{ duration: 0.3 }}
+                className="px-4 py-4"
+              >
+                <div className="space-y-3">
+                  {transactionType === "transfer" && (
+                    <>
+                      <div className="space-y-1">
+                        <Label htmlFor="recipient" className="text-xs font-medium">
+                          Recipient Address
+                        </Label>
+                        <Input id="recipient" placeholder="0x..." />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <Label htmlFor="amount" className="text-xs font-medium">
+                            Amount
+                          </Label>
+                          <Input id="amount" type="number" placeholder="0.00" />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor="token" className="text-xs font-medium">
+                            Token
+                          </Label>
+                          <Select defaultValue="APT">
+                            <SelectTrigger id="token">
+                              <SelectValue placeholder="Select" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {tokens.map((token) => (
+                                <SelectItem key={token} value={token}>
+                                  {token}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {transactionType === "contract" && (
+                    <>
+                      <div className="space-y-1">
+                        <Label htmlFor="contract" className="text-xs font-medium">
+                          Contract Address
+                        </Label>
+                        <Input id="contract" placeholder="0x..." />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="function" className="text-xs font-medium">
+                          Function Name
+                        </Label>
+                        <Input id="function" placeholder="transfer, mint, etc." />
+                      </div>
+
+                      <div className="space-y-1">
+                        <Label htmlFor="args" className="text-xs font-medium">
+                          Arguments (JSON)
+                        </Label>
+                        <Textarea
+                          id="args"
+                          placeholder='[{"name": "amount", "value": "100"}, {"name": "recipient", "value": "0x..."}]'
+                          className="resize-none h-20 font-mono text-xs"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {transactionType === "custom" && (
+                    <>
+                      <div className="space-y-1">
+                        <Label htmlFor="payload" className="text-xs font-medium">
+                          Transaction Payload
+                        </Label>
+                        <Textarea
+                          id="payload"
+                          placeholder="Paste your custom transaction payload here..."
+                          className="resize-none h-32 font-mono text-xs"
+                        />
+                      </div>
+
+                      <div className="p-3 rounded-lg bg-accent/30">
+                        <p className="text-xs">
+                          Custom transactions allow you to execute any valid transaction on the blockchain. Make sure
+                          you understand what you're doing.
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  <div className="space-y-1">
+                    <Label htmlFor="deadline" className="text-xs font-medium">
+                      Expiration (Optional)
+                    </Label>
+                    <div className="relative">
+                      <Input id="deadline" type="date" className="pl-9" />
+                      <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      If not approved by this date, the transaction will expire
+                    </p>
+                  </div>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        <DialogFooter className="p-4 pt-2">
+          {step > 1 ? (
+            <div className="flex w-full justify-between">
+              <Button type="button" variant="outline" onClick={prevStep} size="sm">
+                Back
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
+              >
+                Create Transaction
+              </Button>
+            </div>
+          ) : (
+            <Button type="button" onClick={nextStep} className="w-full">
+              Next
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
