@@ -1,64 +1,74 @@
 "use client"
 
-import { useState } from "react"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { AnimatePresence, motion } from "framer-motion"
-import { Home, CreditCard, Clock, User, Vote, Wallet } from "lucide-react"
-import { MobileNavbar } from "@/components/mobile-navbar"
-import { useMobile } from "@/hooks/use-mobile"
+import { useState, useEffect } from "react"
 import Dashboard from "@/components/dashboard"
-import Requests from "@/components/requests"
 import Transactions from "@/components/transactions"
-import Profile from "@/components/profile"
 import Votes from "@/components/votes"
-import PaymentHub from "@/components/payment-hub"
+import Profile from "@/components/profile"
+import { MobileNavbar } from "@/components/mobile-navbar"
+import { motion, AnimatePresence } from "framer-motion"
 
-export default function Page() {
-  const isMobile = useMobile()
-  const [activeTab, setActiveTab] = useState("home")
+export default function Home() {
+  const [activeTab, setActiveTab] = useState("dashboard")
+  const [mounted, setMounted] = useState(false)
 
-  const tabs = [
-    { id: "home", label: "Home", icon: Home },
-    { id: "requests", label: "Requests", icon: CreditCard },
-    { id: "transactions", label: "Transactions", icon: Clock },
-    { id: "votes", label: "Votes", icon: Vote },
-    { id: "payments", label: "Payments", icon: Wallet },
-    { id: "profile", label: "Profile", icon: User },
-  ]
+  useEffect(() => {
+    setMounted(true)
+  }, [])
+
+  if (!mounted) return null
 
   return (
-    <div className="container max-w-md mx-auto p-4 pb-20">
-      {!isMobile && (
-        <Tabs defaultValue="home" value={activeTab} onValueChange={setActiveTab} className="w-full mb-6">
-          <TabsList className="grid w-full grid-cols-6">
-            {tabs.map((tab) => (
-              <TabsTrigger key={tab.id} value={tab.id} className="flex items-center gap-1.5">
-                <tab.icon className="h-4 w-4" />
-                <span>{tab.label}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      )}
-
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={activeTab}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.2 }}
-        >
-          {activeTab === "home" && <Dashboard />}
-          {activeTab === "requests" && <Requests />}
-          {activeTab === "transactions" && <Transactions />}
-          {activeTab === "votes" && <Votes />}
-          {activeTab === "payments" && <PaymentHub />}
-          {activeTab === "profile" && <Profile />}
-        </motion.div>
-      </AnimatePresence>
-
-      {isMobile && <MobileNavbar />}
-    </div>
+    <main className="flex min-h-screen flex-col bg-gradient-to-b from-background to-background/90 overflow-hidden">
+      <MobileNavbar activeTab={activeTab} setActiveTab={setActiveTab} />
+      <div className="flex-1 p-3 pt-16 md:p-5 md:pt-20">
+        <AnimatePresence mode="wait">
+          {activeTab === "dashboard" && (
+            <motion.div
+              key="dashboard"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Dashboard />
+            </motion.div>
+          )}
+          {activeTab === "transactions" && (
+            <motion.div
+              key="transactions"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Transactions />
+            </motion.div>
+          )}
+          {activeTab === "votes" && (
+            <motion.div
+              key="votes"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Votes />
+            </motion.div>
+          )}
+          {activeTab === "profile" && (
+            <motion.div
+              key="profile"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <Profile />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </main>
   )
 }

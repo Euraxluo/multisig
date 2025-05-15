@@ -9,6 +9,9 @@ import { GroupDetailsDialog } from "@/components/group-details-dialog"
 import { motion } from "framer-motion"
 import { ArrowRight, TrendingUp, Clock, Users, Plus } from "lucide-react"
 import { CreateGroupDialog } from "@/components/create-group-dialog"
+import { QuickActions } from "@/components/quick-actions"
+import { QuickTemplates } from "@/components/quick-templates"
+import { RecurringPayments } from "@/components/recurring-payments"
 
 export default function Dashboard() {
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
@@ -64,6 +67,13 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4">
+      {/* Quick Actions, Templates, and Recurring Payments Section */}
+      <div className="space-y-4">
+        <QuickActions />
+        <QuickTemplates />
+        <RecurringPayments />
+      </div>
+
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-xl font-bold">Your Groups</h2>
         <Button

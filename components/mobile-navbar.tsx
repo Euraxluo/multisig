@@ -1,114 +1,162 @@
 "use client"
 
-import { useState } from "react"
-import { usePathname } from "next/navigation"
-import { motion } from "framer-motion"
+import type React from "react"
+
+import { useState, useEffect } from "react"
+import { Wallet, Plus, Bell, Home, FileText, User, Save, Users, Send, Vote } from "lucide-react"
 import { Button } from "@/components/ui/button"
-import { CreateBillDialog } from "@/components/create-bill-dialog"
 import { CreateGroupDialog } from "@/components/create-group-dialog"
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
-import { CreateVoteDialog } from "@/components/create-vote-dialog"
-import { PaymentFeaturesDialog } from "@/components/payment-features-dialog"
+import { ConnectWalletDialog } from "@/components/connect-wallet-dialog"
+import { NotificationsDialog } from "@/components/notifications-dialog"
 import { TemplateManagerDialog } from "@/components/template-manager-dialog"
+import { CreateVoteDialog } from "@/components/create-vote-dialog"
+import { motion } from "framer-motion"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
-import { Home, CreditCard, Clock, User, Plus, FileText, Vote, Wallet, Users, Zap } from "lucide-react"
 
-export function MobileNavbar() {
-  const pathname = usePathname()
-  const [isCreateBillOpen, setIsCreateBillOpen] = useState(false)
-  const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false)
-  const [isCreateTransactionOpen, setIsCreateTransactionOpen] = useState(false)
-  const [isCreateVoteOpen, setIsCreateVoteOpen] = useState(false)
-  const [isPaymentFeaturesOpen, setIsPaymentFeaturesOpen] = useState(false)
+interface MobileNavbarProps {
+  activeTab: string
+  setActiveTab: (tab: string) => void
+}
+
+export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
+  const [isWalletOpen, setIsWalletOpen] = useState(false)
+  const [isCreateOpen, setIsCreateOpen] = useState(false)
+  const [isCreateTxOpen, setIsCreateTxOpen] = useState(false)
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false)
+  const [isCreateVoteOpen, setIsCreateVoteOpen] = useState(false)
+  const [scrolled, setScrolled] = useState(false)
 
-  const tabs = [
-    { name: "home", icon: Home, label: "Home" },
-    { name: "requests", icon: CreditCard, label: "Requests" },
-    { name: "transactions", icon: Clock, label: "Transactions" },
-    { name: "votes", icon: Vote, label: "Votes" },
-    { name: "payments", icon: Wallet, label: "Payments" },
-    { name: "profile", icon: User, label: "Profile" },
-  ]
-
-  const getActiveTab = () => {
-    if (pathname === "/") return "home"
-    return pathname.slice(1)
-  }
-
-  const activeTab = getActiveTab()
+  useEffect(() => {
+    const handleScroll = () => {
+      setScrolled(window.scrollY > 10)
+    }
+    window.addEventListener("scroll", handleScroll)
+    return () => window.removeEventListener("scroll", handleScroll)
+  }, [])
 
   return (
     <>
-      <div className="fixed bottom-0 left-0 right-0 border-t bg-background z-50">
-        <div className="flex items-center justify-around p-2">
-          {tabs.map((tab) => (
-            <a
-              key={tab.name}
-              href={tab.name === "home" ? "/" : `/${tab.name}`}
-              className={`flex flex-col items-center justify-center py-1 px-3 rounded-lg ${
-                activeTab === tab.name ? "text-primary" : "text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <tab.icon className="h-5 w-5" />
-              <span className="text-[10px] mt-1">{tab.label}</span>
-              {activeTab === tab.name && (
-                <motion.div
-                  layoutId="activeTab"
-                  className="absolute bottom-1 w-1 h-1 rounded-full bg-primary"
-                  transition={{ type: "spring", duration: 0.5 }}
-                />
-              )}
-            </a>
-          ))}
+      <div
+        className={`fixed top-0 left-0 right-0 z-50 flex h-14 items-center justify-between px-4 transition-all duration-300 ${
+          scrolled ? "bg-background/90 backdrop-blur-md shadow-sm" : "bg-background"
+        }`}
+      >
+        <div className="flex items-center">
+          <motion.h1
+            className="text-lg font-bold bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"
+            initial={{ opacity: 0, x: -20 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.5 }}
+          >
+            MultiSig Wallet
+          </motion.h1>
+        </div>
+        <div className="flex items-center space-x-1">
+          <Button variant="ghost" size="icon" onClick={() => setIsNotificationsOpen(true)} className="relative">
+            <Bell className="h-5 w-5" />
+            <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500"></span>
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
+                <Button
+                  variant="default"
+                  size="icon"
+                  className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 transition-all"
+                >
+                  <Plus className="h-5 w-5" />
+                </Button>
+              </motion.div>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setIsCreateOpen(true)}>
+                <Users className="h-4 w-4 mr-2" />
+                新建组
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsCreateTxOpen(true)}>
+                <Send className="h-4 w-4 mr-2" />
+                新建交易
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsCreateVoteOpen(true)}>
+                <Vote className="h-4 w-4 mr-2" />
+                新建投票
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsTemplateManagerOpen(true)}>
+                <Save className="h-4 w-4 mr-2" />
+                管理模板
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <Button variant="ghost" size="icon" onClick={() => setIsWalletOpen(true)}>
+            <Wallet className="h-5 w-5" />
+          </Button>
         </div>
       </div>
 
-      <div className="fixed right-4 bottom-20 z-50">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              size="icon"
-              className="h-12 w-12 rounded-full shadow-lg bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-            >
-              <Plus className="h-5 w-5" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="end" className="mb-2 min-w-[180px]">
-            <DropdownMenuItem onClick={() => setIsCreateBillOpen(true)}>
-              <FileText className="h-4 w-4 mr-2" />
-              <span>Create Bill</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setIsCreateGroupOpen(true)}>
-              <Users className="h-4 w-4 mr-2" />
-              <span>Create Group</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setIsCreateTransactionOpen(true)}>
-              <Clock className="h-4 w-4 mr-2" />
-              <span>Create Transaction</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setIsCreateVoteOpen(true)}>
-              <Vote className="h-4 w-4 mr-2" />
-              <span>Create Vote</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setIsPaymentFeaturesOpen(true)}>
-              <Wallet className="h-4 w-4 mr-2" />
-              <span>Create Payment</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => setIsTemplateManagerOpen(true)}>
-              <Zap className="h-4 w-4 mr-2" />
-              <span>Templates</span>
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-md border-t border-border/40 flex justify-around p-1">
+        <NavButton
+          icon={<Home className="h-5 w-5" />}
+          label="组"
+          isActive={activeTab === "dashboard"}
+          onClick={() => setActiveTab("dashboard")}
+        />
+        <NavButton
+          icon={<FileText className="h-5 w-5" />}
+          label="交易"
+          isActive={activeTab === "transactions"}
+          onClick={() => setActiveTab("transactions")}
+        />
+        <NavButton
+          icon={<Vote className="h-5 w-5" />}
+          label="投票"
+          isActive={activeTab === "votes"}
+          onClick={() => setActiveTab("votes")}
+        />
+        <NavButton
+          icon={<User className="h-5 w-5" />}
+          label="我的"
+          isActive={activeTab === "profile"}
+          onClick={() => setActiveTab("profile")}
+        />
       </div>
 
-      <CreateBillDialog open={isCreateBillOpen} onOpenChange={setIsCreateBillOpen} />
-      <CreateGroupDialog open={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} />
-      <CreateTransactionDialog open={isCreateTransactionOpen} onOpenChange={setIsCreateTransactionOpen} />
-      <CreateVoteDialog open={isCreateVoteOpen} onOpenChange={setIsCreateVoteOpen} />
-      <PaymentFeaturesDialog open={isPaymentFeaturesOpen} onOpenChange={setIsPaymentFeaturesOpen} />
+      <ConnectWalletDialog open={isWalletOpen} onOpenChange={setIsWalletOpen} />
+      <CreateGroupDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
+      <CreateTransactionDialog open={isCreateTxOpen} onOpenChange={setIsCreateTxOpen} />
+      <NotificationsDialog open={isNotificationsOpen} onOpenChange={setIsNotificationsOpen} />
       <TemplateManagerDialog open={isTemplateManagerOpen} onOpenChange={setIsTemplateManagerOpen} />
+      <CreateVoteDialog open={isCreateVoteOpen} onOpenChange={setIsCreateVoteOpen} />
     </>
+  )
+}
+
+interface NavButtonProps {
+  icon: React.ReactNode
+  label: string
+  isActive: boolean
+  onClick: () => void
+}
+
+function NavButton({ icon, label, isActive, onClick }: NavButtonProps) {
+  return (
+    <motion.button
+      className={`flex flex-col items-center justify-center py-2 px-5 rounded-xl relative ${
+        isActive ? "text-primary" : "text-muted-foreground"
+      }`}
+      onClick={onClick}
+      whileTap={{ scale: 0.95 }}
+    >
+      {icon}
+      <span className="text-xs mt-1">{label}</span>
+      {isActive && (
+        <motion.div
+          layoutId="activeTab"
+          className="absolute inset-0 bg-primary/10 rounded-xl -z-10"
+          transition={{ type: "spring", duration: 0.5 }}
+        />
+      )}
+    </motion.button>
   )
 }
