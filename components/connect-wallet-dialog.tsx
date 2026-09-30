@@ -235,24 +235,14 @@ async function resolveSuiAddressFromAccounts(accounts: any[], walletName?: strin
     if (okxAddr) return okxAddr
   }
 
-  // 4. 检查是否连接到了非 Sui 链账户（例如 Solana Base58 地址或 EVM 地址）并给出清晰引导
+  // 4. 检查是否连接到了非 Sui 链账户（例如 Solana Base58 地址或 EVM 地址）
   const firstRaw = typeof accounts[0] === "string" ? accounts[0] : (accounts[0]?.address || "")
   if (firstRaw && !firstRaw.startsWith("0x")) {
-    throw new Error(
-      `检测到当前从 ${walletName || "钱包"} 连接到的账户不是 Sui 链账户（读取到 Solana 格式地址: ${firstRaw.slice(0, 8)}...${firstRaw.slice(-6)}）。\n\n` +
-      `💡 原因说明：OKX 为多链钱包插件，当前激活的网络可能为 Solana 或其他非 Sui 网络。\n\n` +
-      `🔧 解决步骤：\n` +
-      `1. 点击浏览器右上角的 ${walletName || "OKX"} 钱包扩展插件；\n` +
-      `2. 在钱包界面顶部（或网络切换栏）将网络切换为「Sui」网络；\n` +
-      `3. 确认已创建或启用 Sui 账户后，回到此页面重新点击连接即可获取原生 0x Sui 地址！`
-    )
+    throw new Error(`当前钱包处于非 Sui 网络（检测到 Solana 地址），请在 ${walletName || "OKX"} 插件顶部切换为 Sui 网络后重试。`)
   }
 
   if (firstRaw && firstRaw.length === 42) {
-    throw new Error(
-      `检测到当前从 ${walletName || "钱包"} 读取到的账户为 EVM/以太坊网络地址（${firstRaw}）。\n\n` +
-      `请在钱包插件中将当前网络切换为「Sui」网络后重新连接。`
-    )
+    throw new Error(`当前钱包处于以太坊/EVM 网络，请在插件中切换为 Sui 网络后重试。`)
   }
 
   throw new Error(`未能从 ${walletName || "钱包"} 读取到有效的 Sui 地址 (0x...)`)
@@ -756,232 +746,166 @@ export function ConnectWalletDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px] p-0 overflow-hidden border-border/80 bg-background text-foreground shadow-2xl rounded-2xl">
+      <DialogContent className="w-[94vw] max-w-[400px] p-0 overflow-hidden border-border/70 bg-background text-foreground shadow-2xl rounded-2xl">
         {/* 顶部标题区 */}
-        <div className="p-6 pb-4 border-b border-border/60 bg-muted/20">
+        <div className="p-4 pb-3 border-b border-border/40">
           <DialogHeader>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center space-x-2.5">
-                <div className="w-10 h-10 rounded-2xl bg-gradient-to-br from-primary via-purple-600 to-indigo-600 text-white flex items-center justify-center shadow-md">
-                  <KeyRound className="w-5 h-5" />
-                </div>
-                <div>
-                  <DialogTitle className="text-base font-bold flex items-center gap-1.5">
-                    Sui 原生钱包与免密登录
-                    <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
-                      Wallet Standard 原生支持
-                    </Badge>
-                  </DialogTitle>
-                  <DialogDescription className="text-xs text-muted-foreground mt-0.5">
-                    支持浏览器扩展插件直连、Mac TouchID 硬件免密与 zkLogin
-                  </DialogDescription>
-                </div>
-              </div>
-            </div>
+            <DialogTitle className="text-base font-bold">
+              {activeUser ? "当前账户" : "登录账户"}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-muted-foreground">
+              {activeUser ? "已连接到 Sui 网络" : "选择登录方式"}
+            </DialogDescription>
           </DialogHeader>
 
-          {/* 如果已登录，展示当前账户卡片 */}
-          {activeUser ? (
-            <motion.div
-              initial={{ opacity: 0, y: -5 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4 p-3 rounded-xl bg-card border border-primary/30 shadow-sm space-y-2"
-            >
-              <div className="flex items-center justify-between">
-                <div className="flex items-center space-x-2.5 min-w-0">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center justify-center text-xs font-bold shrink-0">
-                    ✓
-                  </div>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-semibold text-xs text-foreground truncate max-w-[150px]">
-                        {activeUser.identifier}
-                      </span>
-                      <Badge className="h-4 text-[9px] px-1 bg-primary/10 text-primary border-primary/20 shrink-0">
-                        {activeUser.authMethodLabel}
-                      </Badge>
-                    </div>
-                    <p className="text-[10px] text-muted-foreground font-mono mt-0.5">
-                      {activeUser.address.slice(0, 10)}...{activeUser.address.slice(-6)}
-                    </p>
-                  </div>
+          {/* 如果已登录，展示紧凑账户卡片 */}
+          {activeUser && (
+            <div className="mt-3 p-3 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between">
+              <div className="min-w-0 pr-2">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0"></span>
+                  <p className="font-semibold text-xs text-foreground truncate">{activeUser.identifier}</p>
                 </div>
-
-                <div className="flex items-center space-x-1 shrink-0">
-                  <a
-                    href={`https://suiscan.xyz/mainnet/account/${activeUser.address}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex items-center justify-center h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                    title="在 Suiscan 区块浏览器中查看"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                  </a>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleCopyAddress(activeUser.address)}
-                    className="h-7 px-2 text-xs text-muted-foreground hover:text-foreground"
-                    title="复制完整地址"
-                  >
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={handleLogoutAction}
-                    className="h-7 px-2 text-xs text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
-                    title="退出登录"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                  </Button>
-                </div>
+                <p className="text-[11px] text-muted-foreground font-mono mt-0.5 truncate">
+                  {activeUser.address.slice(0, 10)}...{activeUser.address.slice(-6)}
+                </p>
               </div>
-            </motion.div>
-          ) : (
-            <div className="mt-3 p-2.5 rounded-xl bg-muted/40 border border-border/60 flex items-center justify-between text-xs text-muted-foreground">
-              <span className="flex items-center gap-1.5">
-                <Lock className="w-3.5 h-3.5 text-primary" />
-                当前尚未连接钱包，请选择以下方式进行连接
-              </span>
+              <div className="flex items-center space-x-1 shrink-0">
+                <a
+                  href={`https://suiscan.xyz/mainnet/account/${activeUser.address}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center justify-center h-7 w-7 rounded-lg hover:bg-muted text-muted-foreground hover:text-foreground transition-colors"
+                  title="在浏览器中查看"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                </a>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={() => handleCopyAddress(activeUser.address)}
+                  className="h-7 w-7 rounded-lg"
+                  title="复制地址"
+                >
+                  {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                </Button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  onClick={handleLogoutAction}
+                  className="h-7 w-7 rounded-lg text-rose-500 hover:text-rose-600 hover:bg-rose-500/10"
+                  title="退出登录"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </Button>
+              </div>
             </div>
           )}
         </div>
 
         {/* 错误提示横幅 */}
         {errorMessage && (
-          <div className="mx-6 mt-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-xs text-rose-600 dark:text-rose-400 flex items-start gap-2">
+          <div className="mx-4 mt-3 p-2.5 rounded-xl bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-start gap-2">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <div className="flex-1 whitespace-pre-wrap">{errorMessage}</div>
           </div>
         )}
 
-        {/* 处理中步骤指示器 */}
+        {/* 处理中指示器 */}
         <AnimatePresence>
           {isProcessing && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              className="p-4 bg-primary/5 border-b border-primary/20 space-y-2"
+              className="p-3 bg-muted/40 border-b border-border/40 space-y-1.5"
             >
-              <div className="flex items-center justify-between text-xs font-medium text-primary">
+              <div className="flex items-center justify-between text-xs text-foreground font-medium">
                 <span className="flex items-center gap-1.5">
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  正在连接授权...
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-primary" />
+                  {processStep || "正在连接..."}
                 </span>
-                <span className="text-[10px] text-muted-foreground font-mono">Sui Network</span>
               </div>
-              <p className="text-[11px] text-muted-foreground font-mono">{processStep}</p>
-              <Progress value={65} className="h-1" />
+              <Progress value={75} className="h-1" />
             </motion.div>
           )}
         </AnimatePresence>
 
         {/* 登录方式切换标签 */}
-        <div className="p-6 pt-4 space-y-4">
-          <Tabs
-            value={activeTab}
-            onValueChange={(v) => {
-              setActiveTab(v as any)
-              setErrorMessage(null)
-            }}
-            className="w-full"
-          >
-            <TabsList className="grid grid-cols-3 w-full h-10 bg-muted/60">
-              <TabsTrigger
-                id="tab-wallet"
-                value="wallet"
-                onClick={() => setActiveTab("wallet")}
-                className="text-xs gap-1.5 data-[state=active]:bg-background"
-              >
-                <Wallet className="w-3.5 h-3.5 text-amber-500" />
-                扩展钱包
-              </TabsTrigger>
-              <TabsTrigger
-                id="tab-passkey"
-                value="passkey"
-                onClick={() => setActiveTab("passkey")}
-                className="text-xs gap-1.5 data-[state=active]:bg-background"
-              >
-                <Fingerprint className="w-3.5 h-3.5 text-purple-500" />
-                Passkey
-              </TabsTrigger>
-              <TabsTrigger
-                id="tab-zklogin"
-                value="zklogin"
-                onClick={() => setActiveTab("zklogin")}
-                className="text-xs gap-1.5 data-[state=active]:bg-background"
-              >
-                <Sparkles className="w-3.5 h-3.5 text-blue-500" />
-                zkLogin
-              </TabsTrigger>
-            </TabsList>
+        {!activeUser && (
+          <div className="p-4 pt-3">
+            <Tabs
+              value={activeTab}
+              onValueChange={(v) => {
+                setActiveTab(v as any)
+                setErrorMessage(null)
+              }}
+              className="w-full"
+            >
+              <TabsList className="grid grid-cols-3 w-full h-9 bg-muted/60 p-0.5 rounded-xl">
+                <TabsTrigger
+                  id="tab-wallet"
+                  value="wallet"
+                  className="text-xs data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
+                >
+                  扩展钱包
+                </TabsTrigger>
+                <TabsTrigger
+                  id="tab-passkey"
+                  value="passkey"
+                  className="text-xs data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
+                >
+                  面容 / 指纹
+                </TabsTrigger>
+                <TabsTrigger
+                  id="tab-zklogin"
+                  value="zklogin"
+                  className="text-xs data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
+                >
+                  Google
+                </TabsTrigger>
+              </TabsList>
 
-            {/* 1. 扩展钱包面板 */}
-            <TabsContent value="wallet" className="mt-4 space-y-3">
-              {/* 已在浏览器中检测到的插件 */}
-              {installedWallets.length > 0 && (
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium px-1">
-                    <span className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
-                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                      已在当前浏览器中检测到 ({installedWallets.length} 个)
-                    </span>
-                    <button
-                      type="button"
-                      onClick={refreshInstalledWallets}
-                      className="text-[10px] text-primary hover:underline flex items-center gap-1"
-                    >
-                      <RefreshCw className="w-2.5 h-2.5" /> 重新扫描
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
+              {/* 1. 扩展钱包 */}
+              <TabsContent value="wallet" className="mt-3 space-y-2">
+                {installedWallets.length > 0 && (
+                  <div className="space-y-1.5 mb-2">
+                    <p className="text-[11px] font-medium text-muted-foreground px-1">已检测到的钱包</p>
                     {installedWallets.map((wallet) => (
                       <Button
                         key={wallet.name}
                         variant="outline"
                         disabled={isProcessing}
                         onClick={() => handleConnectStandardWallet(wallet)}
-                        className="w-full h-13 flex justify-between items-center px-4 border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10 transition-all text-xs"
+                        className="w-full h-11 flex justify-between items-center px-3 border-border/80 hover:bg-muted/60 transition-all rounded-xl"
                       >
-                        <div className="flex items-center space-x-3">
+                        <div className="flex items-center space-x-2.5">
                           {wallet.icon ? (
-                            <img src={wallet.icon} alt={wallet.name} className="w-6 h-6 rounded-md object-contain" />
+                            <img src={wallet.icon} alt={wallet.name} className="w-5 h-5 rounded-md object-contain" />
                           ) : (
-                            <span className="text-xl">💧</span>
+                            <Wallet className="w-4 h-4 text-primary" />
                           )}
-                          <div className="text-left">
-                            <p className="font-semibold text-foreground">{wallet.name}</p>
-                            <p className="text-[10px] text-emerald-600 dark:text-emerald-400">已就绪，点击立即唤起连接</p>
-                          </div>
+                          <span className="font-semibold text-xs text-foreground">{wallet.name}</span>
                         </div>
-                        <Badge className="text-[10px] bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
-                          连接
-                        </Badge>
+                        <span className="text-xs font-medium text-primary">连接</span>
                       </Button>
                     ))}
                   </div>
-                </div>
-              )}
+                )}
 
-              {/* 常用 Sui 生态钱包列表（支持点击唤起与一键前往应用店安装） */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-[11px] text-muted-foreground font-medium px-1">
-                  <span>Sui 常见生态钱包</span>
-                  {installedWallets.length === 0 && (
-                    <button
-                      type="button"
-                      onClick={refreshInstalledWallets}
-                      className="text-[10px] text-primary hover:underline flex items-center gap-1"
-                    >
-                      <RefreshCw className="w-2.5 h-2.5" /> 检测插件
-                    </button>
-                  )}
-                </div>
-
-                <div className="space-y-2">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] font-medium text-muted-foreground px-1">
+                    <span>常见钱包</span>
+                    {installedWallets.length === 0 && (
+                      <button
+                        type="button"
+                        onClick={refreshInstalledWallets}
+                        className="text-primary hover:underline flex items-center gap-1"
+                      >
+                        <RefreshCw className="w-2.5 h-2.5" /> 扫描
+                      </button>
+                    )}
+                  </div>
                   {POPULAR_WALLETS.map((pw) => {
                     const isDetected = installedWallets.some((w) =>
                       pw.idMatch.some((m) => w.name?.toLowerCase().includes(m))
@@ -989,266 +913,136 @@ export function ConnectWalletDialog({
                     return (
                       <div
                         key={pw.name}
-                        className={`flex items-center justify-between p-2.5 rounded-xl border transition-all ${
-                          isDetected
-                            ? "border-emerald-500/30 bg-emerald-500/5"
-                            : "border-border/80 bg-card hover:bg-muted/40"
-                        }`}
+                        className="flex items-center justify-between p-2.5 rounded-xl border border-border/70 hover:bg-muted/30 transition-all"
                       >
-                        <div className="flex items-center space-x-3 min-w-0">
-                          <span className="text-xl">{pw.icon}</span>
-                          <div className="text-left min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <p className="font-semibold text-xs text-foreground truncate">{pw.name}</p>
-                              {isDetected && (
-                                <Badge className="h-3.5 text-[8px] px-1 bg-emerald-500/20 text-emerald-600 border-emerald-500/30">
-                                  已安装
-                                </Badge>
-                              )}
-                            </div>
-                            <p className="text-[10px] text-muted-foreground truncate">{pw.desc}</p>
-                          </div>
+                        <div className="flex items-center space-x-2.5">
+                          <span className="text-lg leading-none">{pw.icon}</span>
+                          <span className="font-medium text-xs text-foreground">{pw.name}</span>
                         </div>
-
-                        <div className="flex items-center space-x-1.5 shrink-0">
-                          {isDetected ? (
+                        {isDetected ? (
+                          <Button
+                            size="sm"
+                            disabled={isProcessing}
+                            onClick={() => handlePopularWalletClick(pw)}
+                            className="h-7 text-xs px-3 rounded-lg"
+                          >
+                            连接
+                          </Button>
+                        ) : (
+                          <div className="flex items-center space-x-1.5">
                             <Button
                               size="sm"
+                              variant="ghost"
                               disabled={isProcessing}
                               onClick={() => handlePopularWalletClick(pw)}
-                              className="h-7 text-xs px-2.5 bg-primary text-primary-foreground"
+                              className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground"
                             >
-                              唤起连接
+                              检测
                             </Button>
-                          ) : (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                disabled={isProcessing}
-                                onClick={() => handlePopularWalletClick(pw)}
-                                className="h-7 text-xs px-2 text-muted-foreground hover:text-foreground"
-                                title="尝试检测与唤起"
-                              >
-                                检测
-                              </Button>
-                              <a
-                                href={pw.installUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="inline-flex items-center gap-1 text-[11px] h-7 px-2.5 rounded-md border border-border/80 bg-muted/60 hover:bg-muted text-primary font-medium transition-all"
-                              >
-                                去安装 <ExternalLink className="w-3 h-3" />
-                              </a>
-                            </>
-                          )}
-                        </div>
+                            <a
+                              href={pw.installUrl}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] h-7 px-2.5 rounded-lg border border-border/80 hover:bg-muted text-primary font-medium transition-all"
+                            >
+                              安装 <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          </div>
+                        )}
                       </div>
                     )
                   })}
                 </div>
-              </div>
+              </TabsContent>
 
-              {/* 插件无依赖推荐提示 */}
-              <div className="p-3 rounded-xl bg-purple-500/5 border border-purple-500/20 text-[11px] text-muted-foreground space-y-1">
-                <span className="font-semibold text-purple-600 dark:text-purple-400 flex items-center gap-1">
-                  <Fingerprint className="w-3.5 h-3.5" />
-                  没装 Chrome 插件？推荐使用 Passkey
-                </span>
-                <p>
-                  无需从应用商店下载任何扩展插件，切换至 <strong>Passkey</strong> 标签，即可直接使用 Mac 自带的 <strong>Touch ID 指纹</strong>进行无私钥硬件级免密登录！
-                </p>
-              </div>
-            </TabsContent>
-
-            {/* 2. Passkey 面板 (真实 WebAuthn 硬件集成) */}
-            <TabsContent value="passkey" className="mt-4 space-y-3">
-              <div className="space-y-2">
+              {/* 2. 面容 / 指纹 (Passkey) */}
+              <TabsContent value="passkey" className="mt-3 space-y-3">
                 <Button
                   id="btn-login-passkey"
                   variant="outline"
                   disabled={isProcessing}
                   onClick={handlePasskeyLogin}
-                  className="w-full h-14 flex items-center justify-between px-4 border-purple-500/30 bg-purple-500/5 hover:bg-purple-500/10 transition-all group"
+                  className="w-full h-14 flex items-center justify-between px-4 border-border/80 hover:bg-muted/50 rounded-xl transition-all"
                 >
                   <div className="flex items-center space-x-3">
-                    <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white flex items-center justify-center shadow-md">
-                      <Fingerprint className="w-4 h-4" />
+                    <div className="w-9 h-9 rounded-xl bg-purple-500/10 text-purple-600 flex items-center justify-center">
+                      <Fingerprint className="w-5 h-5" />
                     </div>
                     <div className="text-left">
-                      <p className="text-xs font-bold text-foreground">TouchID / FaceID 免密一键登录</p>
-                      <p className="text-[10px] text-muted-foreground">唤起本机 Secure Enclave 硬件芯片生物识别</p>
+                      <p className="text-xs font-bold text-foreground">Touch ID / Face ID 登录</p>
+                      <p className="text-[11px] text-muted-foreground">触碰指纹或面容识别即可一键完成登录</p>
                     </div>
                   </div>
-                  <Badge className="text-[10px] bg-purple-500/20 text-purple-600 dark:text-purple-400 border-purple-500/30 gap-1">
-                    <Laptop className="w-2.5 h-2.5" /> 真实硬件芯片
-                  </Badge>
+                  <ArrowRight className="w-4 h-4 text-muted-foreground" />
                 </Button>
-              </div>
+              </TabsContent>
 
-              {/* 核心特性与硬件保障 */}
-              <div className="p-3 rounded-xl bg-purple-500/5 border border-purple-500/20 text-[11px] text-muted-foreground space-y-1.5">
-                <span className="font-semibold text-purple-600 dark:text-purple-400 flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  Sui 原生 Secp256r1 (NIST P-256) 真实签名保障
-                </span>
-                <p>
-                  • <strong>硬件级隔离</strong>：点击后直接调用 Mac TouchID 传感器，私钥在 Secure Enclave 内生成并锁死；
-                  <br />
-                  • <strong>真实链上地址</strong>：提取硬件 P-256 公钥并派生 Sui Flag 0x02 原生链上账户；
-                  <br />
-                  • <strong>0 插件依赖</strong>：无需安装任何 Chrome 扩展插件，原生浏览器即可免密签署交易。
-                </p>
-              </div>
-            </TabsContent>
-
-            {/* 3. zkLogin 面板 (真实 Google OAuth + JWT 解析 + 演示选项) */}
-            <TabsContent value="zklogin" className="mt-4 space-y-3">
-              <div className="space-y-2">
+              {/* 3. Google (zkLogin) */}
+              <TabsContent value="zklogin" className="mt-3 space-y-3">
                 <Button
                   id="btn-login-google"
                   variant="outline"
                   disabled={isProcessing}
                   onClick={handleTriggerRealGoogleOAuth}
-                  className="w-full h-12 flex items-center justify-between px-4 border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/10 transition-all group"
+                  className="w-full h-12 flex items-center justify-between px-4 border-border/80 hover:bg-muted/50 rounded-xl transition-all"
                 >
                   <div className="flex items-center space-x-3">
                     <div className="w-6 h-6 rounded-full bg-white shadow-sm flex items-center justify-center p-0.5">
                       <svg viewBox="0 0 24 24" className="w-4 h-4">
-                        <path
-                          fill="#4285F4"
-                          d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"
-                        />
-                        <path
-                          fill="#34A853"
-                          d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"
-                        />
-                        <path
-                          fill="#FBBC05"
-                          d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"
-                        />
-                        <path
-                          fill="#EA4335"
-                          d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
-                        />
+                        <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                        <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                        <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z" />
+                        <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z" />
                       </svg>
                     </div>
-                    <div className="text-left">
-                      <p className="text-xs font-semibold text-foreground">真实 Google OAuth 登录</p>
-                      <p className="text-[10px] text-muted-foreground">生成 Ephemeral 密钥并重定向至 Google 授权</p>
-                    </div>
+                    <p className="text-xs font-semibold text-foreground">使用 Google 账号继续</p>
                   </div>
-                  <Badge variant="outline" className="text-[10px] bg-blue-500/10 text-blue-600 border-blue-500/20">
-                    OAuth 2.0
-                  </Badge>
+                  <ArrowRight className="w-4 h-4 text-muted-foreground" />
                 </Button>
 
-                <div className="text-right">
+                {/* 调试选项（折叠） */}
+                <div className="pt-1">
                   <button
                     type="button"
-                    onClick={() => setShowConfigClientId(!showConfigClientId)}
-                    className="text-[10px] text-primary hover:underline"
-                  >
-                    {showConfigClientId ? "收起 Client ID 配置" : "⚙️ 配置 Google OAuth Client ID"}
-                  </button>
-                </div>
-
-                {showConfigClientId && (
-                  <div className="p-3 rounded-lg bg-muted/40 border border-border/80 space-y-2">
-                    <p className="text-[11px] text-muted-foreground">
-                      输入您在 Google Cloud Console 创建的 Web 客户端 ID（重定向 URI 需包含当前域名）：
-                    </p>
-                    <Input
-                      placeholder="例: 123456789-abc.apps.googleusercontent.com"
-                      value={googleClientId}
-                      onChange={(e) => setGoogleClientId(e.target.value)}
-                      className="h-8 text-xs font-mono"
-                    />
-                  </div>
-                )}
-
-                <div className="pt-1">
-                  <Button
-                    variant="ghost"
-                    size="sm"
                     onClick={() => setShowJwtInput(!showJwtInput)}
-                    className="w-full text-xs text-muted-foreground hover:text-foreground justify-between h-8 border border-dashed border-border"
+                    className="text-[10px] text-muted-foreground hover:text-foreground hover:underline"
                   >
-                    <span className="flex items-center gap-1.5">
-                      <Code2 className="w-3.5 h-3.5" />
-                      输入已有 Google ID Token (JWT)
-                    </span>
-                    <span className="text-[10px] text-primary">{showJwtInput ? "收起" : "展开"}</span>
-                  </Button>
-
+                    {showJwtInput ? "收起调试选项" : "⚙️ 开发调试选项"}
+                  </button>
                   {showJwtInput && (
-                    <div className="mt-2 p-3 rounded-lg bg-muted/40 border border-border/80 space-y-2">
-                      <p className="text-[11px] text-muted-foreground">
-                        粘贴从 Google 获得的真实 ID Token（JWT），系统将通过 `@mysten/sui/zklogin` 直接提取邮箱并派生真实 Flag 0x05 地址：
-                      </p>
+                    <div className="mt-2 p-2.5 rounded-lg bg-muted/40 border border-border/80 space-y-2">
                       <Input
-                        placeholder="eyJhbGciOiJSUzI1NiIs..."
+                        placeholder="输入 Google ID Token (JWT)"
                         value={jwtInput}
                         onChange={(e) => setJwtInput(e.target.value)}
                         className="h-8 text-xs font-mono"
                       />
-                      <Button
-                        size="sm"
-                        disabled={!jwtInput.trim() || isProcessing}
-                        onClick={() => handleProcessRealJwt(jwtInput.trim())}
-                        className="w-full h-8 text-xs"
-                      >
-                        解析并派生 Sui 真实地址
-                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          disabled={!jwtInput.trim() || isProcessing}
+                          onClick={() => handleProcessRealJwt(jwtInput.trim())}
+                          className="flex-1 h-7 text-xs"
+                        >
+                          解析 Token
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isProcessing}
+                          onClick={() => handleZkLoginDemo("google")}
+                          className="h-7 text-xs"
+                        >
+                          模拟测试
+                        </Button>
+                      </div>
                     </div>
                   )}
                 </div>
-
-                <div className="pt-2 border-t border-border/60">
-                  <div className="flex items-center justify-between text-[11px] text-muted-foreground mb-1.5">
-                    <span>离线体验密码学流程：</span>
-                    <Badge variant="secondary" className="text-[9px]">Dev Mode</Badge>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={isProcessing}
-                      onClick={() => handleZkLoginDemo("google")}
-                      className="h-8 text-[11px] hover:bg-muted/80"
-                    >
-                      🧪 Google 算法演示
-                    </Button>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      disabled={isProcessing}
-                      onClick={() => handleZkLoginDemo("apple")}
-                      className="h-8 text-[11px] hover:bg-muted/80"
-                    >
-                      🧪 Apple 算法演示
-                    </Button>
-                  </div>
-                </div>
-              </div>
-
-              {/* 核心特性与安全保障 */}
-              <div className="p-3 rounded-xl bg-blue-500/5 border border-blue-500/20 text-[11px] text-muted-foreground space-y-1.5">
-                <span className="font-semibold text-blue-600 dark:text-blue-400 flex items-center gap-1">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  Sui zkLogin 零知识隐私保障
-                </span>
-                <p>
-                  • <strong>零凭证泄露</strong>：链上仅记录零知识证明与临时 Ephemeral 公钥，绝不暴露您的真实邮箱；
-                  <br />
-                  • <strong>完全自托管</strong>：私钥由本地临时密钥对结合链上 JWK 预言机原生验证；
-                  <br />
-                  • <strong>生命周期保护</strong>：默认设置 2 个 Epoch（约 48 小时）过期，会话无缝自动轮换。
-                </p>
-              </div>
-            </TabsContent>
-          </Tabs>
-        </div>
+              </TabsContent>
+            </Tabs>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )

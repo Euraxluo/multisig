@@ -20,9 +20,9 @@ export default function Home() {
   if (!mounted) return null
 
   return (
-    <main className="flex min-h-screen flex-col bg-gradient-to-b from-background to-background/90 overflow-hidden">
+    <main className="flex min-h-screen flex-col bg-background text-foreground">
       <MobileNavbar activeTab={activeTab} setActiveTab={setActiveTab} />
-      <div className="flex-1 p-3 pt-16 md:p-5 md:pt-20">
+      <div className="flex-1 w-full max-w-lg md:max-w-2xl mx-auto px-3 pt-16 pb-24 md:px-5 md:pt-20 md:pb-28">
         <AnimatePresence mode="wait">
           {activeTab === "dashboard" && (
             <motion.div

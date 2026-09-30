@@ -98,18 +98,18 @@ export function RedPacketDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px] p-0 overflow-hidden border-border/80 bg-background text-foreground shadow-2xl rounded-2xl">
+      <DialogContent className="w-[92vw] max-w-[400px] p-0 overflow-hidden border-border/70 bg-background text-foreground shadow-2xl rounded-2xl">
         {mode === "create" ? (
-          <div className="p-6 space-y-5">
+          <div className="p-5 space-y-4">
             <DialogHeader>
               <div className="flex items-center space-x-2.5">
-                <div className="p-2.5 rounded-xl bg-gradient-to-br from-red-500 to-rose-600 text-white shadow-md shadow-red-500/20">
+                <div className="p-2 rounded-xl bg-red-500 text-white shadow-md">
                   <Gift className="h-5 w-5" />
                 </div>
                 <div>
-                  <DialogTitle className="text-lg font-bold">发链上红包 (Red Packet)</DialogTitle>
+                  <DialogTitle className="text-base font-bold">发红包</DialogTitle>
                   <DialogDescription className="text-xs text-muted-foreground">
-                    基于 Move 共享对象与二倍均值随机算法，100% 资金守恒，24h 未领全额退款
+                    群内成员可拼手气或等额领取
                   </DialogDescription>
                 </div>
               </div>
@@ -117,20 +117,20 @@ export function RedPacketDialog({
 
             {/* 红包类型切换 */}
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">红包分配模式</label>
+              <label className="text-xs font-medium text-muted-foreground">分配模式</label>
               <Tabs
                 value={packetType}
                 onValueChange={(v) => setPacketType(v as "LUCKY_RANDOM" | "EQUAL")}
                 className="w-full"
               >
-                <TabsList className="grid grid-cols-2 w-full h-9 bg-muted/60">
-                  <TabsTrigger value="LUCKY_RANDOM" className="text-xs gap-1.5 data-[state=active]:bg-background">
+                <TabsList className="grid grid-cols-2 w-full h-9 bg-muted/60 p-0.5 rounded-xl">
+                  <TabsTrigger value="LUCKY_RANDOM" className="text-xs gap-1.5 data-[state=active]:bg-background rounded-lg">
                     <Sparkles className="h-3.5 w-3.5 text-amber-500" />
-                    拼手气红包 (随机)
+                    拼手气红包
                   </TabsTrigger>
-                  <TabsTrigger value="EQUAL" className="text-xs gap-1.5 data-[state=active]:bg-background">
+                  <TabsTrigger value="EQUAL" className="text-xs gap-1.5 data-[state=active]:bg-background rounded-lg">
                     <Coins className="h-3.5 w-3.5 text-blue-500" />
-                    普通红包 (等额)
+                    普通红包
                   </TabsTrigger>
                 </TabsList>
               </Tabs>
@@ -147,7 +147,7 @@ export function RedPacketDialog({
                     min="0.1"
                     value={totalAmount}
                     onChange={(e) => setTotalAmount(e.target.value)}
-                    className="pr-12 text-sm font-semibold"
+                    className="pr-12 text-sm font-semibold rounded-xl"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
                     SUI
@@ -156,7 +156,7 @@ export function RedPacketDialog({
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground">红包总个数</label>
+                <label className="text-xs font-medium text-muted-foreground">红包个数</label>
                 <div className="relative">
                   <Input
                     type="number"
@@ -164,7 +164,7 @@ export function RedPacketDialog({
                     max="100"
                     value={totalCount}
                     onChange={(e) => setTotalCount(e.target.value)}
-                    className="pr-8 text-sm font-semibold"
+                    className="pr-8 text-sm font-semibold rounded-xl"
                   />
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-medium text-muted-foreground">
                     个
@@ -175,42 +175,27 @@ export function RedPacketDialog({
 
             {/* 祝福语 */}
             <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">留言 / 祝福语</label>
+              <label className="text-xs font-medium text-muted-foreground">留言</label>
               <Input
                 value={greeting}
                 onChange={(e) => setGreeting(e.target.value)}
                 placeholder="恭喜发财，万事大吉！"
-                className="text-xs"
+                className="text-xs rounded-xl"
                 maxLength={60}
               />
             </div>
 
-            {/* 机制保障提示 */}
-            <div className="p-3 rounded-xl bg-red-500/5 border border-red-500/20 text-[11px] space-y-1 text-muted-foreground">
-              <div className="flex items-center text-red-600 dark:text-red-400 font-medium gap-1">
-                <ShieldCheck className="h-3.5 w-3.5" />
-                <span>Move 链上安全保障</span>
-              </div>
-              <p>
-                • 采用双倍均值切分算法，单人最低保底 1 MIST，杜绝超发；
-                <br />
-                • 生成独立 Shared Object，群友并发抢单无读写锁争碰；
-                <br />
-                • 24 小时后如有剩余，群主可随时全额退回发起人钱包。
-              </p>
-            </div>
-
-            <div className="flex justify-end space-x-2 pt-1">
-              <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
+            <div className="flex justify-end space-x-2 pt-2">
+              <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} className="rounded-xl">
                 取消
               </Button>
               <Button
                 size="sm"
                 onClick={handleCreate}
-                className="bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white font-medium px-5 shadow-lg shadow-red-500/20"
+                className="bg-red-600 hover:bg-red-700 text-white font-medium px-5 rounded-xl shadow-md"
               >
                 <Gift className="h-4 w-4 mr-1.5" />
-                立即塞钱发红包 ({totalAmount} SUI)
+                塞钱发红包 ({totalAmount} SUI)
               </Button>
             </div>
           </div>

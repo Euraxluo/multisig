@@ -91,49 +91,49 @@ export function CreateAgentDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-[480px]">
+      <DialogContent className="w-[92vw] max-w-[420px] rounded-2xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white">
               <Bot className="w-4 h-4" />
             </div>
-            <span>签发 AI Agent 虚拟副卡</span>
+            <span>添加 AI 助手</span>
           </DialogTitle>
           <DialogDescription>
-            在 Sui 链上铸造受限 `AgentCap`，分配单日配额与 x402 服务白名单。
+            设置助手用途与单日支出限额。
           </DialogDescription>
         </DialogHeader>
 
         {!generatedKey ? (
           <div className="space-y-4 py-2">
             <div className="space-y-1.5">
-              <Label htmlFor="agent-name">副卡名称</Label>
+              <Label htmlFor="agent-name">助手名称</Label>
               <Input
                 id="agent-name"
-                placeholder="例如: Qwen-2.5-Coder-Agent"
+                placeholder="例如: Qwen-2.5-Coder"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="agent-purpose">业务用途</Label>
+              <Label htmlFor="agent-purpose">用途说明</Label>
               <Input
                 id="agent-purpose"
-                placeholder="例如: 执行自动化测试与代码补全"
+                placeholder="例如: 自动化数据统计与提醒"
                 value={purpose}
                 onChange={(e) => setPurpose(e.target.value)}
               />
             </div>
 
             <div className="space-y-1.5">
-              <Label>卡片分类</Label>
+              <Label>类型</Label>
               <div className="grid grid-cols-2 gap-2">
                 {[
                   { key: "LLM_INFERENCE", label: "LLM 推理", color: "border-blue-500/40 text-blue-600" },
-                  { key: "DATA_SCRAPING", label: "爬虫与情报", color: "border-amber-500/40 text-amber-600" },
-                  { key: "STORAGE", label: "Walrus 存储", color: "border-emerald-500/40 text-emerald-600" },
-                  { key: "DEFI_EXECUTION", label: "DeFi 执行", color: "border-purple-500/40 text-purple-600" },
+                  { key: "DATA_SCRAPING", label: "数据抓取", color: "border-amber-500/40 text-amber-600" },
+                  { key: "STORAGE", label: "数据存储", color: "border-emerald-500/40 text-emerald-600" },
+                  { key: "DEFI_EXECUTION", label: "交易执行", color: "border-purple-500/40 text-purple-600" },
                 ].map((item) => (
                   <Button
                     key={item.key}
@@ -155,7 +155,7 @@ export function CreateAgentDialog({
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="daily-budget">单日配额上限 (SUI)</Label>
+              <Label htmlFor="daily-budget">单日支出上限 (SUI)</Label>
               <div className="relative">
                 <Input
                   id="daily-budget"
@@ -170,12 +170,12 @@ export function CreateAgentDialog({
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                受 Move 字节码沙盒保护，超出限额即刻熔断。
+                超出限额将自动停止划扣，保护金库安全。
               </p>
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="allowed-services">允许调用的 x402 网关白名单</Label>
+              <Label htmlFor="allowed-services">授权服务地址 (可选)</Label>
               <Input
                 id="allowed-services"
                 value={allowedServicesInput}

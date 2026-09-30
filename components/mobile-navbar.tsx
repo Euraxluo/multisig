@@ -56,40 +56,38 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
 
   return (
     <>
+      {/* Top Navbar: Mobile-first full width, Desktop centered card */}
       <div
-        className={`fixed top-0 left-0 right-0 z-50 flex h-14 items-center justify-between px-4 transition-all duration-300 ${
-          scrolled ? "bg-background/90 backdrop-blur-md shadow-sm" : "bg-background"
+        className={`fixed top-0 left-0 right-0 z-50 flex h-14 items-center justify-between px-4 transition-all duration-200 md:max-w-2xl md:left-1/2 md:-translate-x-1/2 md:top-2 md:rounded-2xl md:border md:border-border/50 ${
+          scrolled ? "bg-background/95 backdrop-blur-md shadow-sm" : "bg-background/90 backdrop-blur-sm"
         }`}
       >
-        <div className="flex items-center">
+        <div className="flex items-center space-x-2">
           <motion.h1
-            className="text-lg font-bold bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"
-            initial={{ opacity: 0, x: -20 }}
+            className="text-base font-bold bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"
+            initial={{ opacity: 0, x: -10 }}
             animate={{ opacity: 1, x: 0 }}
-            transition={{ duration: 0.5 }}
           >
-            MultiSig Wallet
+            MultiSig
           </motion.h1>
         </div>
-        <div className="flex items-center space-x-1">
-          <Button variant="ghost" size="icon" onClick={() => setIsNotificationsOpen(true)} className="relative">
-            <Bell className="h-5 w-5" />
-            <span className="absolute top-1 right-1 h-2 w-2 rounded-full bg-red-500"></span>
+        <div className="flex items-center space-x-1.5">
+          <Button variant="ghost" size="icon" onClick={() => setIsNotificationsOpen(true)} className="h-8 w-8 relative text-muted-foreground hover:text-foreground">
+            <Bell className="h-4 w-4" />
+            <span className="absolute top-1.5 right-1.5 h-1.5 w-1.5 rounded-full bg-red-500"></span>
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <motion.div whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
-                <Button
-                  variant="default"
-                  size="icon"
-                  className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 transition-all"
-                >
-                  <Plus className="h-5 w-5" />
-                </Button>
-              </motion.div>
+              <Button
+                variant="default"
+                size="icon"
+                className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 shadow-sm"
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => { setActiveTab("agent") }}>
+            <DropdownMenuContent align="end" className="w-44">
+              <DropdownMenuItem onClick={() => setActiveTab("agent")}>
                 <Bot className="h-4 w-4 mr-2 text-primary" />
                 AI 副卡管理
               </DropdownMenuItem>
@@ -111,43 +109,34 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+
           <Button
             id="btn-nav-wallet"
             variant="outline"
             size="sm"
             onClick={() => setIsWalletOpen(true)}
-            className="h-8 px-2.5 text-xs gap-1.5 border-primary/30 bg-primary/5 hover:bg-primary/10 transition-all"
-            title="Sui zkLogin / Passkey / 钱包连接"
+            className="h-8 px-2.5 text-xs gap-1.5 border-border/80 bg-muted/30 hover:bg-muted/60 transition-all rounded-full"
           >
-            {currentUser?.type === "zklogin" ? (
-              <span className="flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
-                zkLogin
-              </span>
-            ) : currentUser?.type === "passkey" ? (
-               <span className="flex items-center gap-1 text-[11px] font-medium text-purple-600 dark:text-purple-400">
-                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>
-                Passkey
-              </span>
-            ) : currentUser?.type === "wallet" ? (
-              <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
-                <Wallet className="w-3.5 h-3.5" />
-                {currentUser.provider}
+            {currentUser ? (
+              <span className="flex items-center gap-1.5 text-xs font-medium">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+                <span className="max-w-[70px] truncate">{currentUser.provider || "已连接"}</span>
+                <span className="font-mono text-muted-foreground text-[11px]">
+                  {currentUser.address.slice(0, 4)}...{currentUser.address.slice(-3)}
+                </span>
               </span>
             ) : (
-              <span className="flex items-center gap-1.5 text-xs font-semibold text-primary">
-                <Wallet className="h-3.5 w-3.5" />
-                登录 / 连接钱包
+              <span className="flex items-center gap-1 text-xs font-medium text-foreground">
+                <Wallet className="h-3.5 w-3.5 text-primary" />
+                登录
               </span>
             )}
-            <span className="font-mono text-[10px] text-muted-foreground hidden sm:inline">
-              {currentUser ? `${currentUser.address.slice(0, 4)}...${currentUser.address.slice(-3)}` : ""}
-            </span>
           </Button>
         </div>
       </div>
 
-      <div className="fixed bottom-0 left-0 right-0 z-50 bg-background/90 backdrop-blur-md border-t border-border/40 flex justify-around p-1">
+      {/* Bottom Nav: Mobile fixed bottom, Desktop floating dock */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-background/95 backdrop-blur-md border-t border-border/40 flex justify-around py-1 px-2 md:max-w-lg md:left-1/2 md:-translate-x-1/2 md:bottom-3 md:rounded-2xl md:border md:shadow-lg">
         <NavButton
           icon={<Home className="h-5 w-5" />}
           label="组"
