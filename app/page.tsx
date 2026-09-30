@@ -5,6 +5,7 @@ import Dashboard from "@/components/dashboard"
 import Transactions from "@/components/transactions"
 import Votes from "@/components/votes"
 import Profile from "@/components/profile"
+import AgentGuard from "@/components/agent-guard"
 import { MobileNavbar } from "@/components/mobile-navbar"
 import { motion, AnimatePresence } from "framer-motion"
 
@@ -32,6 +33,17 @@ export default function Home() {
               transition={{ duration: 0.3 }}
             >
               <Dashboard />
+            </motion.div>
+          )}
+          {activeTab === "agent" && (
+            <motion.div
+              key="agent"
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              transition={{ duration: 0.3 }}
+            >
+              <AgentGuard />
             </motion.div>
           )}
           {activeTab === "transactions" && (

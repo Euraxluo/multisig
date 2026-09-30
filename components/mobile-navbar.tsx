@@ -3,11 +3,11 @@
 import type React from "react"
 
 import { useState, useEffect } from "react"
-import { Wallet, Plus, Bell, Home, FileText, User, Save, Users, Send, Vote } from "lucide-react"
+import { Wallet, Plus, Bell, Home, FileText, User, Save, Users, Send, Vote, Bot } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { CreateGroupDialog } from "@/components/create-group-dialog"
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
-import { ConnectWalletDialog } from "@/components/connect-wallet-dialog"
+import { ConnectWalletDialog, UserAccount } from "@/components/connect-wallet-dialog"
 import { NotificationsDialog } from "@/components/notifications-dialog"
 import { TemplateManagerDialog } from "@/components/template-manager-dialog"
 import { CreateVoteDialog } from "@/components/create-vote-dialog"
@@ -21,12 +21,30 @@ interface MobileNavbarProps {
 
 export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
   const [isWalletOpen, setIsWalletOpen] = useState(false)
+  const [currentUser, setCurrentUser] = useState<UserAccount | null>(null)
   const [isCreateOpen, setIsCreateOpen] = useState(false)
   const [isCreateTxOpen, setIsCreateTxOpen] = useState(false)
   const [isNotificationsOpen, setIsNotificationsOpen] = useState(false)
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false)
   const [isCreateVoteOpen, setIsCreateVoteOpen] = useState(false)
   const [scrolled, setScrolled] = useState(false)
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("sui_active_account")
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x") && parsed.address.length >= 42) {
+          setCurrentUser(parsed)
+        } else {
+          localStorage.removeItem("sui_active_account")
+          setCurrentUser(null)
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load saved session", e)
+    }
+  }, [])
 
   useEffect(() => {
     const handleScroll = () => {
@@ -71,6 +89,10 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
               </motion.div>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => { setActiveTab("agent") }}>
+                <Bot className="h-4 w-4 mr-2 text-primary" />
+                AI 副卡管理
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setIsCreateOpen(true)}>
                 <Users className="h-4 w-4 mr-2" />
                 新建组
@@ -89,8 +111,38 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          <Button variant="ghost" size="icon" onClick={() => setIsWalletOpen(true)}>
-            <Wallet className="h-5 w-5" />
+          <Button
+            id="btn-nav-wallet"
+            variant="outline"
+            size="sm"
+            onClick={() => setIsWalletOpen(true)}
+            className="h-8 px-2.5 text-xs gap-1.5 border-primary/30 bg-primary/5 hover:bg-primary/10 transition-all"
+            title="Sui zkLogin / Passkey / 钱包连接"
+          >
+            {currentUser?.type === "zklogin" ? (
+              <span className="flex items-center gap-1 text-[11px] font-medium text-blue-600 dark:text-blue-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></span>
+                zkLogin
+              </span>
+            ) : currentUser?.type === "passkey" ? (
+               <span className="flex items-center gap-1 text-[11px] font-medium text-purple-600 dark:text-purple-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-purple-500 animate-pulse"></span>
+                Passkey
+              </span>
+            ) : currentUser?.type === "wallet" ? (
+              <span className="flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                <Wallet className="w-3.5 h-3.5" />
+                {currentUser.provider}
+              </span>
+            ) : (
+              <span className="flex items-center gap-1.5 text-xs font-semibold text-primary">
+                <Wallet className="h-3.5 w-3.5" />
+                登录 / 连接钱包
+              </span>
+            )}
+            <span className="font-mono text-[10px] text-muted-foreground hidden sm:inline">
+              {currentUser ? `${currentUser.address.slice(0, 4)}...${currentUser.address.slice(-3)}` : ""}
+            </span>
           </Button>
         </div>
       </div>
@@ -101,6 +153,12 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
           label="组"
           isActive={activeTab === "dashboard"}
           onClick={() => setActiveTab("dashboard")}
+        />
+        <NavButton
+          icon={<Bot className="h-5 w-5" />}
+          label="AI副卡"
+          isActive={activeTab === "agent"}
+          onClick={() => setActiveTab("agent")}
         />
         <NavButton
           icon={<FileText className="h-5 w-5" />}
@@ -122,7 +180,23 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
         />
       </div>
 
-      <ConnectWalletDialog open={isWalletOpen} onOpenChange={setIsWalletOpen} />
+      <ConnectWalletDialog
+        open={isWalletOpen}
+        onOpenChange={setIsWalletOpen}
+        currentAccount={currentUser}
+        onLoginSuccess={(acc) => {
+          setCurrentUser(acc)
+          try {
+            localStorage.setItem("sui_active_account", JSON.stringify(acc))
+          } catch (e) {}
+        }}
+        onLogout={() => {
+          setCurrentUser(null)
+          try {
+            localStorage.removeItem("sui_active_account")
+          } catch (e) {}
+        }}
+      />
       <CreateGroupDialog open={isCreateOpen} onOpenChange={setIsCreateOpen} />
       <CreateTransactionDialog open={isCreateTxOpen} onOpenChange={setIsCreateTxOpen} />
       <NotificationsDialog open={isNotificationsOpen} onOpenChange={setIsNotificationsOpen} />

@@ -12,6 +12,8 @@
     "@emotion/is-prop-valid": "latest",
     "@hello-pangea/dnd": "latest",
     "@hookform/resolvers": "^3.9.1",
+    "@mysten/sui": "^2.33.1",
+    "@mysten/wallet-standard": "^0.21.30",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "latest",
     "@radix-ui/react-aspect-ratio": "1.1.1",

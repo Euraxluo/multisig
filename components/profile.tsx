@@ -17,68 +17,100 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 
 export default function Profile() {
   const [activeAccount, setActiveAccount] = useState("personal")
+  const [savedUser, setSavedUser] = useState<any>(null)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("sui_active_account")
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x")) {
+          setSavedUser(parsed)
+        } else {
+          localStorage.removeItem("sui_active_account")
+          setSavedUser(null)
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to read user from localStorage", e)
+    }
+  }, [])
+
+  const personalAddress = savedUser?.address || "0x0000000000000000000000000000000000000000"
+  const personalLabel = savedUser ? `${savedUser.identifier} (${savedUser.authMethodLabel || savedUser.type})` : "未连接钱包 (点击右上角登录)"
 
   const accounts = [
     {
       id: "personal",
-      name: "Personal Wallet",
-      address: "0x1a2b3c4d5e6f7g8h9i0j",
+      name: personalLabel,
+      address: personalAddress,
       type: "personal",
     },
     {
       id: "group-1",
-      name: "Team Treasury",
-      address: "0x2b3c4d5e6f7g8h9i0jk",
+      name: "Team Treasury (Sui MultiSig)",
+      address: "0xa81c92d04f2e185b376c90e29b12847a9821d3f1",
       type: "group",
     },
     {
       id: "group-2",
-      name: "DAO Fund",
-      address: "0x3c4d5e6f7g8h9i0jkl",
+      name: "DAO Fund (Sui Native)",
+      address: "0x77c28b5e6f7g8h9i0jkl12847a9821d3f185b376",
       type: "group",
     },
     {
       id: "group-3",
-      name: "Project Alpha",
-      address: "0x4d5e6f7g8h9i0jklm",
+      name: "Agent Vault (AI 智能副卡)",
+      address: "0x4d5e6f7g8h9i0jklm12847a9821d3f185b376c90",
       type: "group",
     },
   ]
 
   const currentAccount = accounts.find((a) => a.id === activeAccount) || accounts[0]
-  const shortAddress = `${currentAccount.address.slice(0, 6)}...${currentAccount.address.slice(-4)}`
+  const shortAddress = currentAccount.address.length > 14
+    ? `${currentAccount.address.slice(0, 8)}...${currentAccount.address.slice(-6)}`
+    : currentAccount.address
 
   const tokens = [
     {
-      symbol: "APT",
-      name: "Aptos",
-      balance: "12.45",
-      usdValue: "124.50",
-      change: "+5.2%",
+      symbol: "SUI",
+      name: "Sui Native Coin",
+      balance: savedUser ? "25.00" : "0.00",
+      usdValue: savedUser ? "85.50" : "0.00",
+      change: "+4.8%",
       positive: true,
-      color: "bg-gradient-to-r from-primary to-purple-500",
+      color: "bg-gradient-to-r from-blue-500 to-indigo-600",
+    },
+    {
+      symbol: "sSUI",
+      name: "Spring Staked SUI",
+      balance: savedUser ? "120.50" : "0.00",
+      usdValue: savedUser ? "433.80" : "0.00",
+      change: "+7.2%",
+      positive: true,
+      color: "bg-gradient-to-r from-purple-500 to-pink-500",
     },
     {
       symbol: "USDC",
-      name: "USD Coin",
-      balance: "250.00",
-      usdValue: "250.00",
+      name: "Sui Native USDC",
+      balance: savedUser ? "500.00" : "0.00",
+      usdValue: savedUser ? "500.00" : "0.00",
       change: "0.0%",
       positive: true,
-      color: "bg-gradient-to-r from-blue-600 to-blue-400",
+      color: "bg-gradient-to-r from-emerald-500 to-teal-500",
     },
     {
-      symbol: "USDT",
-      name: "Tether",
-      balance: "100.00",
-      usdValue: "100.00",
-      change: "-0.1%",
-      positive: false,
-      color: "bg-gradient-to-r from-green-500 to-emerald-400",
+      symbol: "WAL",
+      name: "Walrus Protocol",
+      balance: savedUser ? "1500.00" : "0.00",
+      usdValue: savedUser ? "300.00" : "0.00",
+      change: "+12.4%",
+      positive: true,
+      color: "bg-gradient-to-r from-cyan-500 to-blue-500",
     },
   ]
 
