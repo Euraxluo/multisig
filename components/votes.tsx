@@ -19,6 +19,7 @@ import {
   CalendarClock,
   Plus,
   Play,
+  Lock,
 } from "lucide-react"
 import { VoteDetailsDialog } from "@/components/vote-details-dialog"
 import { CreateVoteDialog } from "@/components/create-vote-dialog"
@@ -173,6 +174,11 @@ export default function Votes() {
                               <p className="text-xs text-muted-foreground">{vote.group}</p>
                             </div>
                             <div className="flex items-center space-x-1.5">
+                              {vote.isTimeLockedSeal && (
+                                <Badge variant="outline" className="text-[10px] bg-purple-500/10 text-purple-600 border-purple-500/20">
+                                  <Lock className="h-2.5 w-2.5 mr-0.5" /> SEAL 盲投
+                                </Badge>
+                              )}
                               {vote.onChainId && (
                                 <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
                                   链上提案

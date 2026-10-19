@@ -30,6 +30,7 @@ import {
   AlertTriangle,
   Bot,
   ShieldCheck,
+  Lock,
 } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
@@ -218,6 +219,10 @@ function resolveVoteContext(voteId: string): any | null {
         status: vote.status === "completed" ? "completed" : "active",
         group: vote.group,
         isAnonymous: !!vote.isAnonymous,
+        isTimeLockedSeal: !!vote.isTimeLockedSeal,
+        sealThreshold: vote.sealThreshold || 2,
+        targetNftType: vote.targetNftType,
+        weightType: vote.weightType,
         showResultsDuring: vote.showResultsDuring !== false,
         color: vote.color || "from-primary to-purple-500",
         weights: vote.weights || { total: 0, voted: 0, required: 0 },
@@ -1116,13 +1121,22 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
               </div>
             </div>
             <div className="flex items-center space-x-2">
-              {voteData.isAnonymous ? (
+              {voteData.isTimeLockedSeal ? (
+                <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-600 border-purple-500/20">
+                  <Lock className="h-3 w-3 mr-1" /> SEAL 时间锁盲投 (T:2)
+                </Badge>
+              ) : voteData.isAnonymous ? (
                 <Badge variant="outline" className="text-xs">
                   <EyeOff className="h-3 w-3 mr-1" /> 匿名投票
                 </Badge>
               ) : (
                 <Badge variant="outline" className="text-xs">
                   <Eye className="h-3 w-3 mr-1" /> 公开投票
+                </Badge>
+              )}
+              {voteData.targetNftType && (
+                <Badge variant="outline" className="text-xs bg-amber-500/10 text-amber-600 border-amber-500/20">
+                  NFT 凭证门禁
                 </Badge>
               )}
               <Badge variant="outline" className="text-xs">
@@ -1195,7 +1209,17 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
                     exit={{ opacity: 0, y: -10 }}
                     transition={{ duration: 0.2 }}
                   >
-                    {showResults ? (
+                    {voteData.isTimeLockedSeal && (Date.now() < (voteData.expiresAt ? new Date(voteData.expiresAt).getTime() : 0)) ? (
+                      <div className="flex flex-col items-center justify-center p-6 text-center border rounded-xl bg-purple-500/5 border-purple-500/20">
+                        <Lock className="h-10 w-10 text-purple-600 mb-3" />
+                        <h3 className="text-sm font-semibold text-purple-900 dark:text-purple-200 mb-1">
+                          SEAL 时间锁门限密态保护中
+                        </h3>
+                        <p className="text-xs text-muted-foreground max-w-sm">
+                          所有选票已在客户端经门限加密上链，在截止时间前保持全网密态，任何成员或节点均无法提前窥探。投票截止后将由 Sui Clock 裁定门限解密。
+                        </p>
+                      </div>
+                    ) : showResults ? (
                       renderVoteResults()
                     ) : (
                       <div className="flex flex-col items-center justify-center p-6 text-center">

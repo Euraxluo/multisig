@@ -38,6 +38,9 @@ import {
   AlignLeftIcon,
   AlertTriangleIcon,
   BarChartIcon,
+  LockIcon,
+  ShieldCheckIcon,
+  SparklesIcon,
 } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
@@ -120,6 +123,8 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
   const [weightCalculation, setWeightCalculation] = useState("linear") // linear, sqrt, quadratic
   const [snapshotBlock, setSnapshotBlock] = useState("latest") // latest, specific
   const [specificBlock, setSpecificBlock] = useState("")
+  const [isTimeLockedSeal, setIsTimeLockedSeal] = useState(true) // Mysten SEAL 时间锁盲投
+  const [targetNftType, setTargetNftType] = useState("") // NFT Gating 合约类型
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -146,6 +151,8 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
         setWeightCalculation("linear")
         setSnapshotBlock("latest")
         setSpecificBlock("")
+        setIsTimeLockedSeal(true)
+        setTargetNftType("")
       }, 300)
     }
   }, [open])
@@ -234,8 +241,13 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
       },
       group: groups.find((g) => g.id === selectedGroup)?.name || "团队财务",
       isAnonymous,
+      isTimeLockedSeal,
+      sealThreshold: 2,
+      weightType,
+      targetNftType: weightType === "nft" ? targetNftType.trim() : undefined,
+      weightCalculation: weightType === "token" ? weightCalculation : undefined,
       color: "from-primary to-purple-500",
-      showResultsDuring: showResults === "always",
+      showResultsDuring: isTimeLockedSeal ? false : showResults === "always",
       options: voteOptions.map((opt) => ({
         id: opt.id,
         text: opt.text,
@@ -482,6 +494,26 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                           />
                         </div>
                       )}
+                    </div>
+                  )}
+
+                  {weightType === "nft" && (
+                    <div className="space-y-3 mt-3 p-3 rounded-lg border bg-muted/20">
+                      <div className="space-y-1">
+                        <Label htmlFor="targetNftType" className="text-xs font-medium flex items-center">
+                          <SparklesIcon className="h-3.5 w-3.5 mr-1 text-purple-500" />
+                          治理凭证 NFT 合约类型 (Type Tag)
+                        </Label>
+                        <Input
+                          id="targetNftType"
+                          placeholder="例如：0x83fb...::membership::CouncilBadge"
+                          value={targetNftType}
+                          onChange={(e) => setTargetNftType(e.target.value)}
+                        />
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          门禁规则：仅持有该 Move NFT 资产的钱包地址具有投票资格，1 NFT = 1 票。
+                        </p>
+                      </div>
                     </div>
                   )}
 
@@ -765,6 +797,26 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                     </Label>
 
                     <div className="space-y-2">
+                      <div className="flex items-center justify-between p-2.5 rounded-lg border bg-gradient-to-r from-purple-500/10 via-primary/5 to-transparent">
+                        <div className="flex items-center">
+                          <div className="h-8 w-8 rounded-full bg-purple-500/15 flex items-center justify-center mr-2 text-purple-600">
+                            <LockIcon className="h-4 w-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-1.5">
+                              <p className="text-sm font-semibold">Mysten SEAL 时间锁盲投</p>
+                              <span className="text-[10px] bg-purple-500/15 text-purple-700 dark:text-purple-300 font-semibold px-1.5 py-0.5 rounded">
+                                Threshold: 2
+                              </span>
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                              选票在客户端经门限加密上链，截止前全网密态，截止后通过 Sui 时钟统一解密，杜绝羊群效应
+                            </p>
+                          </div>
+                        </div>
+                        <Switch checked={isTimeLockedSeal} onCheckedChange={setIsTimeLockedSeal} />
+                      </div>
+
                       <div className="flex items-center justify-between p-2 rounded-lg border">
                         <div className="flex items-center">
                           <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center mr-2">
@@ -775,9 +827,9 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             )}
                           </div>
                           <div>
-                            <p className="text-sm font-medium">匿名投票</p>
+                            <p className="text-sm font-medium">隐藏选民身份 (匿名投票)</p>
                             <p className="text-xs text-muted-foreground">
-                              {isAnonymous ? "投票人的身份将被隐藏" : "投票人的身份将公开显示"}
+                              {isAnonymous ? "投票人的地址将被遮蔽" : "投票人的地址将公开显示"}
                             </p>
                           </div>
                         </div>
