@@ -582,7 +582,7 @@ export function ConnectWalletDialog({
       const keypair = await PasskeyKeypair.getPasskeyInstance(provider)
       const realSuiAddress = keypair.getPublicKey().toSuiAddress()
       const credId = keypair.getCredentialId()
-      const credIdBase64 = btoa(String.fromCharCode(...credId))
+      const credIdBase64 = btoa(String.fromCharCode(...(credId as unknown as Uint8Array)))
 
       const passkeyRecord = {
         credentialIdBase64: credIdBase64,
@@ -871,9 +871,9 @@ export function ConnectWalletDialog({
                 {installedWallets.length > 0 && (
                   <div className="space-y-1.5 mb-2">
                     <p className="text-[11px] font-medium text-muted-foreground px-1">已检测到的钱包</p>
-                    {installedWallets.map((wallet) => (
+                    {installedWallets.map((wallet: any, walletIdx: number) => (
                       <Button
-                        key={wallet.name}
+                        key={`${wallet.name}-${walletIdx}`}
                         variant="outline"
                         disabled={isProcessing}
                         onClick={() => handleConnectStandardWallet(wallet)}

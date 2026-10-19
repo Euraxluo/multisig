@@ -184,7 +184,7 @@ export function WalrusAppSandboxDialog({
         <div className="p-4 space-y-3.5">
           <div>
             <h4 className="text-xs font-semibold text-foreground">
-              议题：Sui 与 Aptos 跨链互操作方案探讨
+              议题：Sui 生态多签国库治理方案探讨
             </h4>
             <p className="text-[11px] text-muted-foreground mt-0.5">
               共 {totalVotes} 人参与投票

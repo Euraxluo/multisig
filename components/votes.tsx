@@ -29,7 +29,7 @@ export default function Votes() {
   const [activeTab, setActiveTab] = useState("active")
   const [createVoteOpen, setCreateVoteOpen] = useState(false)
 
-  // 模拟投票数据
+  // 治理投票提案列表 (Governance Proposals)
   const activeVotes = [
     {
       id: "vote-1",

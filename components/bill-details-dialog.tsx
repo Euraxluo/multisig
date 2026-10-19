@@ -206,7 +206,7 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
                               </div>
                             </div>
                           </div>
-                          <p className="text-xs text-muted-foreground mt-2">Scan to pay with any Aptos wallet</p>
+                          <p className="text-xs text-muted-foreground mt-2">Scan to pay with any Sui wallet</p>
                         </div>
                       </div>
                     </div>

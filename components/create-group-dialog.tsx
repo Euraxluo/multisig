@@ -65,6 +65,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   const [searchTerm, setSearchTerm] = useState("")
   const [threshold, setThreshold] = useState(2)
   const [totalWeight, setTotalWeight] = useState(1)
+  const [groupTitle, setGroupTitle] = useState("")
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -171,6 +172,31 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
     setStep(step - 1)
   }
 
+  const handleCreateGroup = () => {
+    // v0 shell 的 Create Group 按钮原本是 type="submit" 但没有 <form> 包裹，点击无效。
+    // 这里保留 UI，不改外壳结构，直接把"建群"映射为本地新建群组（不上链，上链由 Convert to DAO 负责）。
+    if (!members.every((m) => m.address)) {
+      return
+    }
+    try {
+      const newGroups = JSON.parse(localStorage.getItem("user_groups") || "[]")
+      newGroups.push({
+        id: `grp_${Date.now()}`,
+        name: groupTitle.trim() || "未命名群组",
+        description: "",
+        network: "Sui",
+        members: members.map((m, i) => ({ ...m, weight: m.weight || 1 })),
+        threshold,
+        totalWeight,
+        createdAt: new Date().toISOString(),
+      })
+      localStorage.setItem("user_groups", JSON.stringify(newGroups))
+      onOpenChange(false)
+    } catch (e) {
+      console.warn("Failed to save group to localStorage", e)
+    }
+  }
+
   // Filter contacts based on search term
   const filteredContacts = searchTerm
     ? recentContacts.filter(
@@ -239,7 +265,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                     <Label htmlFor="title" className="text-xs font-medium">
                       Group Name
                     </Label>
-                    <Input id="title" placeholder="Team Treasury, DAO Fund, etc." />
+                    <Input id="title" value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} placeholder="Team Treasury, DAO Fund, etc." />
                   </div>
 
                   <div className="space-y-1">
@@ -261,7 +287,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                       id="network"
                       className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                     >
-                      <option value="aptos">Aptos</option>
+                      <option value="sui">Sui</option>
                       <option value="ethereum">Ethereum</option>
                       <option value="solana">Solana</option>
                       <option value="polygon">Polygon</option>
@@ -619,11 +645,11 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                   <div className="rounded-lg border p-3 space-y-2">
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Group Name</span>
-                      <span className="text-xs font-medium">Team Treasury</span>
+                      <span className="text-xs font-medium">{groupTitle || "未命名群组"}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Network</span>
-                      <span className="text-xs font-medium">Aptos</span>
+                      <span className="text-xs font-medium">Sui</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Members</span>
@@ -671,7 +697,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
 
                   <div className="rounded-lg border p-3 bg-accent/30">
                     <p className="text-xs">
-                      This will create a new multi-signature wallet on the Aptos blockchain. All members will receive an
+                      This will create a new multi-signature wallet on the Sui blockchain. All members will receive an
                       invitation link to join this group.
                     </p>
                   </div>
@@ -693,7 +719,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                 </Button>
               ) : (
                 <Button
-                  type="submit"
+                  type="button"
+                  onClick={handleCreateGroup}
                   size="sm"
                   className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
                 >

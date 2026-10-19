@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -14,41 +14,29 @@ import { QuickTemplates } from "@/components/quick-templates"
 import { RecurringPayments } from "@/components/recurring-payments"
 
 export default function Dashboard() {
-  const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
+  const [selectedGroup, setSelectedGroup] = useState<{ id: string; name: string } | null>(null)
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false)
+  const [userGroups, setUserGroups] = useState<any[]>([])
 
-  const groups = [
-    {
-      id: "group-1",
-      name: "Team Treasury",
-      balance: 1250,
-      token: "SUI",
-      members: 4,
-      pendingTransactions: 2,
-      network: "Sui Mainnet",
-      color: "from-primary to-purple-500",
-    },
-    {
-      id: "group-2",
-      name: "DAO Fund",
-      balance: 5000,
-      token: "USDC",
-      members: 7,
-      pendingTransactions: 1,
-      network: "Sui Native",
-      color: "from-blue-500 to-cyan-400",
-    },
-    {
-      id: "group-3",
-      name: "Project Alpha",
-      balance: 750,
-      token: "sSUI",
-      members: 3,
-      pendingTransactions: 0,
-      network: "Spring Staking",
-      color: "from-green-500 to-emerald-400",
-    },
-  ]
+  useEffect(() => {
+    const load = () => {
+      try {
+        const saved = JSON.parse(localStorage.getItem("user_groups") || "[]")
+        setUserGroups(saved)
+      } catch {}
+    }
+    load()
+    const onStorage = () => load()
+    window.addEventListener("storage", onStorage)
+    const id = window.setInterval(load, 2000)
+    return () => {
+      window.removeEventListener("storage", onStorage)
+      window.clearInterval(id)
+    }
+  }, [])
+
+  // 群组列表只来自用户真实创建的数据，不再展示 demo 假数据
+
 
   const container = {
     hidden: { opacity: 0 },
@@ -104,11 +92,19 @@ export default function Dashboard() {
       </div>
 
       <motion.div className="grid gap-3" variants={container} initial="hidden" animate="show">
-        {groups.map((group) => (
+        {userGroups.map((g: any) => ({
+            id: g.id,
+            name: g.name,
+            network: g.network || "Sui",
+            members: g.members?.length ?? 0,
+            threshold: g.threshold || 1,
+            color: "from-primary to-purple-500",
+          }
+          )).map((group: any) => (
           <motion.div key={group.id} variants={item}>
             <Card
               className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
-              onClick={() => setSelectedGroup(group.id)}
+              onClick={() => setSelectedGroup({ id: group.id, name: group.name })}
             >
               <div className={`h-1 bg-gradient-to-r ${group.color}`}></div>
               <CardHeader className="p-3 pb-0">
@@ -117,9 +113,6 @@ export default function Dashboard() {
                     <h3 className="font-medium text-sm">{group.name}</h3>
                     <p className="text-xs text-muted-foreground">{group.network} Network</p>
                   </div>
-                  <Badge variant="outline" className="text-xs">
-                    {group.pendingTransactions} Pending
-                  </Badge>
                 </div>
               </CardHeader>
               <CardContent className="p-3">
@@ -129,7 +122,7 @@ export default function Dashboard() {
                     {group.members} Members
                   </div>
                   <div className="font-medium text-sm">
-                    {group.balance} {group.token}
+                    Threshold {group.threshold}
                   </div>
                 </div>
                 <div className="mt-3 flex items-center justify-between">
@@ -160,7 +153,7 @@ export default function Dashboard() {
       <GroupDetailsDialog
         open={!!selectedGroup}
         onOpenChange={() => setSelectedGroup(null)}
-        groupId={selectedGroup || ""}
+        groupId={selectedGroup?.id || ""}
       />
 
       <CreateGroupDialog open={isCreateGroupOpen} onOpenChange={setIsCreateGroupOpen} />

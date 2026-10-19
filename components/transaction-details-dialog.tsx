@@ -68,7 +68,7 @@ export function TransactionDetailsDialog({
     ],
     approvalWeight: 4,
     rejectionWeight: 0,
-    network: "Aptos",
+    network: "Sui",
     nonce: 12,
     data: "0x1a2b3c4d...",
     isBatch: false,
@@ -84,7 +84,7 @@ export function TransactionDetailsDialog({
         recipient: "0xdef0...5678",
         recipientName: "Team Member 1",
         amount: 50,
-        token: "APT",
+        token: "SUI",
       },
       {
         id: "batch-2",
@@ -92,7 +92,7 @@ export function TransactionDetailsDialog({
         recipient: "0xghi1...9012",
         recipientName: "Team Member 2",
         amount: 50,
-        token: "APT",
+        token: "SUI",
       },
     ],
   }

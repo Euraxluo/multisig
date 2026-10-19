@@ -8,7 +8,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { QrCode, Users, Share2, Copy, ExternalLink, Plus, Bot, Zap, ShieldCheck, Sparkles, Network, MessageSquare, Send, HardDrive, KeyRound, Paperclip, Crown, Coins, Gift, ArrowUpRight, DollarSign, CheckCircle2, Terminal, Flame, Vote, FileText } from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { Input } from "@/components/ui/input"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
 import { TransactionDetailsDialog } from "@/components/transaction-details-dialog"
@@ -30,6 +30,36 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
   const [isDkgOpen, setIsDkgOpen] = useState(false)
   const [isConvertedToDao, setIsConvertedToDao] = useState(false)
   const [groupPk, setGroupPk] = useState("")
+  const [orgObjectId, setOrgObjectId] = useState("")
+  const [orgEpoch, setOrgEpoch] = useState(1)
+  const [orgTxDigest, setOrgTxDigest] = useState("")
+  const [realGroupData, setRealGroupData] = useState<any>(null)
+
+  // Restore DAO lifecycle state from localStorage across closes/refreshes
+  useEffect(() => {
+    if (typeof window === "undefined" || !groupId) return
+    try {
+      // 读取真实群数据（新建的本地群）
+      const userGroups = JSON.parse(localStorage.getItem("user_groups") || "[]")
+      const found = userGroups.find((g: any) => g.id === groupId)
+      if (found) {
+        setRealGroupData(found)
+      }
+      const saved = localStorage.getItem(`dao_org_${groupId}`)
+      if (saved) {
+        const parsed = JSON.parse(saved)
+        if (parsed.orgObjectId && parsed.groupPk) {
+          setIsConvertedToDao(true)
+          setGroupPk(parsed.groupPk)
+          setOrgObjectId(parsed.orgObjectId)
+          setOrgEpoch(parsed.epoch || 1)
+          setOrgTxDigest(parsed.txDigest || "")
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to restore DAO state", e)
+    }
+  }, [groupId])
   const [selectedBlobId, setSelectedBlobId] = useState<string | null>(null)
   const [isAppSandboxOpen, setIsAppSandboxOpen] = useState(false)
   const [selectedAppBlobId, setSelectedAppBlobId] = useState("walrus_blob_app_poll_901.wma")
@@ -40,11 +70,6 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
   const [creatorStake, setCreatorStake] = useState(100.0) // 100 SUI 创作者建群质押
   const [entryFee, setEntryFee] = useState(5.0) // 5 SUI 进群门票
   const [memberStake, setMemberStake] = useState(50.0) // 50 SUI 进群保本质押
-  const [creatorRevenuePool, setCreatorRevenuePool] = useState(17.0) // 17 SUI (门票 10 SUI + 70% 利息 7 SUI)
-  const [gasSubsidyPool, setGasSubsidyPool] = useState(1.999) // 2.0 SUI 利息池 (20% 利息，已报销 1 次)
-  const [memberYieldPool, setMemberYieldPool] = useState(1.0) // 1.0 SUI (10% 利息分红)
-  const [totalSubsidizedGas, setTotalSubsidizedGas] = useState(0.001) // 累计报销
-  const [rebatePill, setRebatePill] = useState<string | null>(null)
   const [claimedNotice, setClaimedNotice] = useState<string | null>(null)
 
   // 红包与外挂系统状态
@@ -162,7 +187,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       if (c.amount > maxAmt) maxAmt = c.amount
     })
     updatedClaims.forEach(c => {
-      c.isBest = (c.amount === maxAmt)
+      (c as any).isBest = (c.amount === maxAmt)
     })
 
     const updatedPacket: RedPacketData = {
@@ -231,7 +256,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         isSubagent: true,
       },
     ])
-    setClaimedNotice(`🧧 链上红包已铸造！生成共享对象 0x${Math.random().toString(16).slice(2, 10)}... (总计 ${params.totalAmount} SUI)`)
+    setClaimedNotice(`🧧 红包已发送至群聊 (总计 ${params.totalAmount} SUI)`)
     setTimeout(() => setClaimedNotice(null), 5000)
   }
 
@@ -285,7 +310,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
           sender: "You",
           role: "成员",
           time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: "发起了群投票：《Sui 与 Aptos 跨链互操作方案探讨》",
+          text: "发起了群投票：《Sui 生态多签国库治理方案探讨》",
           walrusBlobId: "walrus_blob_app_poll_901.wma",
           isSubagent: true,
         },
@@ -345,14 +370,6 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       }
     }
 
-    // 触发自动 Gas 报销 (auto_subsidize_gas)
-    if (gasSubsidyPool >= 0.001) {
-      setGasSubsidyPool((prev) => +(prev - 0.001).toFixed(3))
-      setTotalSubsidizedGas((prev) => +(prev + 0.001).toFixed(3))
-      setRebatePill("✨ 智能代付触发：auto_subsidize_gas 已向你的钱包打回 +0.001 SUI 报销！(净 Gas = 0)")
-      setTimeout(() => setRebatePill(null), 4000)
-    }
-
     setMessages((prev) => [
       ...prev,
       {
@@ -368,28 +385,35 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     setChatInput("")
   }
 
-  const handleClaimRevenue = () => {
-    if (creatorRevenuePool <= 0) return
-    const amount = creatorRevenuePool
-    setCreatorRevenuePool(0)
-    setClaimedNotice(`提现成功：已提取 ${amount.toFixed(2)} SUI`)
-    setTimeout(() => setClaimedNotice(null), 4000)
-  }
-
   const handleMemberUnstake = () => {
     setClaimedNotice(`已退出群组并赎回 50.50 SUI 质押金`)
     setTimeout(() => setClaimedNotice(null), 4000)
   }
 
   // Mock data - in a real app, you would fetch this based on groupId
-  const group = {
+  // 优先使用 localStorage 里保存的真实群数据
+  const group = realGroupData ? {
+    id: groupId,
+    name: realGroupData.name || "未命名群组",
+    description: realGroupData.description || "Local multi-signature group",
+    address: realGroupData.members?.[0]?.address || "",
+    network: realGroupData.network || "Sui",
+    balance: 0,
+    token: "SUI",
+    creator: realGroupData.members?.[0]?.address || "",
+    creatorName: "You",
+    members: realGroupData.members || [],
+    threshold: realGroupData.threshold || 1,
+    totalWeight: realGroupData.totalWeight || 1,
+    transactions: [],
+  } : {
     id: groupId,
     name: "Team Treasury",
     description: "Treasury for our team's expenses and investments",
     address: "0x1a2b3c4d5e6f7g8h9i0j",
-    network: "Aptos",
+    network: "Sui",
     balance: 1250,
-    token: "APT",
+    token: "SUI",
     creator: "0x1a2b...3c4d",
     creatorName: "Alex",
     members: [
@@ -406,7 +430,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         title: "Token Transfer",
         description: "Transfer tokens to external wallet",
         amount: 100,
-        token: "APT",
+        token: "SUI",
         recipient: "0xabcd...1234",
         status: "pending",
         approvals: 3,
@@ -420,7 +444,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         title: "Contract Interaction",
         description: "Stake tokens in DeFi protocol",
         amount: 500,
-        token: "APT",
+        token: "SUI",
         recipient: "0xdefi...5678",
         status: "executed",
         approvals: 6,
@@ -432,9 +456,9 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       {
         id: "tx3",
         title: "Token Swap",
-        description: "Swap APT for USDC",
+        description: "Swap SUI for USDC",
         amount: 200,
-        token: "APT",
+        token: "SUI",
         recipient: "0xswap...9012",
         status: "rejected",
         approvals: 2,
@@ -560,16 +584,6 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         </span>
                       </div>
                       <div className="flex items-center space-x-1.5">
-                        {creatorRevenuePool > 0 && (
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={handleClaimRevenue}
-                            className="h-6 text-[10px] px-2 text-amber-600 hover:text-amber-700 hover:bg-amber-500/10"
-                          >
-                            提取收益 ({creatorRevenuePool.toFixed(1)} SUI)
-                          </Button>
-                        )}
                         <Button
                           size="sm"
                           variant="ghost"
@@ -856,10 +870,25 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         <div className="flex items-center space-x-2">
                           <Network className="h-4 w-4 text-purple-500" />
                           <div>
-                            <p className="font-semibold text-purple-600 dark:text-purple-400">已固化为密码学组织 (DAO)</p>
-                            <p className="text-[10px] text-muted-foreground font-mono truncate max-w-[200px]">
-                              PK: {groupPk || "0x678a...2018"}
-                            </p>
+                            <div className="flex items-center space-x-1.5">
+                              <p className="font-semibold text-purple-600 dark:text-purple-400">已固化为密码学组织 (DAO)</p>
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-purple-500/40 text-purple-500">
+                                Epoch {orgEpoch}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center space-x-2 text-[10px] text-muted-foreground font-mono mt-0.5">
+                              <span className="truncate max-w-[140px]">PK: {groupPk ? `${groupPk.slice(0, 8)}...${groupPk.slice(-6)}` : ""}</span>
+                              {orgObjectId && (
+                                <a
+                                  href={`https://suiscan.xyz/testnet/object/${orgObjectId}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-primary hover:underline flex items-center"
+                                >
+                                  Suiscan <ExternalLink className="h-2.5 w-2.5 ml-0.5" />
+                                </a>
+                              )}
+                            </div>
                           </div>
                         </div>
                         <Button
@@ -891,7 +920,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                       </div>
                     )}
 
-                    {group.members.map((member, index) => (
+                    {group.members.map((member: any, index: number) => (
                       <div
                         key={index}
                         className="flex items-center justify-between p-2 rounded-lg hover:bg-muted/50 transition-colors"
@@ -905,11 +934,11 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                                   : "bg-gradient-to-br from-gray-500 to-gray-600"
                               }`}
                             >
-                              {member.name[0]}
+                              {(member.name || member.address || "?")[0]}
                             </AvatarFallback>
                           </Avatar>
                           <div>
-                            <p className="font-medium text-sm">{member.name}</p>
+                            <p className="font-medium text-sm">{member.name || member.address}</p>
                             {member.address.includes("@") ? (
                               <p className="text-xs text-muted-foreground flex items-center">
                                 <span className="text-xs bg-blue-100 text-blue-600 px-1 rounded mr-1">@</span>
@@ -956,7 +985,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         限额管理
                       </Badge>
                     </div>
-                    {group.agents.map((agent) => (
+                    {(group.agents || []).map((agent) => (
                       <div
                         key={agent.id}
                         className="p-3 rounded-xl border border-border/60 bg-card/60 space-y-2"
@@ -1133,10 +1162,13 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         open={isDkgOpen}
         onOpenChange={setIsDkgOpen}
         groupName={group.name}
+        groupId={groupId}
         initialMembers={group.members}
-        onConvertedSuccess={(pk) => {
+        onConvertedSuccess={(pk, orgId, digest) => {
           setIsConvertedToDao(true);
           setGroupPk(pk);
+          if (orgId) setOrgObjectId(orgId);
+          if (digest) setOrgTxDigest(digest);
         }}
       />
 
