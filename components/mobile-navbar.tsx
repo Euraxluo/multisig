@@ -30,19 +30,28 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
   const [scrolled, setScrolled] = useState(false)
 
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("sui_active_account")
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x") && parsed.address.length >= 42) {
-          setCurrentUser(parsed)
-        } else {
-          localStorage.removeItem("sui_active_account")
-          setCurrentUser(null)
+    const loadSession = () => {
+      try {
+        const saved = localStorage.getItem("sui_active_account")
+        if (saved) {
+          const parsed = JSON.parse(saved)
+          if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x") && parsed.address.length >= 42) {
+            setCurrentUser(parsed)
+          } else {
+            setCurrentUser(null)
+          }
         }
+      } catch (e) {
+        console.warn("Failed to load saved session", e)
       }
-    } catch (e) {
-      console.warn("Failed to load saved session", e)
+    }
+
+    loadSession()
+    window.addEventListener("sui-account-switched", loadSession)
+    window.addEventListener("storage", loadSession)
+    return () => {
+      window.removeEventListener("sui-account-switched", loadSession)
+      window.removeEventListener("storage", loadSession)
     }
   }, [])
 

@@ -209,26 +209,44 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
   }
 
   const handleCreateVote = () => {
-    // In a real app, this would submit the vote to your API
-    console.log({
-      title,
-      description,
+    if (!title.trim()) return
+
+    const newVote = {
+      id: `vote-${Date.now()}`,
+      title: title.trim(),
+      description: description.trim(),
+      creator: "Me (Organizer)",
+      creatorAvatar: "/placeholder.svg?height=40&width=40",
+      createdAt: new Date().toISOString(),
+      expiresAt: expiryDate ? expiryDate.toISOString() : new Date(Date.now() + 86400000 * 7).toISOString(),
       voteType,
-      voters,
-      voteOptions,
+      totalVotes: 1,
+      myVote: null,
+      status: "active",
+      progress: {
+        option1: 1,
+        option2: 0,
+      },
+      group: groups.find((g) => g.id === selectedGroup)?.name || "团队财务",
       isAnonymous,
-      showResults,
-      expiryDate,
-      createTransaction,
-      selectedTransaction,
-      // 添加新的权重相关信息
-      weightType,
-      tokenAddress: weightType === "token" ? tokenAddress : undefined,
-      tokenSymbol: weightType === "token" ? tokenSymbol : undefined,
-      weightCalculation: weightType === "token" ? weightCalculation : undefined,
-      snapshotBlock: weightType === "token" ? snapshotBlock : undefined,
-      specificBlock: weightType === "token" && snapshotBlock === "specific" ? specificBlock : undefined,
-    })
+      color: "from-primary to-purple-500",
+      showResultsDuring: showResults === "always",
+      options: voteOptions.map((opt) => ({
+        id: opt.id,
+        text: opt.text,
+        votes: 0,
+        percentage: 0,
+      })),
+    }
+
+    try {
+      const stored = JSON.parse(localStorage.getItem("sui_governance_votes") || "[]")
+      stored.unshift(newVote)
+      localStorage.setItem("sui_governance_votes", JSON.stringify(stored))
+      window.dispatchEvent(new CustomEvent("sui-votes-updated", { detail: stored }))
+    } catch (e) {
+      console.warn("Failed to save vote to localStorage", e)
+    }
 
     onOpenChange(false)
   }
@@ -467,7 +485,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0">
-                        <Calendar mode="single" selected={expiryDate} onSelect={setExpiryDate} initialFocus />
+                        <Calendar mode="single" selected={expiryDate} onSelect={setExpiryDate} />
                       </PopoverContent>
                     </Popover>
                   </div>

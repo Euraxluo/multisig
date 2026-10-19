@@ -47,7 +47,7 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
   const [isProcessing, setIsProcessing] = useState(false)
   const [isPreview, setIsPreview] = useState(false)
 
-  const tokens = ["APT", "USDC", "USDT"]
+  const tokens = ["SUI", "USDC", "USDT"]
 
   const handleSubmit = () => {
     if (isPreview) {
@@ -137,7 +137,7 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
                 <div className="text-right">
                   <p className="font-medium">Your Company Name</p>
                   <p className="text-sm text-muted-foreground">your.email@example.com</p>
-                  <p className="text-sm text-muted-foreground">0x1234...5678</p>
+                  <p className="text-sm text-muted-foreground">0x0000...0000</p>
                 </div>
               </div>
 
@@ -146,7 +146,7 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
                   <p className="text-sm text-muted-foreground">Bill To:</p>
                   <p className="font-medium">{recipient || "Client Name"}</p>
                   <p className="text-sm">{recipientEmail || "client@example.com"}</p>
-                  <p className="text-sm">{recipient || "0xabcd...efgh"}</p>
+                  <p className="text-sm">{recipient || "0x0000...0000"}</p>
                 </div>
                 <div className="text-right">
                   <div className="flex justify-end items-center gap-4">
@@ -209,7 +209,7 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
               )}
 
               <div className="mt-8 border-t pt-4 text-center">
-                <p className="text-sm text-muted-foreground">Payment can be made to wallet address: 0x1234...5678</p>
+                <p className="text-sm text-muted-foreground">Payment can be made to wallet address: 0x0000...0000</p>
               </div>
             </div>
 
@@ -269,7 +269,7 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent className="w-auto p-0">
-                    <Calendar mode="single" selected={issueDate} onSelect={setIssueDate} initialFocus />
+                    <Calendar mode="single" selected={issueDate} onSelect={setIssueDate} />
                   </PopoverContent>
                 </Popover>
               </div>
@@ -291,7 +291,6 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
                       mode="single"
                       selected={dueDate}
                       onSelect={setDueDate}
-                      initialFocus
                       disabled={(date) => {
                         if (!issueDate) return false
                         return date < issueDate

@@ -70,7 +70,7 @@ export const INITIAL_CARDS: AgentVirtualCard[] = [
     name: "Router-Arbitrage-Bot",
     purpose: "Universal Router Low-Slippage Atomic Routing",
     category: "DEFI_EXECUTION",
-    address: "0xabcdef0123456789abcdef0123456789abcdef012",
+    address: "0x0000000000000000000000000000000000000000",
     capId: "0xcap_router_abcd",
     dailyBudget: 5.0,
     spentToday: 0.0,

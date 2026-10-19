@@ -1,176 +1,88 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { motion, AnimatePresence } from "framer-motion"
-import { Clock, Check, X, ArrowRight, Code, Send, Calendar, Zap, ListChecks } from "lucide-react"
+import { Clock, Check, X, ArrowRight, Code, Send, Calendar, Zap, ListChecks, Play } from "lucide-react"
 import { TransactionDetailsDialog } from "@/components/transaction-details-dialog"
+import {
+  getProposals,
+  approveProposal,
+  rejectProposal,
+  executeProposal,
+  type ProposalItem,
+} from "@/lib/onchain-store"
 
 export default function Transactions() {
   const [selectedTx, setSelectedTx] = useState<{ id: string; groupId: string } | null>(null)
   const [activeTab, setActiveTab] = useState("pending")
+  const [proposals, setProposals] = useState<ProposalItem[]>([])
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
 
-  const pendingTransactions = [
-    {
-      id: "tx1",
-      title: "Token Transfer",
-      description: "Transfer tokens to external wallet",
-      amount: 100,
-      token: "APT",
-      groupId: "group-1",
-      groupName: "Team Treasury",
-      status: "pending",
-      approvals: 3,
-      requiredApprovals: 5,
-      createdAt: "2025-03-15T12:00:00Z",
-      expiresAt: "2025-04-15T12:00:00Z",
-      type: "transfer",
-      color: "from-primary to-purple-500",
-      isScheduled: false,
-      isConditional: false,
-      isBatch: false,
-    },
-    {
-      id: "tx2",
-      title: "Stake Tokens",
-      description: "Stake tokens in DeFi protocol",
-      amount: 500,
-      token: "USDC",
-      groupId: "group-2",
-      groupName: "DAO Fund",
-      status: "pending",
-      approvals: 4,
-      requiredApprovals: 7,
-      createdAt: "2025-03-14T12:00:00Z",
-      expiresAt: "2025-04-14T12:00:00Z",
-      type: "contract",
-      color: "from-blue-500 to-cyan-400",
-      isScheduled: true,
-      scheduledDate: "2025-03-20T12:00:00Z",
-      isConditional: false,
-      isBatch: false,
-    },
-    {
-      id: "tx3",
-      title: "Batch Payment",
-      description: "Monthly team payments",
-      groupId: "group-1",
-      groupName: "Team Treasury",
-      status: "pending",
-      approvals: 2,
-      requiredApprovals: 5,
-      createdAt: "2025-03-13T12:00:00Z",
-      expiresAt: "2025-04-13T12:00:00Z",
-      type: "batch",
-      color: "from-primary to-purple-500",
-      isScheduled: false,
-      isConditional: false,
-      isBatch: true,
-      batchCount: 3,
-    },
-    {
-      id: "tx4",
-      title: "Conditional Swap",
-      description: "Swap tokens when price reaches target",
-      amount: 200,
-      token: "APT",
-      groupId: "group-2",
-      groupName: "DAO Fund",
-      status: "pending",
-      approvals: 5,
-      requiredApprovals: 7,
-      createdAt: "2025-03-12T12:00:00Z",
-      expiresAt: "2025-04-12T12:00:00Z",
-      type: "contract",
-      color: "from-blue-500 to-cyan-400",
-      isScheduled: false,
-      isConditional: true,
-      conditionType: "price",
-      conditionDetails: "APT above $15",
-      isBatch: false,
-    },
-  ]
+  useEffect(() => {
+    const load = () => {
+      setProposals(getProposals())
+    }
+    load()
+    window.addEventListener("sui-proposals-updated", load)
+    window.addEventListener("storage", load)
+    const id = window.setInterval(load, 3000)
+    return () => {
+      window.removeEventListener("sui-proposals-updated", load)
+      window.removeEventListener("storage", load)
+      window.clearInterval(id)
+    }
+  }, [])
 
-  const completedTransactions = [
-    {
-      id: "tx5",
-      title: "Contract Interaction",
-      description: "Stake tokens in DeFi protocol",
-      amount: 500,
-      token: "APT",
-      groupId: "group-1",
-      groupName: "Team Treasury",
-      status: "executed",
-      approvals: 6,
-      requiredApprovals: 5,
-      createdAt: "2025-03-10T12:00:00Z",
-      executedAt: "2025-03-12T15:30:00Z",
-      type: "contract",
-      color: "from-primary to-purple-500",
-      isScheduled: false,
-      isConditional: false,
-      isBatch: false,
-    },
-    {
-      id: "tx6",
-      title: "Token Swap",
-      description: "Swap APT for USDC",
-      amount: 200,
-      token: "APT",
-      groupId: "group-1",
-      groupName: "Team Treasury",
-      status: "rejected",
-      approvals: 2,
-      requiredApprovals: 5,
-      createdAt: "2025-03-05T12:00:00Z",
-      rejectedAt: "2025-03-07T09:15:00Z",
-      type: "contract",
-      color: "from-primary to-purple-500",
-      isScheduled: false,
-      isConditional: false,
-      isBatch: false,
-    },
-    {
-      id: "tx7",
-      title: "Fund Project",
-      description: "Send funds to project wallet",
-      amount: 1000,
-      token: "USDC",
-      groupId: "group-2",
-      groupName: "DAO Fund",
-      status: "executed",
-      approvals: 5,
-      requiredApprovals: 4,
-      createdAt: "2025-03-01T12:00:00Z",
-      executedAt: "2025-03-03T10:15:00Z",
-      type: "transfer",
-      color: "from-blue-500 to-cyan-400",
-      isScheduled: false,
-      isConditional: false,
-      isBatch: false,
-    },
-    {
-      id: "tx8",
-      title: "Batch Distribution",
-      description: "Distribute tokens to team members",
-      groupId: "group-1",
-      groupName: "Team Treasury",
-      status: "executed",
-      approvals: 6,
-      requiredApprovals: 5,
-      createdAt: "2025-02-28T12:00:00Z",
-      executedAt: "2025-03-01T14:20:00Z",
-      type: "batch",
-      color: "from-primary to-purple-500",
-      isScheduled: false,
-      isConditional: false,
-      isBatch: true,
-      batchCount: 5,
-    },
-  ]
+  const handleApprove = async (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setActionLoadingId(id)
+    try {
+      await approveProposal(id)
+    } catch (err: any) {
+      alert(err.message || "Approve failed")
+    } finally {
+      setActionLoadingId(null)
+    }
+  }
+
+  const handleReject = async (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setActionLoadingId(id)
+    try {
+      await rejectProposal(id)
+    } catch (err: any) {
+      alert(err.message || "Reject failed")
+    } finally {
+      setActionLoadingId(null)
+    }
+  }
+
+  const handleExecute = async (id: string, e?: React.MouseEvent) => {
+    e?.stopPropagation()
+    setActionLoadingId(id)
+    try {
+      const res = await executeProposal(id)
+      if (res.digest) {
+        alert(`提案已成功在链上金库执行！交易凭证: ${res.digest}`)
+      }
+    } catch (err: any) {
+      alert(err.message || "Execute failed")
+    } finally {
+      setActionLoadingId(null)
+    }
+  }
+
+  const pendingTransactions = proposals.filter(
+    (p) => p.status === "pending" || p.status === "approved"
+  )
+
+  const completedTransactions = proposals.filter(
+    (p) => p.status === "executed" || p.status === "rejected"
+  )
 
   const container = {
     hidden: { opacity: 0 },
@@ -266,8 +178,11 @@ export default function Transactions() {
                             </div>
                             <div className="flex space-x-2">
                               {getSpecialBadge(tx)}
-                              <Badge variant="default" className="text-xs">
-                                Pending
+                              <Badge
+                                variant={tx.status === "approved" ? "secondary" : "default"}
+                                className={`text-xs ${tx.status === "approved" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : ""}`}
+                              >
+                                {tx.status === "approved" ? "Ready to Execute" : "Pending"}
                               </Badge>
                             </div>
                           </div>
@@ -290,19 +205,38 @@ export default function Transactions() {
                               Approvals: {tx.approvals}/{tx.requiredApprovals}
                             </div>
                             <div className="flex space-x-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-7 text-xs border-red-200 text-red-500 hover:bg-red-50"
-                              >
-                                <X className="h-3 w-3 mr-1" /> Reject
-                              </Button>
-                              <Button
-                                size="sm"
-                                className="h-7 text-xs bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-                              >
-                                <Check className="h-3 w-3 mr-1" /> Approve
-                              </Button>
+                              {tx.status === "approved" || tx.approvals >= tx.requiredApprovals ? (
+                                <Button
+                                  size="sm"
+                                  disabled={actionLoadingId === tx.id}
+                                  onClick={(e) => handleExecute(tx.id, e)}
+                                  className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+                                >
+                                  <Play className="h-3 w-3 mr-1" />
+                                  {actionLoadingId === tx.id ? "Executing..." : "Execute (PTB)"}
+                                </Button>
+                              ) : (
+                                <>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={actionLoadingId === tx.id}
+                                    onClick={(e) => handleReject(tx.id, e)}
+                                    className="h-7 text-xs border-red-200 text-red-500 hover:bg-red-50"
+                                  >
+                                    <X className="h-3 w-3 mr-1" /> Reject
+                                  </Button>
+                                  <Button
+                                    size="sm"
+                                    disabled={actionLoadingId === tx.id}
+                                    onClick={(e) => handleApprove(tx.id, e)}
+                                    className="h-7 text-xs bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 text-white"
+                                  >
+                                    <Check className="h-3 w-3 mr-1" />
+                                    {actionLoadingId === tx.id ? "Signing..." : "Approve"}
+                                  </Button>
+                                </>
+                              )}
                             </div>
                           </div>
                         </CardContent>
@@ -358,8 +292,8 @@ export default function Transactions() {
                         <div className="flex items-center justify-between mt-2">
                           <div className="text-xs text-muted-foreground">
                             {tx.status === "executed"
-                              ? `Executed: ${new Date(tx.executedAt).toLocaleDateString()}`
-                              : `Rejected: ${new Date(tx.rejectedAt).toLocaleDateString()}`}
+                              ? `Executed: ${tx.executedAt ? new Date(tx.executedAt).toLocaleDateString() : "—"}`
+                              : `Rejected: ${tx.rejectedAt ? new Date(tx.rejectedAt).toLocaleDateString() : "—"}`}
                           </div>
                           <Button
                             size="sm"

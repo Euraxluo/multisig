@@ -272,9 +272,10 @@ export function DkgCeremonyDialog({
       const sigShares = signerNodes.map((sn: any) => sn.computeSignatureShare(msgDigest, pkBytes, nonces));
       const frostSig = ThresholdSignerNode.aggregateSignature(nonces, sigShares);
 
+      // 调用 v2 固化接口，强校验密码学组织公钥绑定与门限签名
       const finalizeTx = new Transaction();
       finalizeTx.moveCall({
-        target: `${TESTNET_PACKAGE_ID}::dkg_committee::finalize_session`,
+        target: `${TESTNET_PACKAGE_ID}::dkg_committee::finalize_session_v2`,
         typeArguments: [],
         arguments: [
           finalizeTx.object(onChainSessionId),
@@ -294,7 +295,7 @@ export function DkgCeremonyDialog({
         ],
       });
       const { digest, createdObjects } = await signAndExecuteWithWallet(createTx);
-      const orgObjectId = createdObjects.find((id: string) => id.length === 64) || "";
+      const orgObjectId = createdObjects.find((id: string) => id.startsWith("0x")) || createdObjects[0] || "";
       if (!orgObjectId) throw new Error("交易 effects 中未找到共享 Organization 对象");
       const data = { digest, orgObjectId };
 

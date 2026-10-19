@@ -12,25 +12,60 @@ import { CreateGroupDialog } from "@/components/create-group-dialog"
 import { QuickActions } from "@/components/quick-actions"
 import { QuickTemplates } from "@/components/quick-templates"
 import { RecurringPayments } from "@/components/recurring-payments"
+import { getActiveAccount, fetchRealBalances, getProposals } from "@/lib/onchain-store"
 
 export default function Dashboard() {
   const [selectedGroup, setSelectedGroup] = useState<{ id: string; name: string } | null>(null)
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false)
   const [userGroups, setUserGroups] = useState<any[]>([])
+  const [totalAssetsUsd, setTotalAssetsUsd] = useState<number>(0)
+  const [pendingCount, setPendingCount] = useState<number>(0)
 
   useEffect(() => {
-    const load = () => {
+    let cancelled = false
+
+    const loadData = async () => {
+      // 1. 读取群组列表
       try {
         const saved = JSON.parse(localStorage.getItem("user_groups") || "[]")
-        setUserGroups(saved)
+        if (!cancelled) setUserGroups(saved)
       } catch {}
+
+      // 2. 读取待处理提案数
+      try {
+        const props = getProposals()
+        const pending = props.filter((p) => p.status === "pending").length
+        if (!cancelled) setPendingCount(pending)
+      } catch {}
+
+      // 3. 从 Sui 真实全节点 RPC 读取活跃钱包链上资产
+      const account = getActiveAccount()
+      if (account?.address) {
+        try {
+          const balances = await fetchRealBalances(account.address)
+          if (!cancelled) {
+            setTotalAssetsUsd(balances.totalUsdValue)
+          }
+        } catch (e) {
+          console.warn("[Dashboard] fetchRealBalances failed:", e)
+        }
+      } else {
+        if (!cancelled) setTotalAssetsUsd(0)
+      }
     }
-    load()
-    const onStorage = () => load()
+
+    loadData()
+
+    const onStorage = () => loadData()
+    const onProposalsUpdated = () => loadData()
     window.addEventListener("storage", onStorage)
-    const id = window.setInterval(load, 2000)
+    window.addEventListener("sui-proposals-updated", onProposalsUpdated)
+    const id = window.setInterval(loadData, 4000)
+
     return () => {
+      cancelled = true
       window.removeEventListener("storage", onStorage)
+      window.removeEventListener("sui-proposals-updated", onProposalsUpdated)
       window.clearInterval(id)
     }
   }, [])
@@ -78,14 +113,16 @@ export default function Dashboard() {
         <Card className="bg-gradient-to-br from-primary/10 to-purple-500/10 border-none shadow-sm">
           <CardContent className="p-3 flex flex-col items-center justify-center">
             <TrendingUp className="h-8 w-8 text-primary mb-1" />
-            <p className="text-lg font-bold">$7,000</p>
-            <p className="text-xs text-muted-foreground">Total Assets</p>
+            <p className="text-lg font-bold">
+              ${totalAssetsUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </p>
+            <p className="text-xs text-muted-foreground">Total Assets (RPC)</p>
           </CardContent>
         </Card>
         <Card className="bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-none shadow-sm">
           <CardContent className="p-3 flex flex-col items-center justify-center">
             <Clock className="h-8 w-8 text-amber-500 mb-1" />
-            <p className="text-lg font-bold">3</p>
+            <p className="text-lg font-bold">{pendingCount}</p>
             <p className="text-xs text-muted-foreground">Pending Transactions</p>
           </CardContent>
         </Card>

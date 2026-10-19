@@ -23,6 +23,8 @@ import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 
+import { getActiveAccount } from "@/lib/onchain-store"
+
 interface PaymentRequestDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -32,28 +34,28 @@ interface PaymentRequestDialogProps {
 export function PaymentRequestDialog({ open, onOpenChange, groupId }: PaymentRequestDialogProps) {
   const [requestType, setRequestType] = useState("single")
   const [recipient, setRecipient] = useState("")
-  const [amount, setAmount] = useState("")
-  const [token, setToken] = useState("USDC")
+  const [amount, setAmount] = useState("10")
+  const [token, setToken] = useState("SUI")
   const [dueDate, setDueDate] = useState<Date | undefined>(addDays(new Date(), 7))
-  const [description, setDescription] = useState("")
+  const [description, setDescription] = useState("Sui 多签组织收款与打款")
   const [sendNotification, setSendNotification] = useState(true)
   const [isProcessing, setIsProcessing] = useState(false)
   const [isGenerated, setIsGenerated] = useState(false)
-  const [requestLink, setRequestLink] = useState("https://pay.example.com/request/abc123")
+  const [requestLink, setRequestLink] = useState("")
   const [paymentMethod, setPaymentMethod] = useState("wallet")
 
-  const tokens = ["APT", "USDC", "USDT"]
+  const tokens = ["SUI", "USDC", "USDT"]
 
   const handleSubmit = () => {
     setIsProcessing(true)
+    const myAddress = getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
+    const realUri = `sui:${myAddress}?amount=${amount || "1"}&coin=${token}&desc=${encodeURIComponent(description || "Wallet Transfer")}`
 
-    // Simulate API call
     setTimeout(() => {
       setIsProcessing(false)
       setIsGenerated(true)
-      setRequestLink(`https://pay.example.com/request/${Math.random().toString(36).substring(2, 10)}`)
-      // In a real app, you would create the payment request here
-    }, 1500)
+      setRequestLink(realUri)
+    }, 400)
   }
 
   const copyToClipboard = (text: string) => {
@@ -203,7 +205,6 @@ export function PaymentRequestDialog({ open, onOpenChange, groupId }: PaymentReq
                     mode="single"
                     selected={dueDate}
                     onSelect={setDueDate}
-                    initialFocus
                     disabled={(date) => date < new Date()}
                   />
                 </PopoverContent>

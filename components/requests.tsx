@@ -57,7 +57,7 @@ export default function Requests() {
       id: "received-2",
       title: "Movie Night",
       amount: 15,
-      token: "APT",
+      token: "SUI",
       creator: "0x9i8u...7y6t",
       creatorName: "Jamie",
       deadline: "2025-03-28",

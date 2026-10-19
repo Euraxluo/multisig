@@ -133,21 +133,20 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   }
 
   const handleQrScan = (result: string) => {
-    // In a real app, this would process the QR scan result
-    // For demo purposes, we'll just add a mock wallet address
-    const mockWalletAddress = "0x" + Math.random().toString(16).substring(2, 14)
+    // 真实的扫码结果或有效 Sui 测试网地址
+    const validAddress = result?.startsWith("0x") ? result : "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
 
     // Find an empty member slot or add a new one
     const emptyMember = members.find((p) => !p.address)
 
     if (emptyMember) {
-      updateMember(emptyMember.id, { address: mockWalletAddress, type: "wallet" })
+      updateMember(emptyMember.id, { address: validAddress, type: "wallet" })
     } else {
       setMembers([
         ...members,
         {
           id: Date.now().toString(),
-          address: mockWalletAddress,
+          address: validAddress,
           weight: 1,
           type: "wallet" as const,
         },

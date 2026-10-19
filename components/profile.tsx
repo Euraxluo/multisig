@@ -18,30 +18,101 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useState, useEffect } from "react"
+import { fetchRealBalances, getProposals, type TokenBalanceInfo } from "@/lib/onchain-store"
 
 export default function Profile() {
   const [activeAccount, setActiveAccount] = useState("personal")
   const [savedUser, setSavedUser] = useState<any>(null)
+  const [tokenBalances, setTokenBalances] = useState<{
+    sui: TokenBalanceInfo
+    ssui: TokenBalanceInfo
+    usdc: TokenBalanceInfo
+    wal: TokenBalanceInfo
+  }>({
+    sui: { symbol: "SUI", name: "Sui Native Coin", coinType: "0x2::sui::SUI", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
+    ssui: { symbol: "sSUI", name: "Spring Staked SUI", coinType: "0x...::ssui::SSUI", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
+    usdc: { symbol: "USDC", name: "Sui Native USDC", coinType: "0x...::usdc::USDC", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
+    wal: { symbol: "WAL", name: "Walrus Protocol", coinType: "0x...::wal::WAL", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
+  })
+  const [proposalsHistory, setProposalsHistory] = useState<any[]>([])
+  const [userGroups, setUserGroups] = useState<any[]>([])
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("sui_active_account")
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x")) {
-          setSavedUser(parsed)
-        } else {
-          localStorage.removeItem("sui_active_account")
-          setSavedUser(null)
+    let cancelled = false
+
+    const load = async () => {
+      let activeAddr = ""
+      try {
+        const stored = localStorage.getItem("sui_active_account")
+        if (stored) {
+          const parsed = JSON.parse(stored)
+          if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x")) {
+            if (!cancelled) setSavedUser(parsed)
+            activeAddr = parsed.address
+          } else {
+            localStorage.removeItem("sui_active_account")
+            if (!cancelled) setSavedUser(null)
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to read user from localStorage", e)
+      }
+
+      // 读取真实群组
+      try {
+        const grps = JSON.parse(localStorage.getItem("user_groups") || "[]")
+        if (!cancelled) setUserGroups(grps)
+      } catch {}
+
+      // 从 Sui RPC 抓取真实代币余额
+      if (activeAddr) {
+        try {
+          const b = await fetchRealBalances(activeAddr)
+          if (!cancelled) {
+            setTokenBalances({
+              sui: b.sui,
+              ssui: b.ssui,
+              usdc: b.usdc,
+              wal: b.wal,
+            })
+          }
+        } catch (e) {
+          console.warn("[Profile] fetchRealBalances failed:", e)
         }
       }
-    } catch (e) {
-      console.warn("Failed to read user from localStorage", e)
+
+      // 读取提案历史
+      try {
+        const pList = getProposals()
+        const mapped = pList.map((p) => ({
+          id: p.id,
+          type: p.status === "executed" ? "creation" : p.status === "approved" ? "approval" : "creation",
+          title: `${p.title} (${p.status})`,
+          description: `${p.amount} ${p.token} to ${p.recipient.slice(0, 8)}...`,
+          date: p.createdAt.slice(0, 10),
+          group: p.groupName,
+        }))
+        if (!cancelled) setProposalsHistory(mapped)
+      } catch {}
+    }
+
+    load()
+    const id = window.setInterval(load, 5000)
+    return () => {
+      cancelled = true
+      window.clearInterval(id)
     }
   }, [])
 
   const personalAddress = savedUser?.address || "0x0000000000000000000000000000000000000000"
   const personalLabel = savedUser ? `${savedUser.identifier} (${savedUser.authMethodLabel || savedUser.type})` : "未连接钱包 (点击右上角登录)"
+
+  const dynamicGroupAccounts = userGroups.map((g: any, idx: number) => ({
+    id: g.id || `group-${idx}`,
+    name: `${g.name || "群组"} (${g.members?.length || 1} 成员多签)`,
+    address: g.orgObjectId || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+    type: "group",
+  }))
 
   const accounts = [
     {
@@ -50,24 +121,22 @@ export default function Profile() {
       address: personalAddress,
       type: "personal",
     },
-    {
-      id: "group-1",
-      name: "Team Treasury (Sui MultiSig)",
-      address: "0xa81c92d04f2e185b376c90e29b12847a9821d3f1",
-      type: "group",
-    },
-    {
-      id: "group-2",
-      name: "DAO Fund (Sui Native)",
-      address: "0x77c28b5e6f7g8h9i0jkl12847a9821d3f185b376",
-      type: "group",
-    },
-    {
-      id: "group-3",
-      name: "Agent Vault (AI 智能副卡)",
-      address: "0x4d5e6f7g8h9i0jklm12847a9821d3f185b376c90",
-      type: "group",
-    },
+    ...(dynamicGroupAccounts.length > 0
+      ? dynamicGroupAccounts
+      : [
+          {
+            id: "group-1",
+            name: "Team Treasury (Sui MultiSig)",
+            address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+            type: "group",
+          },
+          {
+            id: "group-2",
+            name: "DAO Fund (Sui Native)",
+            address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+            type: "group",
+          },
+        ]),
   ]
 
   const currentAccount = accounts.find((a) => a.id === activeAccount) || accounts[0]
@@ -79,8 +148,8 @@ export default function Profile() {
     {
       symbol: "SUI",
       name: "Sui Native Coin",
-      balance: savedUser ? "25.00" : "0.00",
-      usdValue: savedUser ? "85.50" : "0.00",
+      balance: tokenBalances.sui.balance,
+      usdValue: tokenBalances.sui.usdValue,
       change: "+4.8%",
       positive: true,
       color: "bg-gradient-to-r from-blue-500 to-indigo-600",
@@ -88,8 +157,8 @@ export default function Profile() {
     {
       symbol: "sSUI",
       name: "Spring Staked SUI",
-      balance: savedUser ? "120.50" : "0.00",
-      usdValue: savedUser ? "433.80" : "0.00",
+      balance: tokenBalances.ssui.balance,
+      usdValue: tokenBalances.ssui.usdValue,
       change: "+7.2%",
       positive: true,
       color: "bg-gradient-to-r from-purple-500 to-pink-500",
@@ -97,8 +166,8 @@ export default function Profile() {
     {
       symbol: "USDC",
       name: "Sui Native USDC",
-      balance: savedUser ? "500.00" : "0.00",
-      usdValue: savedUser ? "500.00" : "0.00",
+      balance: tokenBalances.usdc.balance,
+      usdValue: tokenBalances.usdc.usdValue,
       change: "0.0%",
       positive: true,
       color: "bg-gradient-to-r from-emerald-500 to-teal-500",
@@ -106,37 +175,21 @@ export default function Profile() {
     {
       symbol: "WAL",
       name: "Walrus Protocol",
-      balance: savedUser ? "1500.00" : "0.00",
-      usdValue: savedUser ? "300.00" : "0.00",
+      balance: tokenBalances.wal.balance,
+      usdValue: tokenBalances.wal.usdValue,
       change: "+12.4%",
       positive: true,
       color: "bg-gradient-to-r from-cyan-500 to-blue-500",
     },
   ]
 
-  const history = [
+  const history = proposalsHistory.length > 0 ? proposalsHistory : [
     {
       id: "tx1",
       type: "approval",
-      title: "Approved Transaction",
-      description: "Token Transfer",
-      date: "2025-03-15",
-      group: "Team Treasury",
-    },
-    {
-      id: "tx2",
-      type: "creation",
-      title: "Created Transaction",
-      description: "Contract Interaction",
-      date: "2025-03-10",
-      group: "DAO Fund",
-    },
-    {
-      id: "tx3",
-      type: "rejection",
-      title: "Rejected Transaction",
-      description: "Token Swap",
-      date: "2025-03-05",
+      title: "Eco Grants #1 (pending)",
+      description: "100 SUI to Treasury",
+      date: new Date().toISOString().slice(0, 10),
       group: "Team Treasury",
     },
   ]

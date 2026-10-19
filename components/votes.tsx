@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -28,9 +28,26 @@ export default function Votes() {
   const [selectedVote, setSelectedVote] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("active")
   const [createVoteOpen, setCreateVoteOpen] = useState(false)
+  const [customVotes, setCustomVotes] = useState<any[]>([])
+
+  useEffect(() => {
+    const load = () => {
+      try {
+        const stored = JSON.parse(localStorage.getItem("sui_governance_votes") || "[]")
+        setCustomVotes(stored)
+      } catch {}
+    }
+    load()
+    window.addEventListener("sui-votes-updated", load)
+    window.addEventListener("storage", load)
+    return () => {
+      window.removeEventListener("sui-votes-updated", load)
+      window.removeEventListener("storage", load)
+    }
+  }, [])
 
   // 治理投票提案列表 (Governance Proposals)
-  const activeVotes = [
+  const defaultActiveVotes = [
     {
       id: "vote-1",
       title: "增加市场预算提案",
@@ -98,6 +115,8 @@ export default function Votes() {
       showResultsDuring: true,
     },
   ]
+
+  const activeVotes = [...customVotes, ...defaultActiveVotes]
 
   const completedVotes = [
     {
@@ -302,7 +321,7 @@ export default function Votes() {
                               <span className="text-muted-foreground">选项数: {Object.keys(vote.progress).length}</span>
                             </div>
                             <Progress
-                              value={(Math.max(...Object.values(vote.progress)) / vote.totalVotes) * 100}
+                              value={(Math.max(...(Object.values(vote.progress) as number[])) / (vote.totalVotes || 1)) * 100}
                               className="h-1.5 rounded-full"
                               indicatorClassName={`bg-gradient-to-r ${vote.color}`}
                             />

@@ -37,7 +37,7 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
   const [isProcessing, setIsProcessing] = useState(false)
   const [flowRate, setFlowRate] = useState(50) // 0-100 percentage of linear flow
 
-  const tokens = ["APT", "USDC", "USDT"]
+  const tokens = ["SUI", "USDC", "USDT"]
 
   const handleSubmit = () => {
     setIsProcessing(true)
@@ -146,7 +146,6 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
                           setEndDate(addDays(date, 30))
                         }
                       }}
-                      initialFocus
                     />
                   </PopoverContent>
                 </Popover>
@@ -169,7 +168,6 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
                       mode="single"
                       selected={endDate}
                       onSelect={setEndDate}
-                      initialFocus
                       disabled={(date) => {
                         if (!startDate) return false
                         return date < startDate

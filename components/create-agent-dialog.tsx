@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ShieldCheck, Bot, Key, Sparkles, Check } from "lucide-react";
 import { AgentVirtualCard } from "@/types/agent";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 
 interface CreateAgentDialogProps {
   open: boolean;
@@ -39,13 +40,11 @@ export function CreateAgentDialog({
   const handleCreate = () => {
     if (!name.trim()) return;
 
-    // Simulate key generation
-    const randomHex = Array.from({ length: 40 }, () =>
-      Math.floor(Math.random() * 16).toString(16)
-    ).join("");
-    const mockAddress = `0x${randomHex}`;
-    const mockCapId = `0xcap_${Date.now().toString(16)}`;
-    const mockPrivateKey = `suiprivkey1${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`;
+    // 使用 Ed25519 生成真实的 Sui 链上密钥对与地址
+    const keypair = new Ed25519Keypair();
+    const realAddress = keypair.toSuiAddress();
+    const realPrivateKey = keypair.getSecretKey();
+    const derivedCapId = `0xcap_${realAddress.slice(2, 18)}`;
 
     const services = allowedServicesInput
       .split(",")
@@ -57,9 +56,9 @@ export function CreateAgentDialog({
       name,
       purpose: purpose || "AI Autonomous Task Execution",
       category,
-      address: mockAddress,
-      capId: mockCapId,
-      agentCapId: mockCapId,
+      address: realAddress,
+      capId: derivedCapId,
+      agentCapId: derivedCapId,
       dailyBudget: parseFloat(dailyBudget) || 5.0,
       spentToday: 0,
       totalSpent: 0,
@@ -75,11 +74,11 @@ export function CreateAgentDialog({
           : category === "STORAGE"
           ? "from-emerald-500 to-teal-600"
           : "from-purple-600 to-pink-600",
-      privateKeyExported: mockPrivateKey,
+      privateKeyExported: realPrivateKey,
     };
 
     onCreateCard(newCard);
-    setGeneratedKey(mockPrivateKey);
+    setGeneratedKey(realPrivateKey);
   };
 
   const handleClose = () => {

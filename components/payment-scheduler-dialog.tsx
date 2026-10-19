@@ -41,7 +41,7 @@ export function PaymentSchedulerDialog({ open, onOpenChange, groupId }: PaymentS
   const [requiresApproval, setRequiresApproval] = useState(true)
   const [isProcessing, setIsProcessing] = useState(false)
 
-  const tokens = ["APT", "USDC", "USDT"]
+  const tokens = ["SUI", "USDC", "USDT"]
 
   const frequencies = [
     { value: "daily", label: "Daily" },
@@ -169,7 +169,7 @@ export function PaymentSchedulerDialog({ open, onOpenChange, groupId }: PaymentS
                   </Button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0">
-                  <Calendar mode="single" selected={startDate} onSelect={setStartDate} initialFocus />
+                  <Calendar mode="single" selected={startDate} onSelect={setStartDate} />
                 </PopoverContent>
               </Popover>
             </div>
@@ -213,7 +213,6 @@ export function PaymentSchedulerDialog({ open, onOpenChange, groupId }: PaymentS
                           mode="single"
                           selected={endDate}
                           onSelect={setEndDate}
-                          initialFocus
                           disabled={(date) => {
                             if (!startDate) return false
                             return date < startDate

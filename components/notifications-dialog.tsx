@@ -15,7 +15,7 @@ export function NotificationsDialog({ open, onOpenChange }: NotificationsDialogP
     {
       id: "notif1",
       title: "Payment Received",
-      description: "Sam paid 25 APT for Group Lunch",
+      description: "Sam paid 25 SUI for Group Lunch",
       time: "2 hours ago",
       unread: true,
     },

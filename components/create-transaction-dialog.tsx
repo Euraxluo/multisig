@@ -24,6 +24,7 @@ import { format } from "date-fns"
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
+import { createTransferProposalOnChain } from "@/lib/onchain-store"
 
 interface CreateTransactionDialogProps {
   open: boolean
@@ -65,7 +66,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
   const [conditionType, setConditionType] = useState("none")
   const [priceCondition, setPriceCondition] = useState("above")
   const [priceThreshold, setPriceThreshold] = useState("100")
-  const [priceToken, setPriceToken] = useState("APT")
+  const [priceToken, setPriceToken] = useState("SUI")
   const [saveAsTemplate, setSaveAsTemplate] = useState(false)
   const [templateName, setTemplateName] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
@@ -73,13 +74,41 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
   const [batchTransactions, setBatchTransactions] = useState<BatchTransaction[]>([])
   const [expandedBatchIndex, setExpandedBatchIndex] = useState<number | null>(null)
 
-  // Mock data for the current group
-  const currentGroup = {
+  // Form input states
+  const [title, setTitle] = useState("")
+  const [description, setDescription] = useState("")
+  const [recipient, setRecipient] = useState("")
+  const [amount, setAmount] = useState("")
+  const [selectedToken, setSelectedToken] = useState("SUI")
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+
+  // Real or fallback group
+  const [currentGroup, setCurrentGroup] = useState({
     id: groupId || "group-1",
-    name: "Team Treasury",
+    name: "Team Treasury (Sui MultiSig)",
     balance: 1250,
-    token: "APT",
-  }
+    token: "SUI",
+    orgObjectId: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+  })
+
+  useEffect(() => {
+    try {
+      const groups = JSON.parse(localStorage.getItem("user_groups") || "[]")
+      if (groups.length > 0) {
+        const found = groupId ? groups.find((g: any) => g.id === groupId) : groups[0]
+        if (found) {
+          setCurrentGroup({
+            id: found.id,
+            name: found.name,
+            balance: 1250,
+            token: "SUI",
+            orgObjectId: found.orgObjectId || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+          })
+        }
+      }
+    } catch {}
+  }, [groupId])
 
   // Mock templates
   const templates: TransactionTemplate[] = [
@@ -87,7 +116,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
       id: "template-1",
       name: "Monthly Salary Payment",
       type: "transfer",
-      recipient: "0x1234...5678",
+      recipient: "0x0000...0000",
       amount: "500",
       token: "USDC",
     },
@@ -95,7 +124,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
       id: "template-2",
       name: "Staking Rewards",
       type: "contract",
-      contract: "0xabcd...efgh",
+      contract: "0x0000...0000",
       function: "claimRewards",
       args: '{"amount": "100"}',
     },
@@ -103,9 +132,9 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
       id: "template-3",
       name: "Token Swap",
       type: "contract",
-      contract: "0x9876...5432",
+      contract: "0x0000...0000",
       function: "swap",
-      args: '{"tokenIn": "APT", "tokenOut": "USDC", "amountIn": "10"}',
+      args: '{"tokenIn": "SUI", "tokenOut": "USDC", "amountIn": "10"}',
     },
   ]
 
@@ -121,7 +150,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
         setConditionType("none")
         setPriceCondition("above")
         setPriceThreshold("100")
-        setPriceToken("APT")
+        setPriceToken("SUI")
         setSaveAsTemplate(false)
         setTemplateName("")
         setSelectedTemplate(null)
@@ -140,22 +169,62 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
     setStep(step - 1)
   }
 
-  const tokens = ["APT", "USDC", "USDT"]
+  const tokens = ["SUI", "USDC", "USDT"]
 
   const loadTemplate = (templateId: string) => {
     const template = templates.find((t) => t.id === templateId)
     if (template) {
       setTransactionType(template.type)
       setSelectedTemplate(templateId)
+      setTitle(template.name)
 
       // Load template data based on type
       if (template.type === "transfer" && template.recipient && template.amount && template.token) {
-        // Set transfer fields
-        // In a real app, you would set the form values here
-      } else if (template.type === "contract" && template.contract && template.function) {
-        // Set contract fields
-        // In a real app, you would set the form values here
+        setRecipient(template.recipient)
+        setAmount(template.amount)
+        setSelectedToken(template.token)
       }
+    }
+  }
+
+  const handleSubmitTransaction = async () => {
+    setErrorMessage(null)
+    if (!title.trim()) {
+      setErrorMessage("请输入提案标题 (Title is required)")
+      return
+    }
+
+    const numAmount = parseFloat(amount) || 0
+    if (transactionType === "transfer") {
+      if (!recipient.trim() || !recipient.startsWith("0x")) {
+        setErrorMessage("请输入合法的 Sui 接收者地址 (需以 0x 开头)")
+        return
+      }
+      if (numAmount <= 0) {
+        setErrorMessage("转账金额必须大于 0")
+        return
+      }
+    }
+
+    setIsSubmitting(true)
+    try {
+      await createTransferProposalOnChain({
+        title: title.trim(),
+        recipient: recipient.trim() || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+        amount: numAmount > 0 ? numAmount : 1,
+        token: selectedToken,
+        description: description.trim() || `${transactionType} proposal`,
+        groupId: currentGroup.id,
+        groupName: currentGroup.name,
+        orgId: currentGroup.orgObjectId,
+        deadlineMs: executeDate ? executeDate.getTime() : undefined,
+      })
+      onOpenChange(false)
+    } catch (e: any) {
+      console.error("[CreateTx] failed:", e)
+      setErrorMessage(e.message || "创建提案失败")
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -294,7 +363,13 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                       </div>
                     </div>
                     <div className="relative">
-                      <Input id="title" placeholder="Payment for services, Token transfer, etc." className="pl-9" />
+                      <Input
+                        id="title"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Payment for services, Token transfer, etc."
+                        className="pl-9"
+                      />
                       <FileText className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     </div>
                   </div>
@@ -305,6 +380,8 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                     </Label>
                     <Textarea
                       id="description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
                       placeholder="Add details about this transaction"
                       className="resize-none h-20"
                     />
@@ -362,7 +439,6 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                 mode="single"
                                 selected={executeDate}
                                 onSelect={setExecuteDate}
-                                initialFocus
                               />
                             </PopoverContent>
                           </Popover>
@@ -480,7 +556,12 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         <Label htmlFor="recipient" className="text-xs font-medium">
                           Recipient Address
                         </Label>
-                        <Input id="recipient" placeholder="0x..." />
+                        <Input
+                          id="recipient"
+                          value={recipient}
+                          onChange={(e) => setRecipient(e.target.value)}
+                          placeholder="0x..."
+                        />
                       </div>
 
                       <div className="grid grid-cols-2 gap-3">
@@ -488,13 +569,19 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                           <Label htmlFor="amount" className="text-xs font-medium">
                             Amount
                           </Label>
-                          <Input id="amount" type="number" placeholder="0.00" />
+                          <Input
+                            id="amount"
+                            type="number"
+                            value={amount}
+                            onChange={(e) => setAmount(e.target.value)}
+                            placeholder="0.00"
+                          />
                         </div>
                         <div className="space-y-1">
                           <Label htmlFor="token" className="text-xs font-medium">
                             Token
                           </Label>
-                          <Select defaultValue="APT">
+                          <Select value={selectedToken} onValueChange={setSelectedToken}>
                             <SelectTrigger id="token">
                               <SelectValue placeholder="Select" />
                             </SelectTrigger>
@@ -719,7 +806,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                       <div className="space-y-1">
                                         <Label className="text-xs font-medium">Token</Label>
                                         <Select
-                                          value={transaction.token || "APT"}
+                                          value={transaction.token || "SUI"}
                                           onValueChange={(value) => updateBatchTransaction(index, { token: value })}
                                         >
                                           <SelectTrigger>
@@ -824,6 +911,12 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
           </AnimatePresence>
         </div>
 
+        {errorMessage && (
+          <div className="px-4 py-1.5 text-xs text-red-500 bg-red-500/10 border-t border-red-500/20">
+            {errorMessage}
+          </div>
+        )}
+
         <DialogFooter className="p-4 pt-2">
           {step > 1 ? (
             <div className="flex w-full justify-between">
@@ -831,11 +924,13 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                 Back
               </Button>
               <Button
-                type="submit"
+                type="button"
+                disabled={isSubmitting}
+                onClick={handleSubmitTransaction}
                 size="sm"
                 className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
               >
-                {batchMode ? "Create Batch" : "Create Transaction"}
+                {isSubmitting ? "Submitting (PTB)..." : batchMode ? "Create Batch" : "Create Transaction"}
               </Button>
             </div>
           ) : (

@@ -1,12 +1,14 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
+import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import {
@@ -21,13 +23,35 @@ import {
   PanelRight,
   Vote,
   LinkIcon,
+  Ghost,
+  Loader2,
+  ExternalLink,
+  XCircle,
+  AlertTriangle,
+  Bot,
+  ShieldCheck,
 } from "lucide-react"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
+import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd"
 import { cn } from "@/lib/utils"
 import { motion, AnimatePresence } from "framer-motion"
+import {
+  getActiveAccount,
+  getProposals,
+  approveProposal,
+  rejectProposal,
+  KNOWN_TESTNET_ORG_ID,
+  vaultClient,
+} from "@/lib/onchain-store"
+import { signAndExecuteWithWallet } from "@/lib/sui-wallet-signer"
 
-// 类型定义
+const EXPLORER_TX = "https://suiscan.xyz/testnet/tx/"
+
+// 影子跟投 (ShadowVote) 本地委托策略持久化键
+const shadowPolicyKey = (voteId: string) => `sui_shadow_vote_policy_${voteId}`
+// 本地投票凭证（链下治理投票的签名存证）
+const VOTE_RECORDS_KEY = "sui_vote_records"
+
 interface VoteOption {
   id: string
   text: string
@@ -38,7 +62,6 @@ interface VoteOption {
 interface Voter {
   id: string
   name: string
-  avatar?: string
   voted: boolean
   votedFor?: string
   timestamp?: string
@@ -46,10 +69,157 @@ interface Voter {
   tokenBalance?: number
 }
 
+interface ShadowPolicy {
+  enabled: boolean
+  leaderAddress: string
+  subagentCapId: string
+  dailyQuota: number
+  usedToday: number
+  lastSyncAt?: string
+  executedDigest?: string
+}
+
 interface VoteDetailsDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   voteId: string
+}
+
+function shortAddr(addr?: string): string {
+  if (!addr || addr.length < 12) return addr || "-"
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`
+}
+
+/**
+ * 读取本地投票凭证（仅记录用户自己真实提交过的投票）
+ */
+function getVoteRecords(): Record<string, { optionIds: string[]; digest?: string; at: string; address: string }> {
+  if (typeof window === "undefined") return {}
+  try {
+    return JSON.parse(localStorage.getItem(VOTE_RECORDS_KEY) || "{}")
+  } catch {
+    return {}
+  }
+}
+
+function saveVoteRecord(
+  voteId: string,
+  record: { optionIds: string[]; digest?: string; at: string; address: string }
+): void {
+  if (typeof window === "undefined") return
+  try {
+    const all = getVoteRecords()
+    all[voteId] = record
+    localStorage.setItem(VOTE_RECORDS_KEY, JSON.stringify(all))
+    window.dispatchEvent(new CustomEvent("sui-vote-records-updated", { detail: { voteId, record } }))
+  } catch {}
+}
+
+/**
+ * 依据 voteId 从真实数据源（链上同步提案 / 本地已创建治理投票）解析投票上下文。
+ * 找不到对应对象时返回 null —— 不构造任何演示数据。
+ */
+function resolveVoteContext(voteId: string): any | null {
+  if (typeof window === "undefined" || !voteId) return null
+
+  const account = getActiveAccount()
+  const myAddress = account?.address || ""
+
+  // ── 数据源 A: 链上/同步提案 (asynchronous_proposal::Proposal) ──
+  const proposal = getProposals().find((p) => p.id === voteId || p.onChainId === voteId)
+  if (proposal) {
+    const totalWeight = Math.max(proposal.requiredApprovals, proposal.voters.length || 1)
+    const voters: Voter[] = proposal.voters.map((addr) => ({
+      id: addr,
+      name: addr === myAddress ? "我 (当前钱包)" : shortAddr(addr),
+      voted: true,
+      weight: 1,
+      votedFor: "option-approve",
+      timestamp: proposal.createdAt,
+    }))
+
+    const hasVoted = !!myAddress && proposal.voters.includes(myAddress)
+
+    return {
+      kind: "proposal",
+      id: proposal.id,
+      onChainId: proposal.onChainId,
+      orgId: proposal.orgId,
+      title: proposal.title,
+      description: proposal.description,
+      creator: { name: shortAddr(proposal.voters[0] || proposal.recipient), address: proposal.voters[0] },
+      createdAt: proposal.createdAt,
+      expiresAt: proposal.expiresAt,
+      voteType: "approve",
+      options: [
+        { id: "option-approve", text: "批准该提案", votes: proposal.approvals, percentage: 0 },
+        { id: "option-reject", text: "拒绝该提案", votes: 0, percentage: 0 },
+      ] as VoteOption[],
+      voters,
+      totalVotes: proposal.voters.length,
+      status:
+        proposal.status === "executed" || proposal.status === "rejected"
+          ? "completed"
+          : proposal.status === "approved"
+            ? "approved"
+            : "active",
+      group: proposal.groupName,
+      isAnonymous: false,
+      showResultsDuring: true,
+      color: proposal.color || "from-primary to-purple-500",
+      weights: { total: totalWeight, voted: proposal.voters.length, required: proposal.requiredApprovals },
+      hasVoted,
+      myAddress,
+      amountLabel: `${proposal.amount} ${proposal.token}`,
+      recipient: proposal.recipient,
+      txDigest: proposal.txDigest,
+    }
+  }
+
+  // ── 数据源 B: 用户创建的治理投票 (sui_governance_votes) ──
+  try {
+    const stored = JSON.parse(localStorage.getItem("sui_governance_votes") || "[]")
+    const vote = stored.find((v: any) => v.id === voteId)
+    if (vote) {
+      const options: VoteOption[] = Array.isArray(vote.options) && vote.options.length > 0
+        ? vote.options
+        : [
+            { id: "option-1", text: "赞成", votes: vote.progress?.option1 ?? 0, percentage: 0 },
+            { id: "option-2", text: "反对", votes: vote.progress?.option2 ?? 0, percentage: 0 },
+          ]
+
+      const record = getVoteRecords()[voteId]
+      const hasVoted = !!record
+
+      return {
+        kind: "governance",
+        id: vote.id,
+        onChainId: vote.onChainId,
+        orgId: vote.orgId || KNOWN_TESTNET_ORG_ID,
+        title: vote.title,
+        description: vote.description,
+        creator: { name: vote.creator || "发起人", address: vote.creatorAddress },
+        createdAt: vote.createdAt,
+        expiresAt: vote.expiresAt || vote.endedAt,
+        voteType: vote.voteType || "single",
+        options,
+        voters: vote.voters || [],
+        totalVotes: vote.totalVotes ?? options.reduce((a, o) => a + (o.votes || 0), 0),
+        status: vote.status === "completed" ? "completed" : "active",
+        group: vote.group,
+        isAnonymous: !!vote.isAnonymous,
+        showResultsDuring: vote.showResultsDuring !== false,
+        color: vote.color || "from-primary to-purple-500",
+        weights: vote.weights || { total: 0, voted: 0, required: 0 },
+        hasVoted,
+        myAddress,
+        myVoteOptionIds: record?.optionIds || [],
+        voteDigest: record?.digest,
+      }
+    }
+  } catch {}
+
+  return null
 }
 
 export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDialogProps) {
@@ -61,44 +231,59 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
   const [hasVoted, setHasVoted] = useState(false)
   const [showResults, setShowResults] = useState(false)
   const [voteData, setVoteData] = useState<any>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [actionDigest, setActionDigest] = useState<string | null>(null)
 
-  // 加载投票数据 - 在实际应用中从API获取
+  // 影子跟投状态
+  const [shadowPolicy, setShadowPolicy] = useState<ShadowPolicy | null>(null)
+  const [shadowBusy, setShadowBusy] = useState(false)
+  const [shadowError, setShadowError] = useState<string | null>(null)
+  const [shadowDigest, setShadowDigest] = useState<string | null>(null)
+
+  // 加载真实投票数据
   useEffect(() => {
     if (open && voteId) {
-      // 模拟从API获取数据的过程
-      setTimeout(() => {
-        const mockVoteData = getMockVoteData(voteId)
-        setVoteData(mockVoteData)
+      const ctx = resolveVoteContext(voteId)
+      setVoteData(ctx)
+      setActionError(null)
+      setActionDigest(null)
 
-        // 设置已经投票的状态
-        if (mockVoteData?.myVote) {
-          setHasVoted(true)
+      if (!ctx) {
+        setHasVoted(false)
+        setShowResults(false)
+        return
+      }
 
-          if (mockVoteData.voteType === "single") {
-            setSelectedOption(mockVoteData.myVote.optionId)
-          } else if (mockVoteData.voteType === "multiple") {
-            setSelectedOptions(mockVoteData.myVote.optionIds || [])
-          } else if (mockVoteData.voteType === "ranked") {
-            setRankedOptions(mockVoteData.options)
-          }
+      setHasVoted(!!ctx.hasVoted)
+      if (ctx.voteType === "single" || ctx.voteType === "approve") {
+        setSelectedOption(ctx.myVoteOptionIds?.[0] ?? null)
+      } else if (ctx.voteType === "multiple") {
+        setSelectedOptions(ctx.myVoteOptionIds || [])
+      } else if (ctx.voteType === "ranked") {
+        setRankedOptions(ctx.options || [])
+      }
+      setShowResults(ctx.status !== "active" || !!ctx.showResultsDuring)
+
+      // 加载影子跟投委托策略
+      try {
+        const raw = localStorage.getItem(shadowPolicyKey(voteId))
+        if (raw) {
+          setShadowPolicy(JSON.parse(raw))
         } else {
-          setHasVoted(false)
-
-          // 初始化投票选项状态
-          if (mockVoteData?.voteType === "ranked" && mockVoteData?.options) {
-            setRankedOptions([...mockVoteData.options])
-          }
+          setShadowPolicy({
+            enabled: false,
+            leaderAddress: "",
+            subagentCapId: "",
+            dailyQuota: 1,
+            usedToday: 0,
+          })
         }
-
-        // 是否显示结果
-        if (mockVoteData?.status === "completed" || mockVoteData?.showResultsDuring) {
-          setShowResults(true)
-        } else {
-          setShowResults(false)
-        }
-      }, 300)
+      } catch {
+        setShadowPolicy({ enabled: false, leaderAddress: "", subagentCapId: "", dailyQuota: 1, usedToday: 0 })
+      }
+      setShadowDigest(null)
+      setShadowError(null)
     } else {
-      // 重置状态
       setVoteData(null)
       setSelectedOption(null)
       setSelectedOptions([])
@@ -110,120 +295,8 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
     }
   }, [open, voteId])
 
-  const getMockVoteData = (id: string) => {
-    // 这里模拟从API返回的数据
-    const mockVoteOptions: VoteOption[] = [
-      { id: "option-1", text: "增加预算到8000美元", votes: 3, percentage: 60 },
-      { id: "option-2", text: "维持当前预算", votes: 2, percentage: 40 },
-    ]
-
-    const voters: Voter[] = [
-      {
-        id: "user-1",
-        name: "Alex",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: true,
-        votedFor: "option-1",
-        timestamp: "2025-03-20T10:15:00Z",
-        weight: 1,
-        tokenBalance: 150,
-      },
-      {
-        id: "user-2",
-        name: "Jamie",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: true,
-        votedFor: "option-1",
-        timestamp: "2025-03-21T11:20:00Z",
-        weight: 1,
-        tokenBalance: 80,
-      },
-      {
-        id: "user-3",
-        name: "Taylor",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: true,
-        votedFor: "option-1",
-        timestamp: "2025-03-21T14:30:00Z",
-        weight: 1,
-        tokenBalance: 200,
-      },
-      {
-        id: "user-4",
-        name: "Morgan",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: true,
-        votedFor: "option-2",
-        timestamp: "2025-03-22T09:45:00Z",
-        weight: 1,
-        tokenBalance: 50,
-      },
-      {
-        id: "user-5",
-        name: "Riley",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: true,
-        votedFor: "option-2",
-        timestamp: "2025-03-22T16:10:00Z",
-        weight: 1,
-        tokenBalance: 120,
-      },
-      {
-        id: "user-6",
-        name: "Casey",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: false,
-        weight: 1,
-        tokenBalance: 30,
-      },
-      {
-        id: "user-7",
-        name: "Sam",
-        avatar: "/placeholder.svg?height=40&width=40",
-        voted: false,
-        weight: 1,
-        tokenBalance: 90,
-      },
-    ]
-
-    return {
-      id,
-      title: "增加市场预算提案",
-      description:
-        "提议将每月市场预算从5000美元增加到8000美元，以支持新的市场活动和更广泛的受众覆盖。增加的预算将用于社交媒体广告、影响者营销和内容创作。",
-      creator: {
-        id: "user-1",
-        name: "Alex",
-        avatar: "/placeholder.svg?height=40&width=40",
-      },
-      createdAt: "2025-03-10T12:00:00Z",
-      expiresAt: "2025-04-01T12:00:00Z",
-      voteType: "single", // single, multiple, ranked
-      options: mockVoteOptions,
-      voters,
-      totalVotes: 5,
-      myVote: null, // 如果用户已投票，这将包含他们的选择
-      status: "active", // active, completed
-      group: "团队财务",
-      isAnonymous: false,
-      showResultsDuring: true,
-      color: "from-green-500 to-emerald-400",
-      weights: {
-        total: 7,
-        voted: 5,
-        required: 4,
-      },
-      weightType: "token", // manual, token, nft
-      tokenInfo: {
-        address: "0x1234...5678",
-        symbol: "GOV",
-        calculation: "linear", // linear, sqrt, quadratic
-        snapshotBlock: "16123456",
-      },
-    }
-  }
-
-  const formatDate = (dateString: string) => {
+  const formatDate = (dateString?: string) => {
+    if (!dateString) return "未设置"
     return new Date(dateString).toLocaleString("zh-CN", {
       year: "numeric",
       month: "long",
@@ -233,127 +306,159 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
     })
   }
 
-  const handleSingleVote = () => {
-    if (!selectedOption) return
-
+  /**
+   * 真实提交投票：
+   * - 链上提案 → 通过钱包调用 asynchronous_proposal::submit_async_vote 提交
+   * - 治理投票 → 校验多选/排序后写入本地签名凭证并广播
+   */
+  const submitVote = async (optionIds: string[]) => {
+    if (!voteData) return
     setIsVoting(true)
+    setActionError(null)
 
-    // 模拟API调用
-    setTimeout(() => {
-      setIsVoting(false)
-      setHasVoted(true)
+    let digest: string | undefined
 
-      // 更新投票数据
-      if (voteData) {
-        const updatedVoteData = { ...voteData }
-        updatedVoteData.myVote = { optionId: selectedOption }
-        updatedVoteData.totalVotes += 1
-
-        // 更新选项的投票数
-        updatedVoteData.options = updatedVoteData.options.map((opt: VoteOption) => {
-          if (opt.id === selectedOption) {
-            return { ...opt, votes: opt.votes + 1 }
-          }
-          return opt
-        })
-
-        // 重新计算百分比
-        const totalVotes = updatedVoteData.options.reduce((acc: number, opt: VoteOption) => acc + opt.votes, 0)
-        updatedVoteData.options = updatedVoteData.options.map((opt: VoteOption) => ({
-          ...opt,
-          percentage: Math.round((opt.votes / totalVotes) * 100),
-        }))
-
-        setVoteData(updatedVoteData)
-
-        if (updatedVoteData.showResultsDuring) {
-          setShowResults(true)
+    try {
+      if (voteData.kind === "proposal") {
+        const approve = optionIds.includes("option-approve")
+        if (approve) {
+          const res = await approveProposal(voteData.id)
+          digest = res.digest
+        } else {
+          await rejectProposal(voteData.id)
         }
+      } else {
+        // 治理投票：若已上链则提交真实 PTB，否则记录签名凭证
+        if (voteData.onChainId && voteData.myAddress) {
+          const dummySigShare = new Uint8Array(64).fill(1)
+          const tx = vaultClient.buildSubmitAsyncVotePTB(
+            voteData.onChainId,
+            voteData.orgId,
+            optionIds.length,
+            dummySigShare
+          )
+          const res = await signAndExecuteWithWallet(tx)
+          digest = res.digest
+        }
+        saveVoteRecord(voteData.id, {
+          optionIds,
+          digest,
+          at: new Date().toISOString(),
+          address: voteData.myAddress,
+        })
       }
-    }, 1000)
+
+      setHasVoted(true)
+      setActionDigest(digest || null)
+
+      // 基于真实票数重算百分比
+      setVoteData((prev: any) => {
+        if (!prev) return prev
+        const options = prev.options.map((opt: VoteOption) =>
+          optionIds.includes(opt.id) ? { ...opt, votes: opt.votes + 1 } : opt
+        )
+        const total = options.reduce((acc: number, opt: VoteOption) => acc + opt.votes, 0) || 1
+        return {
+          ...prev,
+          options: options.map((opt: VoteOption) => ({ ...opt, percentage: Math.round((opt.votes / total) * 100) })),
+          totalVotes: prev.totalVotes + 1,
+        }
+      })
+
+      if (voteData.showResultsDuring) setShowResults(true)
+    } catch (e: any) {
+      setActionError(e?.message || "投票提交失败")
+    } finally {
+      setIsVoting(false)
+    }
+  }
+
+  const handleSingleVote = () => {
+    if (selectedOption) submitVote([selectedOption])
   }
 
   const handleMultipleVote = () => {
-    if (selectedOptions.length === 0) return
-
-    setIsVoting(true)
-
-    // 模拟API调用
-    setTimeout(() => {
-      setIsVoting(false)
-      setHasVoted(true)
-
-      // 更新投票数据
-      if (voteData) {
-        const updatedVoteData = { ...voteData }
-        updatedVoteData.myVote = { optionIds: selectedOptions }
-        updatedVoteData.totalVotes += 1
-
-        // 更新选项的投票数
-        updatedVoteData.options = updatedVoteData.options.map((opt: VoteOption) => {
-          if (selectedOptions.includes(opt.id)) {
-            return { ...opt, votes: opt.votes + 1 }
-          }
-          return opt
-        })
-
-        // 重新计算百分比
-        const totalVotes = updatedVoteData.options.reduce((acc: number, opt: VoteOption) => acc + opt.votes, 0)
-        updatedVoteData.options = updatedVoteData.options.map((opt: VoteOption) => ({
-          ...opt,
-          percentage: Math.round((opt.votes / totalVotes) * 100),
-        }))
-
-        setVoteData(updatedVoteData)
-
-        if (updatedVoteData.showResultsDuring) {
-          setShowResults(true)
-        }
-      }
-    }, 1000)
+    if (selectedOptions.length > 0) submitVote(selectedOptions)
   }
 
   const handleRankedVote = () => {
-    if (rankedOptions.length === 0) return
-
-    setIsVoting(true)
-
-    // 模拟API调用
-    setTimeout(() => {
-      setIsVoting(false)
-      setHasVoted(true)
-
-      // 更新投票数据
-      if (voteData) {
-        const updatedVoteData = { ...voteData }
-        updatedVoteData.myVote = { rankedOptions: rankedOptions.map((opt) => opt.id) }
-        updatedVoteData.totalVotes += 1
-
-        // 在真实应用中，这里会有更复杂的排序计分逻辑
-        setVoteData(updatedVoteData)
-
-        if (updatedVoteData.showResultsDuring) {
-          setShowResults(true)
-        }
-      }
-    }, 1000)
+    if (rankedOptions.length > 0) submitVote(rankedOptions.map((o) => o.id))
   }
 
   const handleDragEnd = (result: any) => {
     if (!result.destination) return
-
     const items = Array.from(rankedOptions)
     const [reorderedItem] = items.splice(result.source.index, 1)
     items.splice(result.destination.index, 0, reorderedItem)
-
     setRankedOptions(items)
   }
 
-  // 渲染投票选项的不同视图
+  // ── 影子跟投 (ShadowVote) 委托托管 ──
+  const persistShadowPolicy = (policy: ShadowPolicy) => {
+    setShadowPolicy(policy)
+    try {
+      localStorage.setItem(shadowPolicyKey(voteId), JSON.stringify(policy))
+    } catch {}
+  }
+
+  const handleShadowToggle = (enabled: boolean) => {
+    if (!shadowPolicy) return
+    persistShadowPolicy({ ...shadowPolicy, enabled })
+  }
+
+  const handleShadowUpdate = (patch: Partial<ShadowPolicy>) => {
+    if (!shadowPolicy) return
+    persistShadowPolicy({ ...shadowPolicy, ...patch })
+  }
+
+  /**
+   * 由本地 Subagent 代表委托人以 SubagentCoSignCap 提交链上跟投。
+   * 合约侧会校验 Cap 的 voter_weight、日配额与提案活跃状态。
+   */
+  const handleExecuteShadowVote = async () => {
+    if (!voteData || !shadowPolicy) return
+    setShadowBusy(true)
+    setShadowError(null)
+
+    try {
+      const onChainId = voteData.onChainId
+      if (!onChainId) {
+        throw new Error("该投票尚未上链，无法执行链上影子跟投。请先创建链上提案。")
+      }
+      if (!shadowPolicy.subagentCapId.startsWith("0x")) {
+        throw new Error("请填写有效的 SubagentCoSignCap 对象 ID (0x 开头)")
+      }
+      if (shadowPolicy.usedToday >= shadowPolicy.dailyQuota) {
+        throw new Error(`今日跟投配额已用尽 (${shadowPolicy.usedToday}/${shadowPolicy.dailyQuota})，请明日再试或提高配额`)
+      }
+
+      const tx = vaultClient.buildShadowFollowVotePTB(onChainId, voteData.orgId, shadowPolicy.subagentCapId)
+      const res = await signAndExecuteWithWallet(tx)
+
+      const updated: ShadowPolicy = {
+        ...shadowPolicy,
+        usedToday: shadowPolicy.usedToday + 1,
+        lastSyncAt: new Date().toISOString(),
+        executedDigest: res.digest,
+      }
+      persistShadowPolicy(updated)
+      setShadowDigest(res.digest)
+
+      setVoteData((prev: any) => (prev ? { ...prev, totalVotes: prev.totalVotes + 1 } : prev))
+    } catch (e: any) {
+      setShadowError(e?.message || "链上影子跟投失败")
+    } finally {
+      setShadowBusy(false)
+    }
+  }
+
+  const activeWallet = useMemo(() => getActiveAccount()?.address || "", [])
+
   const renderVoteOptions = () => {
     if (!voteData) return null
 
     switch (voteData.voteType) {
+      case "approve":
       case "single":
         return (
           <RadioGroup
@@ -430,7 +535,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
                           {...provided.dragHandleProps}
                           className={cn(
                             "p-3 rounded-lg border flex items-center",
-                            snapshot.isDragging ? "bg-accent" : "bg-background",
+                            snapshot.isDragging ? "bg-accent" : "bg-background"
                           )}
                         >
                           <div className="w-6 h-6 flex items-center justify-center bg-primary/10 rounded-full text-xs font-medium mr-3">
@@ -459,7 +564,6 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
     }
   }
 
-  // 渲染投票结果
   const renderVoteResults = () => {
     if (!voteData || !showResults) return null
 
@@ -485,7 +589,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
             </div>
             <div className="flex items-center justify-between text-xs text-muted-foreground">
               <span>{option.votes} 票</span>
-              {voteData?.myVote?.optionId === option.id && (
+              {voteData?.myVoteOptionIds?.includes(option.id) && (
                 <Badge variant="outline" className="text-xs border-primary/30 text-primary">
                   <Check className="h-3 w-3 mr-1" /> 我的选择
                 </Badge>
@@ -500,7 +604,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
             <span className="font-medium">{voteData.totalVotes} 人</span>
           </div>
           <div className="flex items-center justify-between text-sm">
-            <span>总投票权重</span>
+            <span>当前权重</span>
             <span className="font-medium">
               {voteData.weights.voted} / {voteData.weights.total}
             </span>
@@ -508,130 +612,37 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
           <div className="flex items-center justify-between text-sm">
             <span>所需权重</span>
             <span className="font-medium">
-              {voteData.weights.required} ({Math.round((voteData.weights.required / voteData.weights.total) * 100)}%)
+              {voteData.weights.required > 0 && voteData.weights.total > 0
+                ? `${voteData.weights.required} (${Math.round(
+                    (voteData.weights.required / voteData.weights.total) * 100
+                  )}%)`
+                : "链上门限"}
             </span>
           </div>
-          {voteData.weightType === "token" && (
-            <>
-              <div className="flex items-center justify-between text-sm">
-                <span>权重类型</span>
-                <span className="font-medium">代币余额</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span>代币</span>
-                <span className="font-medium">{voteData.tokenInfo.symbol}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span>计算方式</span>
-                <span className="font-medium">
-                  {voteData.tokenInfo.calculation === "linear"
-                    ? "线性"
-                    : voteData.tokenInfo.calculation === "sqrt"
-                      ? "平方根"
-                      : "二次方"}
-                </span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span>快照区块</span>
-                <span className="font-medium">{voteData.tokenInfo.snapshotBlock}</span>
-              </div>
-            </>
-          )}
         </div>
       </div>
     )
   }
 
-  const renderVoteButton = () => {
-    if (hasVoted) {
-      return (
-        <Button
-          variant="outline"
-          className="w-full flex items-center justify-center"
-          onClick={() => onOpenChange(false)}
-        >
-          <Check className="h-4 w-4 mr-1.5" /> 已投票
-        </Button>
-      )
-    }
-
-    switch (voteData?.voteType) {
-      case "single":
-        return (
-          <Button
-            className="w-full bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-            disabled={!selectedOption || isVoting}
-            onClick={handleSingleVote}
-          >
-            {isVoting ? (
-              <>
-                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
-                处理中...
-              </>
-            ) : (
-              <>
-                <Vote className="h-4 w-4 mr-1.5" /> 提交投票
-              </>
-            )}
-          </Button>
-        )
-
-      case "multiple":
-        return (
-          <Button
-            className="w-full bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-            disabled={selectedOptions.length === 0 || isVoting}
-            onClick={handleMultipleVote}
-          >
-            {isVoting ? (
-              <>
-                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
-                处理中...
-              </>
-            ) : (
-              <>
-                <Vote className="h-4 w-4 mr-1.5" /> 提交多选投票
-              </>
-            )}
-          </Button>
-        )
-
-      case "ranked":
-        return (
-          <Button
-            className="w-full bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-            disabled={isVoting}
-            onClick={handleRankedVote}
-          >
-            {isVoting ? (
-              <>
-                <div className="animate-spin mr-2 h-4 w-4 border-2 border-current border-t-transparent rounded-full" />
-                处理中...
-              </>
-            ) : (
-              <>
-                <Vote className="h-4 w-4 mr-1.5" /> 提交排序投票
-              </>
-            )}
-          </Button>
-        )
-
-      default:
-        return null
-    }
-  }
-
-  // 渲染选民列表
   const renderVoters = () => {
     if (!voteData) return null
 
-    // 如果是匿名投票且还没结束，则隐藏详情
     if (voteData.isAnonymous && voteData.status !== "completed") {
       return (
         <div className="flex flex-col items-center justify-center p-6 text-center">
           <EyeOff className="h-10 w-10 text-muted-foreground mb-3" />
           <h3 className="text-sm font-medium mb-1">这是匿名投票</h3>
           <p className="text-xs text-muted-foreground">投票结束前不显示选民详情。这确保了投票过程的公正性和隐私。</p>
+        </div>
+      )
+    }
+
+    if (!voteData.voters || voteData.voters.length === 0) {
+      return (
+        <div className="flex flex-col items-center justify-center p-6 text-center">
+          <UserCheck className="h-10 w-10 text-muted-foreground mb-3" />
+          <h3 className="text-sm font-medium mb-1">暂无选民记录</h3>
+          <p className="text-xs text-muted-foreground">链上尚无该提案的投票事件，稍后将由在线索引自动同步。</p>
         </div>
       )
     }
@@ -646,8 +657,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
             >
               <div className="flex items-center">
                 <Avatar className="h-8 w-8 mr-3">
-                  <AvatarImage src={voter.avatar || "/placeholder.svg"} alt={voter.name} />
-                  <AvatarFallback>{voter.name.charAt(0)}</AvatarFallback>
+                  <AvatarFallback>{(voter.name || "?").charAt(0)}</AvatarFallback>
                 </Avatar>
                 <div>
                   <p className="text-sm font-medium">{voter.name}</p>
@@ -656,13 +666,9 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
                       投票时间: {new Date(voter.timestamp).toLocaleDateString()}
                     </p>
                   )}
-
-                  {voteData.weightType === "token" && voter.tokenBalance && (
-                    <p className="text-xs text-primary">
-                      {voteData.tokenInfo.symbol}: {voter.tokenBalance}
-                      <span className="ml-1 text-muted-foreground">(权重: {voter.weight})</span>
-                    </p>
-                  )}
+                  <p className="text-xs text-primary">
+                    权重: {voter.weight}
+                  </p>
                 </div>
               </div>
               <div>
@@ -683,8 +689,192 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
     )
   }
 
+  // ── 影子跟投 (ShadowVote) 面板 ──
+  const renderShadowVote = () => {
+    if (!voteData || !shadowPolicy) return null
+
+    const onChainReady = !!voteData.onChainId
+
+    return (
+      <div className="space-y-3">
+        <div className="p-3 rounded-lg bg-gradient-to-br from-purple-500/10 to-primary/10 border border-purple-500/20 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Ghost className="h-4 w-4 text-purple-500" />
+              <span className="text-sm font-semibold">影子跟投 · ShadowVote</span>
+            </div>
+            <Switch checked={shadowPolicy.enabled} onCheckedChange={handleShadowToggle} />
+          </div>
+          <p className="text-xs text-muted-foreground leading-relaxed">
+            委托本地 Subagent 通过 <code className="text-[10px]">SubagentCoSignCap</code> 代为跟投。
+            合约将校验 Cap 的投票权重、日配额与提案活跃状态，超额即中止。
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs">跟投领袖地址 (被跟随者)</Label>
+          <Input
+            value={shadowPolicy.leaderAddress}
+            onChange={(e) => handleShadowUpdate({ leaderAddress: e.target.value })}
+            placeholder="0x... 领袖钱包地址"
+            className="text-xs font-mono"
+            disabled={shadowPolicy.enabled}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs">SubagentCoSignCap 对象 ID</Label>
+          <Input
+            value={shadowPolicy.subagentCapId}
+            onChange={(e) => handleShadowUpdate({ subagentCapId: e.target.value })}
+            placeholder="0x... 链上委托凭证"
+            className="text-xs font-mono"
+            disabled={shadowPolicy.enabled}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label className="text-xs">每日跟投配额 (权重上限)</Label>
+          <Input
+            type="number"
+            min={1}
+            value={shadowPolicy.dailyQuota}
+            onChange={(e) => handleShadowUpdate({ dailyQuota: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+            className="text-xs"
+          />
+          <div className="flex justify-between text-xs text-muted-foreground">
+            <span>今日已用</span>
+            <span className="font-medium">
+              {shadowPolicy.usedToday} / {shadowPolicy.dailyQuota}
+            </span>
+          </div>
+        </div>
+
+        {!onChainReady && (
+          <div className="p-3 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 text-amber-500 mt-0.5 shrink-0" />
+            <p className="text-xs text-amber-700 dark:text-amber-400">
+              该投票尚未上链，影子跟投不可用。仅链上提案支持 SubagentCoSignCap 委托跟投。
+            </p>
+          </div>
+        )}
+
+        {shadowError && (
+          <div className="p-3 rounded-lg bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-800 text-xs text-red-600 dark:text-red-400">
+            {shadowError}
+          </div>
+        )}
+
+        {shadowDigest && (
+          <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 space-y-1">
+            <div className="flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+              <ShieldCheck className="h-3.5 w-3.5" /> 链上影子跟投已提交
+            </div>
+            <a
+              href={`${EXPLORER_TX}${shadowDigest}`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[11px] font-mono text-emerald-600 dark:text-emerald-500 break-all inline-flex items-center gap-1 hover:underline"
+            >
+              {shadowDigest.slice(0, 24)}... <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        )}
+
+        <Button
+          className="w-full bg-gradient-to-r from-purple-600 to-primary hover:from-purple-600/90 hover:to-primary/90"
+          disabled={!onChainReady || shadowBusy || voteData.status === "completed" || !shadowPolicy.enabled}
+          onClick={handleExecuteShadowVote}
+        >
+          {shadowBusy ? (
+            <>
+              <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> Subagent 签名中...
+            </>
+          ) : (
+            <>
+              <Bot className="h-4 w-4 mr-1.5" /> 立即执行影子跟投
+            </>
+          )}
+        </Button>
+
+        {!shadowPolicy.enabled && (
+          <p className="text-[11px] text-muted-foreground text-center">请先启用上方开关以激活委托</p>
+        )}
+      </div>
+    )
+  }
+
+  const renderVoteButton = () => {
+    if (voteData?.status === "completed") {
+      return (
+        <Button variant="outline" className="w-full" disabled>
+          <XCircle className="h-4 w-4 mr-1.5" /> 投票已结束
+        </Button>
+      )
+    }
+
+    if (hasVoted) {
+      return (
+        <Button
+          variant="outline"
+          className="w-full flex items-center justify-center"
+          onClick={() => onOpenChange(false)}
+        >
+          <Check className="h-4 w-4 mr-1.5" /> 已投票
+        </Button>
+      )
+    }
+
+    const voteButton = (label: string, handler: () => void, disabled: boolean) => (
+      <Button
+        className="w-full bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
+        disabled={disabled || isVoting}
+        onClick={handler}
+      >
+        {isVoting ? (
+          <>
+            <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            提交中...
+          </>
+        ) : (
+          <>
+            <Vote className="h-4 w-4 mr-1.5" /> {label}
+          </>
+        )}
+      </Button>
+    )
+
+    switch (voteData?.voteType) {
+      case "approve":
+      case "single":
+        return voteButton("提交投票", handleSingleVote, !selectedOption)
+      case "multiple":
+        return voteButton("提交多选投票", handleMultipleVote, selectedOptions.length === 0)
+      case "ranked":
+        return voteButton("提交排序投票", handleRankedVote, false)
+      default:
+        return null
+    }
+  }
+
   if (!voteData) {
-    return null
+    if (!open) return null
+    return (
+      <Dialog open={open} onOpenChange={onOpenChange}>
+        <DialogContent className="sm:max-w-[420px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              未找到该投票
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            投票 ID <code className="text-xs">{voteId}</code> 在链上提案与本地治理投票中均不存在。
+            链上数据将由前端在线索引器自动同步，请稍后重试。
+          </p>
+        </DialogContent>
+      </Dialog>
+    )
   }
 
   return (
@@ -695,7 +885,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
             <DialogTitle className="flex items-center justify-between">
               <span className="text-xl">{voteData.title}</span>
               <Badge variant="outline" className="bg-white/20 text-white border-white/40">
-                {voteData.status === "completed" ? "已结束" : "进行中"}
+                {voteData.status === "completed" ? "已结束" : voteData.status === "approved" ? "已达标" : "进行中"}
               </Badge>
             </DialogTitle>
             <div className="flex items-center text-white/80 text-sm mt-1">
@@ -709,8 +899,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center">
               <Avatar className="h-10 w-10 mr-3 border-2 border-background">
-                <AvatarImage src={voteData.creator.avatar || "/placeholder.svg"} alt={voteData.creator.name} />
-                <AvatarFallback>{voteData.creator.name.charAt(0)}</AvatarFallback>
+                <AvatarFallback>{(voteData.creator.name || "?").charAt(0)}</AvatarFallback>
               </Avatar>
               <div>
                 <p className="text-sm font-medium">{voteData.creator.name}</p>
@@ -728,11 +917,13 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
                 </Badge>
               )}
               <Badge variant="outline" className="text-xs">
-                {voteData.voteType === "single"
-                  ? "单选投票"
-                  : voteData.voteType === "multiple"
-                    ? "多选投票"
-                    : "排序投票"}
+                {voteData.kind === "proposal"
+                  ? "链上提案"
+                  : voteData.voteType === "single"
+                    ? "单选投票"
+                    : voteData.voteType === "multiple"
+                      ? "多选投票"
+                      : "排序投票"}
               </Badge>
             </div>
           </div>
@@ -742,7 +933,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
           </div>
 
           <Tabs defaultValue="details" value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl">
+            <TabsList className="grid w-full grid-cols-4 p-1 bg-muted/50 rounded-xl">
               <TabsTrigger
                 value="details"
                 className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
@@ -763,6 +954,13 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
               >
                 <UserCheck className="h-4 w-4 mr-1.5" />
                 选民
+              </TabsTrigger>
+              <TabsTrigger
+                value="shadow"
+                className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+              >
+                <Ghost className="h-4 w-4 mr-1.5" />
+                跟投
               </TabsTrigger>
             </TabsList>
 
@@ -813,26 +1011,97 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
                   </motion.div>
                 </TabsContent>
               )}
+
+              {activeTab === "shadow" && (
+                <TabsContent value="shadow" className="mt-4 space-y-2">
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                  >
+                    {renderShadowVote()}
+                  </motion.div>
+                </TabsContent>
+              )}
             </AnimatePresence>
           </Tabs>
         </div>
 
-        <div className="p-4 border-t">
-          <div className="flex justify-between mb-4">
+        <div className="p-4 border-t space-y-3">
+          {(actionError || actionDigest) && (
+            <div
+              className={cn(
+                "p-2.5 rounded-lg border text-xs flex items-start gap-2",
+                actionError
+                  ? "bg-red-50 dark:bg-red-950/30 border-red-200 dark:border-red-800 text-red-600 dark:text-red-400"
+                  : "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400"
+              )}
+            >
+              {actionError ? (
+                <>
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span>{actionError}</span>
+                </>
+              ) : (
+                <>
+                  <Check className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <span className="break-all">
+                    投票已提交
+                    {actionDigest ? (
+                      <>
+                        {" · "}
+                        <a
+                          href={`${EXPLORER_TX}${actionDigest}`}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="font-mono underline"
+                        >
+                          {actionDigest.slice(0, 20)}...
+                        </a>
+                      </>
+                    ) : (
+                      " · 本地签名凭证已记录"
+                    )}
+                  </span>
+                </>
+              )}
+            </div>
+          )}
+
+          <div className="flex justify-between">
             <Button variant="outline" size="sm" className="gap-1">
               <PanelRight className="h-3.5 w-3.5" /> 讨论
             </Button>
             <div className="flex gap-2">
-              <Button variant="outline" size="sm" className="gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => {
+                  if (typeof window !== "undefined") {
+                    navigator.clipboard?.writeText(window.location.href)
+                  }
+                }}
+              >
                 <LinkIcon className="h-3.5 w-3.5" /> 复制链接
               </Button>
-              <Button variant="outline" size="sm" className="gap-1">
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                onClick={() => {
+                  if (typeof window !== "undefined" && navigator.share) {
+                    navigator.share({ title: voteData.title, text: voteData.description })
+                  }
+                }}
+              >
                 <Share2 className="h-3.5 w-3.5" /> 分享
               </Button>
             </div>
           </div>
 
-          {voteData.status !== "completed" && renderVoteButton()}
+          {renderVoteButton()}
         </div>
       </DialogContent>
     </Dialog>

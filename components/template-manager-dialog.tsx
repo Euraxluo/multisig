@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import {
   Dialog,
   DialogContent,
@@ -50,52 +50,62 @@ interface TransactionTemplate {
 }
 
 export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDialogProps) {
-  const [templates, setTemplates] = useState<TransactionTemplate[]>([
+  const DEFAULT_TEMPLATES: TransactionTemplate[] = [
     {
       id: "template-1",
-      name: "Monthly Salary Payment",
+      name: "每月团队津贴发放",
       type: "transfer",
-      description: "Transfer 500 USDC to team members",
+      description: "向核心贡献者划拨 50 SUI 津贴",
       createdAt: "2025-02-15T12:00:00Z",
       lastUsed: "2025-03-15T12:00:00Z",
-      recipient: "0x1234...5678",
-      amount: "500",
-      token: "USDC",
+      recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+      amount: "50",
+      token: "SUI",
     },
     {
       id: "template-2",
-      name: "Staking Rewards",
+      name: "生态流动性金库充值",
       type: "contract",
-      description: "Claim staking rewards from DeFi protocol",
+      description: "向流动性池注入做市资金",
       createdAt: "2025-02-10T12:00:00Z",
       lastUsed: "2025-03-10T12:00:00Z",
-      contract: "0xabcd...efgh",
-      function: "claimRewards",
+      contract: "0x83fb...5a36",
+      function: "deposit",
       args: '{"amount": "100"}',
     },
     {
       id: "template-3",
-      name: "Token Swap",
+      name: "SUI/USDC 快捷对冲",
       type: "contract",
-      description: "Swap APT for USDC on DEX",
+      description: "在 DeepBook / Cetus 执行稳定币兑换",
       createdAt: "2025-02-05T12:00:00Z",
-      contract: "0x9876...5432",
+      contract: "0x0000...0002",
       function: "swap",
-      args: '{"tokenIn": "APT", "tokenOut": "USDC", "amountIn": "10"}',
+      args: '{"tokenIn": "SUI", "tokenOut": "USDC", "amountIn": "10"}',
     },
-    {
-      id: "template-4",
-      name: "Batch Payment",
-      type: "batch",
-      description: "Batch payment to multiple recipients",
-      createdAt: "2025-02-01T12:00:00Z",
-      lastUsed: "2025-03-01T12:00:00Z",
-      batchItems: [
-        { recipient: "0x1111...2222", amount: "100", token: "USDC" },
-        { recipient: "0x3333...4444", amount: "200", token: "USDC" },
-      ],
-    },
-  ])
+  ]
+
+  const [templates, setTemplates] = useState<TransactionTemplate[]>(DEFAULT_TEMPLATES)
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("sui_payment_templates")
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTemplates(parsed)
+        }
+      }
+    } catch {}
+  }, [])
+
+  const persistTemplates = (newTemplates: TransactionTemplate[]) => {
+    setTemplates(newTemplates)
+    try {
+      localStorage.setItem("sui_payment_templates", JSON.stringify(newTemplates))
+      window.dispatchEvent(new CustomEvent("sui-templates-updated", { detail: newTemplates }))
+    } catch {}
+  }
   const [searchTerm, setSearchTerm] = useState("")
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null)
   const [isEditMode, setIsEditMode] = useState(false)
@@ -235,7 +245,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
     })
   }
 
-  const tokens = ["APT", "USDC", "USDT"]
+  const tokens = ["SUI", "USDC", "USDT"]
 
   return (
     <>

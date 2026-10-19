@@ -39,7 +39,7 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
     deadline: "2025-04-01",
     progress: 50,
     status: "pending",
-    acceptedTokens: ["USDC", "USDT", "APT"],
+    acceptedTokens: ["USDC", "USDT", "SUI"],
     color: "from-blue-500 to-cyan-400",
   }
 

@@ -30,9 +30,10 @@ import {
 import { motion, AnimatePresence } from "framer-motion"
 import { isValidSuiAddress, normalizeSuiAddress, fromBase58, fromHex } from "@mysten/sui/utils"
 import { Ed25519PublicKey } from "@mysten/sui/keypairs/ed25519"
+import { fetchDevAccounts, switchDevAccount, DevKeystoreAccount } from "@/lib/dev-keystore"
 
 export interface UserAccount {
-  type: "zklogin" | "passkey" | "wallet"
+  type: "zklogin" | "passkey" | "wallet" | "keystore"
   provider?: string
   identifier: string // email or device name
   address: string
@@ -256,7 +257,7 @@ export function ConnectWalletDialog({
   currentUser,
   onLogout,
 }: ConnectWalletDialogProps) {
-  const [activeTab, setActiveTab] = useState<"zklogin" | "passkey" | "wallet">("wallet")
+  const [activeTab, setActiveTab] = useState<"zklogin" | "passkey" | "wallet" | "keystore">("wallet")
   const [isProcessing, setIsProcessing] = useState(false)
   const [processStep, setProcessStep] = useState<string>("")
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
@@ -265,6 +266,38 @@ export function ConnectWalletDialog({
   const [showJwtInput, setShowJwtInput] = useState(false)
   const [googleClientId, setGoogleClientId] = useState("")
   const [showConfigClientId, setShowConfigClientId] = useState(false)
+  const [devAccounts, setDevAccounts] = useState<DevKeystoreAccount[]>([])
+  const [isLoadingDevKeys, setIsLoadingDevKeys] = useState(false)
+
+  const loadDevKeystore = async () => {
+    setIsLoadingDevKeys(true)
+    try {
+      const accs = await fetchDevAccounts()
+      setDevAccounts(accs)
+    } finally {
+      setIsLoadingDevKeys(false)
+    }
+  }
+
+  useEffect(() => {
+    if (open) {
+      loadDevKeystore()
+    }
+  }, [open])
+
+  const handleSelectDevAccount = (acc: DevKeystoreAccount) => {
+    switchDevAccount(acc)
+    const userAcc: UserAccount = {
+      type: "keystore",
+      provider: "Dev Keystore",
+      identifier: acc.name,
+      address: acc.address,
+      authMethodLabel: `本机私钥 · ${acc.schema}`,
+    }
+    setInternalAccount(userAcc)
+    onLoginSuccess?.(userAcc)
+    onOpenChange(false)
+  }
 
   // 动态扫描到的标准扩展钱包列表 (Sui Wallet Standard)
   const [installedWallets, setInstalledWallets] = useState<any[]>([])
@@ -842,27 +875,34 @@ export function ConnectWalletDialog({
               }}
               className="w-full"
             >
-              <TabsList className="grid grid-cols-3 w-full h-9 bg-muted/60 p-0.5 rounded-xl">
+              <TabsList className="grid grid-cols-4 w-full h-9 bg-muted/60 p-0.5 rounded-xl">
                 <TabsTrigger
                   id="tab-wallet"
                   value="wallet"
-                  className="text-xs data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
+                  className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
                 >
                   扩展钱包
                 </TabsTrigger>
                 <TabsTrigger
                   id="tab-passkey"
                   value="passkey"
-                  className="text-xs data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
+                  className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
                 >
-                  面容 / 指纹
+                  面容指纹
                 </TabsTrigger>
                 <TabsTrigger
                   id="tab-zklogin"
                   value="zklogin"
-                  className="text-xs data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
+                  className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg"
                 >
                   Google
+                </TabsTrigger>
+                <TabsTrigger
+                  id="tab-keystore"
+                  value="keystore"
+                  className="text-[11px] data-[state=active]:bg-background data-[state=active]:shadow-sm rounded-lg font-medium"
+                >
+                  Keystore
                 </TabsTrigger>
               </TabsList>
 
@@ -1037,6 +1077,96 @@ export function ConnectWalletDialog({
                         </Button>
                       </div>
                     </div>
+                  )}
+                </div>
+              </TabsContent>
+
+              {/* 4. 本机 Keystore / 多角色模拟 (Agent 自动化) */}
+              <TabsContent value="keystore" className="mt-3 space-y-3">
+                <div className="p-2.5 rounded-xl bg-gradient-to-r from-purple-500/10 to-primary/10 border border-purple-500/30 flex items-center justify-between">
+                  <div className="pr-2">
+                    <p className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                      <KeyRound className="w-3.5 h-3.5 text-primary" />
+                      本机 Keystore 多角色模拟
+                    </p>
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      读取本机 ~/.sui/sui_config/sui.keystore，可免插件直接签名与切换多成员身份测试。
+                    </p>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={isLoadingDevKeys}
+                    onClick={loadDevKeystore}
+                    className="h-7 text-[10px] px-2 shrink-0 gap-1 border-primary/30 text-primary hover:bg-primary/10"
+                    title="重新扫描"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isLoadingDevKeys ? "animate-spin" : ""}`} />
+                    刷新
+                  </Button>
+                </div>
+
+                <div className="space-y-1.5 max-h-[260px] overflow-y-auto pr-0.5">
+                  {devAccounts.length === 0 ? (
+                    <div className="p-4 text-center text-xs text-muted-foreground">
+                      {isLoadingDevKeys ? "正在载入本机私钥..." : "未找到本地 Keystore 账户"}
+                    </div>
+                  ) : (
+                    devAccounts.map((acc, idx) => {
+                      const isCurrent = activeUser?.address === acc.address
+                      return (
+                        <div
+                          key={`${acc.address}-${idx}`}
+                          className={`p-2.5 rounded-xl border transition-all flex items-center justify-between text-xs ${
+                            isCurrent
+                              ? "bg-primary/10 border-primary/40 shadow-sm"
+                              : "border-border/70 hover:bg-muted/40"
+                          }`}
+                        >
+                          <div className="min-w-0 pr-2">
+                            <div className="flex items-center gap-1.5">
+                              <span
+                                className={`w-2 h-2 rounded-full shrink-0 ${
+                                  isCurrent ? "bg-emerald-500 animate-pulse" : "bg-muted-foreground/50"
+                                }`}
+                              />
+                              <p className="font-semibold text-foreground truncate">{acc.name}</p>
+                              <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 shrink-0 font-mono">
+                                {acc.schema}
+                              </Badge>
+                            </div>
+                            <p className="font-mono text-[10px] text-muted-foreground truncate mt-0.5">
+                              {acc.address.slice(0, 10)}...{acc.address.slice(-6)}
+                            </p>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => handleCopyAddress(acc.address)}
+                              className="h-6 w-6 rounded-md"
+                              title="复制地址"
+                            >
+                              <Copy className="w-3 h-3 text-muted-foreground" />
+                            </Button>
+                            {isCurrent ? (
+                              <Badge className="bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30 text-[10px] px-2 py-0.5">
+                                活跃中
+                              </Badge>
+                            ) : (
+                              <Button
+                                size="sm"
+                                onClick={() => handleSelectDevAccount(acc)}
+                                className="h-6 text-[10px] px-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-lg"
+                              >
+                                切换登录
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      )
+                    })
                   )}
                 </div>
               </TabsContent>

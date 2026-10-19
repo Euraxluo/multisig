@@ -3,7 +3,8 @@
 import { useState } from "react"
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog"
 import { Button } from "@/components/ui/button"
-import { FileText, Download, Copy, Check } from "lucide-react"
+import { FileText, Download, Copy, Check, ExternalLink } from "lucide-react"
+import { downloadFromWalrus, WALRUS_AGGREGATOR_URL } from "@/lib/walrus-client"
 
 interface WalrusBlobDialogProps {
   open: boolean
@@ -23,28 +24,22 @@ export function WalrusBlobDialog({ open, onOpenChange, blobId }: WalrusBlobDialo
     setTimeout(() => setCopied(false), 2000)
   }
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     setIsDownloading(true)
-    const content = `=== 治理规范文档 ===
-文件编号: ${blobId}
+    try {
+      const { data, filename } = await downloadFromWalrus(blobId)
+      const downloadName = filename || `walrus_doc_${blobId.slice(0, 10)}.bin`
 
-一、概述
-本决议记录群组治理规则更新与成员权益配置。
-
-二、主要条款
-1. 组织规则：保持全体成员共识与多签权重恒定。
-2. 额度管理：日常支出单笔不超过限额，大额需发起多签审批。
-3. 存储备份：群内所有关键记录与文档均永久安全备份。
-`
-    const element = document.createElement("a")
-    const file = new Blob([content], { type: "text/plain" })
-    element.href = URL.createObjectURL(file)
-    element.download = `治理规范文档_${blobId.slice(0, 8)}.txt`
-    document.body.appendChild(element)
-    element.click()
-    document.body.removeChild(element)
-
-    setTimeout(() => setIsDownloading(false), 1000)
+      const element = document.createElement("a")
+      element.href = URL.createObjectURL(data)
+      element.download = downloadName
+      document.body.appendChild(element)
+      element.click()
+      document.body.removeChild(element)
+      URL.revokeObjectURL(element.href)
+    } finally {
+      setTimeout(() => setIsDownloading(false), 600)
+    }
   }
 
   return (
@@ -98,6 +93,15 @@ export function WalrusBlobDialog({ open, onOpenChange, blobId }: WalrusBlobDialo
             </Button>
 
             <div className="flex gap-2">
+              <a
+                href={`${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center justify-center h-8 px-2.5 text-xs font-medium rounded-md border border-input bg-background hover:bg-accent hover:text-accent-foreground gap-1"
+              >
+                <ExternalLink className="w-3.5 h-3.5 text-muted-foreground" />
+                <span>节点查看</span>
+              </a>
               <Button
                 size="sm"
                 onClick={handleDownload}

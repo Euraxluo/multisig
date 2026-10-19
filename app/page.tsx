@@ -8,6 +8,7 @@ import Profile from "@/components/profile"
 import AgentGuard from "@/components/agent-guard"
 import { MobileNavbar } from "@/components/mobile-navbar"
 import { motion, AnimatePresence } from "framer-motion"
+import { startOnlineIndexer, stopOnlineIndexer } from "@/lib/online-indexer"
 
 export default function Home() {
   const [activeTab, setActiveTab] = useState("dashboard")
@@ -15,6 +16,10 @@ export default function Home() {
 
   useEffect(() => {
     setMounted(true)
+    startOnlineIndexer(4000)
+    return () => {
+      stopOnlineIndexer()
+    }
   }, [])
 
   if (!mounted) return null

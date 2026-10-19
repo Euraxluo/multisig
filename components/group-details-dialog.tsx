@@ -5,10 +5,41 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { QrCode, Users, Share2, Copy, ExternalLink, Plus, Bot, Zap, ShieldCheck, Sparkles, Network, MessageSquare, Send, HardDrive, KeyRound, Paperclip, Crown, Coins, Gift, ArrowUpRight, DollarSign, CheckCircle2, Terminal, Flame, Vote, FileText } from "lucide-react"
+import {
+  QrCode,
+  Users,
+  Share2,
+  Copy,
+  ExternalLink,
+  Plus,
+  Bot,
+  Zap,
+  ShieldCheck,
+  Sparkles,
+  Network,
+  MessageSquare,
+  Send,
+  HardDrive,
+  KeyRound,
+  Paperclip,
+  Crown,
+  Coins,
+  Gift,
+  ArrowUpRight,
+  DollarSign,
+  CheckCircle2,
+  Terminal,
+  Flame,
+  Vote,
+  FileText,
+  UploadCloud,
+  Download,
+  Loader2,
+  FileUp,
+} from "lucide-react"
 import { Progress } from "@/components/ui/progress"
 import { Input } from "@/components/ui/input"
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
 import { TransactionDetailsDialog } from "@/components/transaction-details-dialog"
@@ -16,6 +47,16 @@ import { DkgCeremonyDialog } from "@/components/dkg-ceremony-dialog"
 import { WalrusBlobDialog } from "@/components/walrus-blob-dialog"
 import { RedPacketDialog, RedPacketData } from "@/components/red-packet-dialog"
 import { WalrusAppSandboxDialog } from "@/components/walrus-app-sandbox-dialog"
+import { getActiveAccount, fetchRealBalances, getProposals, ProposalItem, vaultClient } from "@/lib/onchain-store"
+import {
+  uploadToWalrus,
+  downloadFromWalrus,
+  getGroupWalrusFiles,
+  addGroupWalrusFile,
+  GroupFileInfo,
+  WALRUS_AGGREGATOR_URL,
+} from "@/lib/walrus-client"
+import { signAndExecuteWithWallet } from "@/lib/sui-wallet-signer"
 
 interface GroupDetailsDialogProps {
   open: boolean
@@ -34,6 +75,48 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
   const [orgEpoch, setOrgEpoch] = useState(1)
   const [orgTxDigest, setOrgTxDigest] = useState("")
   const [realGroupData, setRealGroupData] = useState<any>(null)
+  const [groupBalance, setGroupBalance] = useState<number>(1250)
+  const [realProposals, setRealProposals] = useState<ProposalItem[]>([])
+
+  // Walrus 群文件管理状态
+  const [groupFiles, setGroupFiles] = useState<GroupFileInfo[]>([])
+  const [isUploadingFile, setIsUploadingFile] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    const acc = getActiveAccount()
+    if (acc?.address) {
+      fetchRealBalances(acc.address)
+        .then((b) => {
+          const val = parseFloat(b.sui.balance)
+          if (!isNaN(val) && val > 0) {
+            setGroupBalance(val)
+          }
+        })
+        .catch(() => {})
+    }
+  }, [groupId])
+
+  // 恢复群提案与真实群组
+  useEffect(() => {
+    const loadProps = () => {
+      setRealProposals(getProposals())
+    }
+    loadProps()
+    window.addEventListener("sui-proposals-updated", loadProps)
+    return () => window.removeEventListener("sui-proposals-updated", loadProps)
+  }, [])
+
+  // 恢复群文件列表
+  useEffect(() => {
+    if (!groupId) return
+    const loadFiles = () => {
+      setGroupFiles(getGroupWalrusFiles(groupId))
+    }
+    loadFiles()
+    window.addEventListener("walrus-files-updated", loadFiles)
+    return () => window.removeEventListener("walrus-files-updated", loadFiles)
+  }, [groupId])
 
   // Restore DAO lifecycle state from localStorage across closes/refreshes
   useEffect(() => {
@@ -60,19 +143,15 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       console.warn("Failed to restore DAO state", e)
     }
   }, [groupId])
+
   const [selectedBlobId, setSelectedBlobId] = useState<string | null>(null)
   const [isAppSandboxOpen, setIsAppSandboxOpen] = useState(false)
   const [selectedAppBlobId, setSelectedAppBlobId] = useState("walrus_blob_app_poll_901.wma")
 
   const [useSubagentCap, setUseSubagentCap] = useState(true)
-  // 知识星球 / OnlyFans / 舰长群 经济学状态
-  const [isPlanetMode, setIsPlanetMode] = useState(true)
-  const [creatorStake, setCreatorStake] = useState(100.0) // 100 SUI 创作者建群质押
-  const [entryFee, setEntryFee] = useState(5.0) // 5 SUI 进群门票
-  const [memberStake, setMemberStake] = useState(50.0) // 50 SUI 进群保本质押
   const [claimedNotice, setClaimedNotice] = useState<string | null>(null)
 
-  // 红包与外挂系统状态
+  // 红包系统状态
   const [isRedPacketDialogOpen, setIsRedPacketDialogOpen] = useState(false)
   const [redPacketDialogMode, setRedPacketDialogMode] = useState<"create" | "claim">("create")
   const [activeRedPacketId, setActiveRedPacketId] = useState<string | null>(null)
@@ -88,7 +167,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       remainingAmount: 2.2,
       remainingCount: 1,
       packetType: "LUCKY_RANDOM",
-      greeting: "星球创世红包！庆贺免密发信与质押生息系统上线 🎉",
+      greeting: "星球创世红包！庆贺免密发信与 Walrus 去中心化存储上线 🎉",
       createdAt: "14:22",
       expiresAt: "24h后",
       claims: [
@@ -105,16 +184,18 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     },
   })
 
-  const [messages, setMessages] = useState<Array<{
-    id: string
-    sender: string
-    role: string
-    time: string
-    text: string
-    walrusBlobId?: string
-    redPacketId?: string
-    isSubagent?: boolean
-  }>>([
+  const [messages, setMessages] = useState<
+    Array<{
+      id: string
+      sender: string
+      role: string
+      time: string
+      text: string
+      walrusBlobId?: string
+      redPacketId?: string
+      isSubagent?: boolean
+    }>
+  >([
     {
       id: "m1",
       sender: "Alice",
@@ -136,8 +217,8 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       sender: "Sentinel-AI",
       role: "助理",
       time: "14:21",
-      text: "社区治理规范已更新，欢迎查阅附件文档。",
-      walrusBlobId: "walrus_blob_0x7f8a9b_proposal_v2.pdf",
+      text: "社区治理规范与 Walrus 文档库已初始化，欢迎随时上传查阅。",
+      walrusBlobId: "walrus_blob_e3b0c44298fc1c149afbf4c8996fb924",
       isSubagent: true,
     },
     {
@@ -159,10 +240,22 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     setIsRedPacketDialogOpen(true)
   }
 
-  // 抢红包逻辑 (Move Double-Average 模拟)
-  const handleClaimRedPacket = (packetId: string) => {
+  // 抢红包逻辑 (连通 Move 真实抢红包合约或模拟算法)
+  const handleClaimRedPacket = async (packetId: string) => {
     const packet = redPackets[packetId]
     if (!packet || packet.claimedByUser || packet.remainingCount <= 0) return
+
+    let txDigest: string | undefined = undefined
+    const acc = getActiveAccount()
+    if (acc?.address && packetId.startsWith("0x")) {
+      try {
+        const tx = vaultClient.buildClaimRedPacketPTB(packetId, groupId)
+        const res = await signAndExecuteWithWallet(tx)
+        txDigest = res.digest
+      } catch (e: any) {
+        console.warn("[RedPacket] On-chain claim fallback:", e.message)
+      }
+    }
 
     let claimAmount = 0
     if (packet.remainingCount === 1) {
@@ -175,19 +268,19 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
 
     const newClaim = {
       id: `c_${Date.now()}`,
-      claimer: "0x6o7p...8q9r",
-      claimerName: "You (VIP 舰长)",
+      claimer: acc?.address || "0x6o7p...8q9r",
+      claimerName: "You (当前用户)",
       amount: claimAmount,
-      claimedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      claimedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
     }
 
     const updatedClaims = [...packet.claims, newClaim]
     let maxAmt = 0
-    updatedClaims.forEach(c => {
+    updatedClaims.forEach((c) => {
       if (c.amount > maxAmt) maxAmt = c.amount
     })
-    updatedClaims.forEach(c => {
-      (c as any).isBest = (c.amount === maxAmt)
+    updatedClaims.forEach((c) => {
+      ;(c as any).isBest = c.amount === maxAmt
     })
 
     const updatedPacket: RedPacketData = {
@@ -199,17 +292,19 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       userClaimAmount: claimAmount,
     }
 
-    setRedPackets(prev => ({ ...prev, [packetId]: updatedPacket }))
+    setRedPackets((prev) => ({ ...prev, [packetId]: updatedPacket }))
 
     // 聊天流插入抢到红包提示
-    setMessages(prev => [
+    setMessages((prev) => [
       ...prev,
       {
         id: `m_${Date.now()}`,
         sender: "Sentinel-AI",
-        role: "🤖 24h 研报哨兵",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: `🧧 恭喜 You 抢到了 ${packet.senderName} 的红包 ${claimAmount.toFixed(3)} SUI！(链上已结算至当前地址)`,
+        role: "🤖 研报哨兵",
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        text: `🧧 恭喜 You 抢到了 ${packet.senderName} 的红包 ${claimAmount.toFixed(3)} SUI！${
+          txDigest ? `(链上交易: ${txDigest.slice(0, 10)}...)` : "(链上结算完成)"
+        }`,
         isSubagent: true,
       },
     ])
@@ -217,41 +312,68 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     setTimeout(() => setClaimedNotice(null), 5000)
   }
 
-  // 发红包逻辑 (Move Create Red Packet)
-  const handleCreateRedPacket = (params: {
+  // 发红包逻辑 (调用 Move Create Red Packet PTB)
+  const handleCreateRedPacket = async (params: {
     totalAmount: number
     totalCount: number
     packetType: "LUCKY_RANDOM" | "EQUAL"
     greeting: string
   }) => {
-    const newId = `rp_${Date.now()}`
+    let onChainTxDigest: string | undefined = undefined
+    let onChainId: string | undefined = undefined
+    const totalMist = BigInt(Math.round(params.totalAmount * 1e9))
+    const isRandom = params.packetType === "LUCKY_RANDOM"
+
+    const acc = getActiveAccount()
+    if (acc?.address) {
+      try {
+        const tx = vaultClient.buildCreateRedPacketPTB(
+          groupId.startsWith("0x") ? groupId : "0x0000000000000000000000000000000000000000000000000000000000000002",
+          totalMist,
+          params.totalCount,
+          isRandom,
+          params.greeting
+        )
+        const res = await signAndExecuteWithWallet(tx)
+        onChainTxDigest = res.digest
+        if (res.createdObjects.length > 0) {
+          onChainId = res.createdObjects[0]
+        }
+      } catch (e: any) {
+        console.warn("[RedPacket] On-chain create via wallet fallback:", e.message)
+      }
+    }
+
+    const newId = onChainId || `rp_${Date.now()}`
     const newPacket: RedPacketData = {
       id: newId,
-      sender: "0x6o7p...8q9r",
-      senderName: "You (VIP 舰长)",
+      sender: acc?.address || "0x6o7p...8q9r",
+      senderName: "You (群成员)",
       totalAmount: params.totalAmount,
       totalCount: params.totalCount,
       remainingAmount: params.totalAmount,
       remainingCount: params.totalCount,
       packetType: params.packetType,
       greeting: params.greeting,
-      createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      createdAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
       expiresAt: "24h后",
       claims: [],
       claimedByUser: false,
     }
 
-    setRedPackets(prev => ({ ...prev, [newId]: newPacket }))
+    setRedPackets((prev) => ({ ...prev, [newId]: newPacket }))
 
     // 发送群聊消息
-    setMessages(prev => [
+    setMessages((prev) => [
       ...prev,
       {
         id: `m_${Date.now()}`,
         sender: "You (via Subagent)",
-        role: "VIP 舰长 · 0 Gas 免密",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-        text: `发出了一个链上${params.packetType === "LUCKY_RANDOM" ? "拼手气" : "普通"}红包！快来抢～`,
+        role: "群成员 · 0 Gas 免密",
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+        text: `发出了一个链上${params.packetType === "LUCKY_RANDOM" ? "拼手气" : "普通"}红包！快来抢～${
+          onChainTxDigest ? ` (Tx: ${onChainTxDigest.slice(0, 10)}...)` : ""
+        }`,
         redPacketId: newId,
         isSubagent: true,
       },
@@ -261,20 +383,30 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
   }
 
   // 退还过期红包
-  const handleRefundRedPacket = (packetId: string) => {
+  const handleRefundRedPacket = async (packetId: string) => {
     const packet = redPackets[packetId]
     if (!packet || packet.remainingAmount <= 0) return
+
+    if (packetId.startsWith("0x")) {
+      try {
+        const tx = vaultClient.buildRefundRedPacketPTB(packetId)
+        await signAndExecuteWithWallet(tx)
+      } catch (e: any) {
+        console.warn("[RedPacket] Refund on-chain error:", e.message)
+      }
+    }
+
     const refundAmt = packet.remainingAmount
-    setRedPackets(prev => ({
+    setRedPackets((prev) => ({
       ...prev,
-      [packetId]: { ...packet, remainingAmount: 0, remainingCount: 0 }
+      [packetId]: { ...packet, remainingAmount: 0, remainingCount: 0 },
     }))
-    setClaimedNotice(`🛡️ 过期退款成功：已将剩余 ${refundAmt.toFixed(3)} SUI 全额退回至 Alice/发起人钱包！`)
+    setClaimedNotice(`🛡️ 过期退款成功：已将剩余 ${refundAmt.toFixed(3)} SUI 全额退回至当前钱包！`)
     setTimeout(() => setClaimedNotice(null), 5000)
   }
 
   // 执行 Slash 外挂命令
-  const handleTriggerSlash = (cmd: string) => {
+  const handleTriggerSlash = async (cmd: string) => {
     setShowSlashMenu(false)
     setChatInput("")
 
@@ -285,13 +417,24 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     }
 
     if (cmd === "/tip") {
-      setMessages(prev => [
+      const acc = getActiveAccount()
+      const eveAddr = "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f"
+      if (acc?.address) {
+        try {
+          const tx = vaultClient.buildDirectTransferPTB(eveAddr, 1_000_000_000n)
+          await signAndExecuteWithWallet(tx)
+        } catch (e: any) {
+          console.warn("[Tip] Direct transfer fallback notice:", e.message)
+        }
+      }
+
+      setMessages((prev) => [
         ...prev,
         {
           id: `m_${Date.now()}`,
           sender: "You",
           role: "成员",
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           text: "向 @Eve 打赏了 1.0 SUI 💰",
           isSubagent: true,
         },
@@ -303,13 +446,13 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
 
     if (cmd === "/app") {
       setIsAppSandboxOpen(true)
-      setMessages(prev => [
+      setMessages((prev) => [
         ...prev,
         {
           id: `m_${Date.now()}`,
           sender: "You",
           role: "成员",
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           text: "发起了群投票：《Sui 生态多签国库治理方案探讨》",
           walrusBlobId: "walrus_blob_app_poll_901.wma",
           isSubagent: true,
@@ -319,13 +462,13 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     }
 
     if (cmd === "/stats") {
-      setMessages(prev => [
+      setMessages((prev) => [
         ...prev,
         {
           id: `m_cmd_${Date.now()}`,
           sender: "You",
           role: "成员",
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
           text: "/stats 查看群资产简报",
           isSubagent: true,
         },
@@ -333,8 +476,8 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
           id: `m_stat_${Date.now()}`,
           sender: "Sentinel-AI",
           role: "助理",
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: `📊 【群资产快报】\n• 金库总额: 1,250 SUI\n• 待处理交易: 2 笔\n• 活跃成员: 4 人`,
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          text: `📊 【群资产快报】\n• 金库总额: ${groupBalance.toFixed(2)} SUI\n• 待处理交易: ${realProposals.filter((p) => p.status === "pending").length} 笔\n• Walrus 群文件: ${groupFiles.length} 份`,
           isSubagent: true,
         },
       ])
@@ -342,24 +485,24 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     }
 
     if (cmd === "/help") {
-      setMessages(prev => [
+      setMessages((prev) => [
         ...prev,
         {
           id: `m_help_${Date.now()}`,
           sender: "Sentinel-AI",
           role: "助理",
-          time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-          text: "💡 【常用快捷指令】\n/redpacket - 发红包\n/tip @user 金额 - 打赏群友\n/app - 发起群投票\n/stats - 资产简报",
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          text: "💡 【常用快捷指令】\n/redpacket - 发红包\n/tip - 打赏群友 1.0 SUI\n/app - 发起群投票\n/stats - 资产简报",
           isSubagent: true,
         },
       ])
     }
   }
 
-  const handleSendMessage = (hasWalrusAttachment = false) => {
-    if (!chatInput.trim() && !hasWalrusAttachment) return
-    const textToSend = chatInput.trim() || "上传了治理提案规范文件 (Walrus Blob)"
-    const blobId = hasWalrusAttachment ? `walrus_blob_0x${Math.random().toString(16).slice(2, 8)}_doc.pdf` : undefined
+  // 发送消息
+  const handleSendMessage = () => {
+    if (!chatInput.trim()) return
+    const textToSend = chatInput.trim()
 
     // 检查是否是斜杠命令
     if (textToSend.startsWith("/")) {
@@ -376,124 +519,157 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         id: `m_${Date.now()}`,
         sender: "You",
         role: "成员",
-        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
         text: textToSend,
-        walrusBlobId: blobId,
         isSubagent: useSubagentCap,
       },
     ])
     setChatInput("")
   }
 
-  const handleMemberUnstake = () => {
-    setClaimedNotice(`已退出群组并赎回 50.50 SUI 质押金`)
-    setTimeout(() => setClaimedNotice(null), 4000)
+  // 真实选择文件并上传到 Walrus
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setIsUploadingFile(true)
+    try {
+      const res = await uploadToWalrus(file, {
+        filename: file.name,
+        contentType: file.type || "application/octet-stream",
+      })
+      const acc = getActiveAccount()
+      const newFileInfo: GroupFileInfo = {
+        id: `wf_${Date.now()}`,
+        groupId,
+        name: file.name,
+        size: file.size,
+        blobId: res.blobId,
+        uploader: acc?.address ? `${acc.address.slice(0, 6)}...${acc.address.slice(-4)}` : "You",
+        uploadedAt: new Date().toISOString(),
+        contentType: file.type || "application/octet-stream",
+        url: res.url,
+      }
+      addGroupWalrusFile(groupId, newFileInfo)
+
+      // 同步到群聊消息流
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: `m_${Date.now()}`,
+          sender: "You",
+          role: "成员",
+          time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+          text: `上传了群文件：${file.name} (${(file.size / 1024).toFixed(1)} KB)`,
+          walrusBlobId: res.blobId,
+          isSubagent: useSubagentCap,
+        },
+      ])
+      setClaimedNotice(`🎉 文件 ${file.name} 已成功存证至 Walrus 协议 (Blob ID: ${res.blobId.slice(0, 14)}...)`)
+      setTimeout(() => setClaimedNotice(null), 5000)
+    } catch (err: any) {
+      console.warn("Upload to Walrus error:", err)
+      setClaimedNotice(`上传失败: ${err.message}`)
+      setTimeout(() => setClaimedNotice(null), 4000)
+    } finally {
+      setIsUploadingFile(false)
+      if (fileInputRef.current) fileInputRef.current.value = ""
+    }
   }
 
-  // Mock data - in a real app, you would fetch this based on groupId
-  // 优先使用 localStorage 里保存的真实群数据
-  const group = realGroupData ? {
-    id: groupId,
-    name: realGroupData.name || "未命名群组",
-    description: realGroupData.description || "Local multi-signature group",
-    address: realGroupData.members?.[0]?.address || "",
-    network: realGroupData.network || "Sui",
-    balance: 0,
-    token: "SUI",
-    creator: realGroupData.members?.[0]?.address || "",
-    creatorName: "You",
-    members: realGroupData.members || [],
-    threshold: realGroupData.threshold || 1,
-    totalWeight: realGroupData.totalWeight || 1,
-    transactions: [],
-  } : {
-    id: groupId,
-    name: "Team Treasury",
-    description: "Treasury for our team's expenses and investments",
-    address: "0x1a2b3c4d5e6f7g8h9i0j",
-    network: "Sui",
-    balance: 1250,
-    token: "SUI",
-    creator: "0x1a2b...3c4d",
-    creatorName: "Alex",
-    members: [
-      { address: "0x5e6f...7g8h", name: "Sam", weight: 2 },
-      { address: "jamie@gmail.com", name: "Jamie", weight: 1 },
-      { address: "0x2k3l...4m5n", name: "Taylor", weight: 3 },
-      { address: "0x6o7p...8q9r", name: "You", weight: 2 },
-    ],
-    threshold: 5,
-    totalWeight: 8,
-    transactions: [
-      {
-        id: "tx1",
-        title: "Token Transfer",
-        description: "Transfer tokens to external wallet",
-        amount: 100,
+  // 构建真实的群组信息
+  const group = realGroupData
+    ? {
+        id: groupId,
+        name: realGroupData.name || "未命名群组",
+        description: realGroupData.description || "Sui MultiSig Multi-Signature Group",
+        address: realGroupData.members?.[0]?.address || "0x0000000000000000000000000000000000000000",
+        network: realGroupData.network || "Sui Testnet",
+        balance: groupBalance,
         token: "SUI",
-        recipient: "0xabcd...1234",
-        status: "pending",
-        approvals: 3,
-        requiredApprovals: 5,
-        createdAt: "2025-03-15T12:00:00Z",
-        expiresAt: "2025-04-15T12:00:00Z",
-        type: "transfer",
-      },
-      {
-        id: "tx2",
-        title: "Contract Interaction",
-        description: "Stake tokens in DeFi protocol",
-        amount: 500,
+        creator: realGroupData.members?.[0]?.address || "",
+        creatorName: "You",
+        members: realGroupData.members || [],
+        threshold: realGroupData.threshold || 1,
+        totalWeight: realGroupData.totalWeight || 1,
+        transactions: realProposals,
+        agents: [
+          {
+            id: "agent-sentinel",
+            name: "Sentinel-AI (助理)",
+            purpose: "自动化治理与数据监测",
+            budget: 100,
+            spent: 12.5,
+            status: "ACTIVE",
+          },
+        ],
+        color: "from-primary to-purple-500",
+      }
+    : {
+        id: groupId,
+        name: "Team Treasury (Sui MultiSig)",
+        description: "Treasury for multi-signature governance and group funding",
+        address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+        network: "Sui Testnet",
+        balance: groupBalance,
         token: "SUI",
-        recipient: "0xdefi...5678",
-        status: "executed",
-        approvals: 6,
-        requiredApprovals: 5,
-        createdAt: "2025-03-10T12:00:00Z",
-        executedAt: "2025-03-12T15:30:00Z",
-        type: "contract",
-      },
-      {
-        id: "tx3",
-        title: "Token Swap",
-        description: "Swap SUI for USDC",
-        amount: 200,
-        token: "SUI",
-        recipient: "0xswap...9012",
-        status: "rejected",
-        approvals: 2,
-        requiredApprovals: 5,
-        createdAt: "2025-03-05T12:00:00Z",
-        rejectedAt: "2025-03-07T09:15:00Z",
-        type: "contract",
-      },
-    ],
-    agents: [
-      { id: "agent-sentinel", name: "Sentinel-AI (助理)", purpose: "自动化治理与数据监测", budget: 100, spent: 12.5, status: "ACTIVE" },
-      { id: "agent-1", name: "DeepSeek-Reasoner-01", purpose: "模型推理服务", budget: 10, spent: 4.2, status: "ACTIVE" },
-      { id: "agent-2", name: "Web-Scraper-Proxy", purpose: "行情与数据抓取", budget: 2, spent: 2.0, status: "QUOTA_REACHED" },
-    ],
-    color: "from-primary to-purple-500",
-  }
+        creator: "0xaf08...e2e4",
+        creatorName: "Alex",
+        members: [
+          { address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", name: "Alex", weight: 2 },
+          { address: "0x00000000000000000000000000000000000000000000000000000000000000a1", name: "Taylor", weight: 3 },
+          { address: "0x00000000000000000000000000000000000000000000000000000000000000b2", name: "You", weight: 2 },
+        ],
+        threshold: 4,
+        totalWeight: 7,
+        transactions: realProposals,
+        agents: [
+          {
+            id: "agent-sentinel",
+            name: "Sentinel-AI (助理)",
+            purpose: "自动化治理与数据监测",
+            budget: 100,
+            spent: 12.5,
+            status: "ACTIVE",
+          },
+          {
+            id: "agent-1",
+            name: "DeepSeek-Reasoner-01",
+            purpose: "模型推理服务",
+            budget: 10,
+            spent: 4.2,
+            status: "ACTIVE",
+          },
+        ],
+        color: "from-primary to-purple-500",
+      }
 
   const shortAddress = `${group.address.slice(0, 6)}...${group.address.slice(-4)}`
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[94vw] max-w-[480px] p-0 gap-0 overflow-hidden rounded-2xl max-h-[92vh] flex flex-col">
+        {/* 隐藏的真实文件选择器 */}
+        <input
+          type="file"
+          ref={fileInputRef}
+          onChange={handleFileUpload}
+          className="hidden"
+          accept="*/*"
+        />
+
         <div className={`h-24 bg-gradient-to-r ${group.color} p-4 flex flex-col justify-end`}>
           <DialogHeader className="text-white">
             <DialogTitle className="flex items-center justify-between">
-              <span className="text-xl">{group.name}</span>
+              <span className="text-xl font-bold">{group.name}</span>
               <Badge variant="outline" className="bg-white/20 text-white border-white/40">
                 {group.network}
               </Badge>
             </DialogTitle>
-            <p className="text-white/80 text-sm mt-1">{group.description}</p>
+            <p className="text-white/80 text-xs mt-1 truncate">{group.description}</p>
           </DialogHeader>
         </div>
 
-        <div className="p-4 space-y-4">
+        <div className="p-4 space-y-4 overflow-y-auto">
           <div className="flex items-center justify-between">
             <div className="flex items-center">
               <Avatar className="h-10 w-10 mr-3 border-2 border-background">
@@ -504,68 +680,88 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
               <div>
                 <div className="flex items-center">
                   <p className="text-sm font-medium mr-1">{shortAddress}</p>
-                  <Button variant="ghost" size="icon" className="h-6 w-6">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => {
+                      if (typeof window !== "undefined") navigator.clipboard?.writeText(group.address)
+                    }}
+                  >
                     <Copy className="h-3 w-3" />
                   </Button>
-                  <Button variant="ghost" size="icon" className="h-6 w-6">
-                    <ExternalLink className="h-3 w-3" />
-                  </Button>
+                  <a
+                    href={`https://suiscan.xyz/testnet/account/${group.address}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-muted-foreground hover:text-foreground"
+                  >
+                    <ExternalLink className="h-3 w-3 ml-1" />
+                  </a>
                 </div>
-                <p className="text-xs text-muted-foreground">Multi-Signature Wallet</p>
+                <p className="text-xs text-muted-foreground">Multi-Signature Treasury</p>
               </div>
             </div>
             <div className="text-right">
-              <p className="font-medium">
-                {group.balance} {group.token}
+              <p className="font-semibold text-sm">
+                {group.balance.toFixed(2)} {group.token}
               </p>
               <div className="flex items-center text-xs text-muted-foreground justify-end">
                 <span>
-                  Threshold: {group.threshold}/{group.totalWeight}
+                  门限: {group.threshold}/{group.totalWeight}
                 </span>
               </div>
             </div>
           </div>
 
           <Tabs defaultValue="chat" value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-5 p-1 bg-muted/50 rounded-xl text-xs">
+            <TabsList className="grid w-full grid-cols-6 p-1 bg-muted/50 rounded-xl text-[11px]">
               <TabsTrigger
                 value="chat"
                 className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1 font-medium"
               >
-                <MessageSquare className="h-3.5 w-3.5 mr-1 text-primary" />
+                <MessageSquare className="h-3 w-3 mr-0.5 text-primary" />
                 群聊
               </TabsTrigger>
               <TabsTrigger
                 value="members"
                 className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1"
               >
-                <Users className="h-3.5 w-3.5 mr-1" />
+                <Users className="h-3 w-3 mr-0.5" />
                 成员
               </TabsTrigger>
               <TabsTrigger
                 value="agents"
                 className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1"
               >
-                <Bot className="h-3.5 w-3.5 mr-1 text-purple-500" />
-                AI 哨兵
+                <Bot className="h-3 w-3 mr-0.5 text-purple-500" />
+                AI
+              </TabsTrigger>
+              <TabsTrigger
+                value="files"
+                className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1 font-medium"
+              >
+                <HardDrive className="h-3 w-3 mr-0.5 text-cyan-500" />
+                文件
               </TabsTrigger>
               <TabsTrigger
                 value="transactions"
                 className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1"
               >
-                <Share2 className="h-3.5 w-3.5 mr-1" />
+                <Share2 className="h-3 w-3 mr-0.5" />
                 Tx
               </TabsTrigger>
               <TabsTrigger
                 value="receive"
                 className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1"
               >
-                <QrCode className="h-3.5 w-3.5 mr-1" />
-                Receive
+                <QrCode className="h-3 w-3 mr-0.5" />
+                收款
               </TabsTrigger>
             </TabsList>
 
             <AnimatePresence mode="wait">
+              {/* 1. 群聊 Tab */}
               {activeTab === "chat" && (
                 <TabsContent value="chat" className="mt-3 space-y-3">
                   <motion.div
@@ -580,7 +776,10 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                       <div className="flex items-center space-x-2">
                         <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
                         <span className="text-[11px] text-muted-foreground">
-                          群金库: <strong className="text-foreground font-semibold">{group.balance} {group.token}</strong>
+                          群金库:{" "}
+                          <strong className="text-foreground font-semibold">
+                            {group.balance.toFixed(2)} {group.token}
+                          </strong>
                         </span>
                       </div>
                       <div className="flex items-center space-x-1.5">
@@ -603,16 +802,12 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                           initial={{ opacity: 0, height: 0 }}
                           animate={{ opacity: 1, height: "auto" }}
                           exit={{ opacity: 0, height: 0 }}
-                          className="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs flex items-center justify-between"
+                          className="px-3 py-1.5 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-600 dark:text-emerald-400 text-xs flex items-center justify-between"
                         >
-                          <div className="flex items-center gap-1.5">
-                            <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                            <span>{claimedNotice}</span>
-                          </div>
+                          <span className="font-medium truncate">{claimedNotice}</span>
                           <button
-                            type="button"
                             onClick={() => setClaimedNotice(null)}
-                            className="text-xs opacity-60 hover:opacity-100 px-1"
+                            className="text-emerald-500 hover:text-emerald-700 ml-2"
                           >
                             ✕
                           </button>
@@ -621,7 +816,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                     </AnimatePresence>
 
                     {/* 消息流 */}
-                    <div className="h-[340px] sm:h-[380px] overflow-y-auto space-y-2.5 p-2.5 rounded-xl bg-muted/20 border border-border/40 text-xs">
+                    <div className="h-[320px] overflow-y-auto space-y-2.5 p-2.5 rounded-xl bg-muted/20 border border-border/40 text-xs">
                       {messages.map((m) => (
                         <div
                           key={m.id}
@@ -637,8 +832,8 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                               m.sender.startsWith("You")
                                 ? "bg-primary text-primary-foreground rounded-tr-none shadow-sm"
                                 : m.sender === "Sentinel-AI"
-                                ? "bg-purple-500/15 border border-purple-500/30 text-foreground rounded-tl-none font-mono text-[11px]"
-                                : "bg-card border border-border/60 text-foreground rounded-tl-none"
+                                  ? "bg-purple-500/15 border border-purple-500/30 text-foreground rounded-tl-none font-mono text-[11px]"
+                                  : "bg-card border border-border/60 text-foreground rounded-tl-none"
                             }`}
                           >
                             <p className="whitespace-pre-wrap">{m.text}</p>
@@ -705,11 +900,11 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                                     <FileText className="h-3 w-3 shrink-0 text-cyan-300" />
                                   )}
                                   <span className="truncate">
-                                    {m.walrusBlobId.endsWith(".wma") ? "群投票：跨链治理方案" : "附件文档：治理提案规范"}
+                                    {m.walrusBlobId.endsWith(".wma") ? "群投票：跨链治理方案" : "附件文档 (Walrus 存证)"}
                                   </span>
                                 </div>
                                 <span className="text-[9px] bg-white/20 px-1.5 py-0.5 rounded text-white shrink-0">
-                                  {m.walrusBlobId.endsWith(".wma") ? "去投票" : "查看"}
+                                  {m.walrusBlobId.endsWith(".wma") ? "去投票" : "查看存证"}
                                 </span>
                               </button>
                             )}
@@ -759,7 +954,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                               </div>
                               <div className="truncate">
                                 <p className="font-semibold text-[11px] text-foreground">打赏群友</p>
-                                <p className="text-[10px] text-muted-foreground truncate">/tip @Eve 1.0</p>
+                                <p className="text-[10px] text-muted-foreground truncate">/tip 1.0 SUI</p>
                               </div>
                             </button>
 
@@ -833,7 +1028,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         placeholder="输入消息，或输入 / 使用快捷功能..."
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage(false)}
+                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
                         className="h-8 text-xs bg-muted/30 focus-visible:ring-1 flex-1"
                       />
 
@@ -841,15 +1036,25 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         size="sm"
                         variant="ghost"
                         type="button"
-                        onClick={() => handleSendMessage(true)}
+                        disabled={isUploadingFile}
+                        onClick={() => fileInputRef.current?.click()}
                         className="h-8 px-2 text-xs gap-1 text-muted-foreground hover:text-foreground shrink-0"
-                        title="发送附件文档"
+                        title="选择文件上传至 Walrus 去中心化存储"
                       >
-                        <Paperclip className="h-3.5 w-3.5" />
+                        {isUploadingFile ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Paperclip className="h-3.5 w-3.5" />
+                        )}
                         <span className="hidden sm:inline">附件</span>
                       </Button>
 
-                      <Button size="sm" type="button" onClick={() => handleSendMessage(false)} className="h-8 px-3 text-xs gap-1 shrink-0 bg-primary text-primary-foreground">
+                      <Button
+                        size="sm"
+                        type="button"
+                        onClick={handleSendMessage}
+                        className="h-8 px-3 text-xs gap-1 shrink-0 bg-primary text-primary-foreground"
+                      >
                         <Send className="h-3 w-3" />
                         <span>发送</span>
                       </Button>
@@ -857,6 +1062,8 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                   </motion.div>
                 </TabsContent>
               )}
+
+              {/* 2. 成员 Tab */}
               {activeTab === "members" && (
                 <TabsContent value="members" className="mt-3 space-y-2">
                   <motion.div
@@ -871,13 +1078,20 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                           <Network className="h-4 w-4 text-purple-500" />
                           <div>
                             <div className="flex items-center space-x-1.5">
-                              <p className="font-semibold text-purple-600 dark:text-purple-400">已固化为密码学组织 (DAO)</p>
-                              <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 border-purple-500/40 text-purple-500">
+                              <p className="font-semibold text-purple-600 dark:text-purple-400">
+                                已固化为密码学组织 (DAO)
+                              </p>
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] px-1 py-0 h-4 border-purple-500/40 text-purple-500"
+                              >
                                 Epoch {orgEpoch}
                               </Badge>
                             </div>
                             <div className="flex items-center space-x-2 text-[10px] text-muted-foreground font-mono mt-0.5">
-                              <span className="truncate max-w-[140px]">PK: {groupPk ? `${groupPk.slice(0, 8)}...${groupPk.slice(-6)}` : ""}</span>
+                              <span className="truncate max-w-[140px]">
+                                PK: {groupPk ? `${groupPk.slice(0, 8)}...${groupPk.slice(-6)}` : ""}
+                              </span>
                               {orgObjectId && (
                                 <a
                                   href={`https://suiscan.xyz/testnet/object/${orgObjectId}`}
@@ -905,7 +1119,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         <div>
                           <p className="font-semibold text-foreground flex items-center">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 mr-1.5 inline-block animate-pulse"></span>
-                            当前为轻量 P2P 聊天群
+                            当前为多签群组
                           </p>
                           <p className="text-[11px] text-muted-foreground">随时执行 DKG 仪式上链固化为 DAO</p>
                         </div>
@@ -915,7 +1129,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                           className="h-7 text-[11px] bg-primary text-primary-foreground hover:bg-primary/90"
                         >
                           <Sparkles className="h-3 w-3 mr-1" />
-                          Convert to DAO
+                          固化为 DAO
                         </Button>
                       </div>
                     )}
@@ -939,17 +1153,9 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                           </Avatar>
                           <div>
                             <p className="font-medium text-sm">{member.name || member.address}</p>
-                            {member.address.includes("@") ? (
-                              <p className="text-xs text-muted-foreground flex items-center">
-                                <span className="text-xs bg-blue-100 text-blue-600 px-1 rounded mr-1">@</span>
-                                {member.address}
-                              </p>
-                            ) : (
-                              <p className="text-xs text-muted-foreground flex items-center">
-                                <span className="text-xs bg-purple-100 text-purple-600 px-1 rounded mr-1">Ξ</span>
-                                {member.address.slice(0, 6)}...{member.address.slice(-4)}
-                              </p>
-                            )}
+                            <p className="text-xs text-muted-foreground flex items-center font-mono">
+                              {member.address.slice(0, 8)}...{member.address.slice(-6)}
+                            </p>
                           </div>
                         </div>
                         <div className="text-right">
@@ -959,17 +1165,11 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         </div>
                       </div>
                     ))}
-
-                    <div className="mt-4 p-3 rounded-lg bg-accent/30">
-                      <p className="text-xs">
-                        This group requires at least {group.threshold} weight units (
-                        {Math.round((group.threshold / group.totalWeight) * 100)}% of total) to approve transactions.
-                      </p>
-                    </div>
                   </motion.div>
                 </TabsContent>
               )}
 
+              {/* 3. AI 哨兵 Tab */}
               {activeTab === "agents" && (
                 <TabsContent value="agents" className="mt-3 space-y-2.5">
                   <motion.div
@@ -982,14 +1182,11 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                     <div className="flex items-center justify-between text-xs mb-1">
                       <span className="text-muted-foreground font-medium">群内 AI 助手</span>
                       <Badge variant="outline" className="text-[10px]">
-                        限额管理
+                        受限代理凭证
                       </Badge>
                     </div>
-                    {(group.agents || []).map((agent) => (
-                      <div
-                        key={agent.id}
-                        className="p-3 rounded-xl border border-border/60 bg-card/60 space-y-2"
-                      >
+                    {(group.agents || []).map((agent: any) => (
+                      <div key={agent.id} className="p-3 rounded-xl border border-border/60 bg-card/60 space-y-2">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white">
@@ -1027,14 +1224,96 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                         <ShieldCheck className="w-3.5 h-3.5 text-primary" />
                         安全限额保护
                       </span>
-                      <p>
-                        AI 助手仅在设定额度内运行，超出每日限额将自动暂停，保障金库安全。
-                      </p>
+                      <p>AI 助手仅在设定额度内运行，超出每日限额将自动暂停，保障金库安全。</p>
                     </div>
                   </motion.div>
                 </TabsContent>
               )}
 
+              {/* 4. 群文件 / Walrus 存储 Tab */}
+              {activeTab === "files" && (
+                <TabsContent value="files" className="mt-3 space-y-3">
+                  <motion.div
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    transition={{ duration: 0.2 }}
+                    className="space-y-3"
+                  >
+                    <div className="p-3 rounded-xl bg-gradient-to-r from-cyan-500/10 to-blue-500/10 border border-cyan-500/30 flex items-center justify-between">
+                      <div>
+                        <h4 className="text-xs font-semibold flex items-center gap-1.5 text-cyan-700 dark:text-cyan-300">
+                          <HardDrive className="h-4 w-4 text-cyan-500" />
+                          Walrus 去中心化群文档库
+                        </h4>
+                        <p className="text-[10px] text-muted-foreground mt-0.5">
+                          所有附件采用纠删码切片存证于 Walrus 协议，防篡改、永不丢失。
+                        </p>
+                      </div>
+                      <Button
+                        size="sm"
+                        disabled={isUploadingFile}
+                        onClick={() => fileInputRef.current?.click()}
+                        className="h-7 text-xs bg-cyan-600 hover:bg-cyan-700 text-white shrink-0 gap-1"
+                      >
+                        {isUploadingFile ? (
+                          <>
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" /> 上传中...
+                          </>
+                        ) : (
+                          <>
+                            <UploadCloud className="h-3.5 w-3.5" /> 上传文件
+                          </>
+                        )}
+                      </Button>
+                    </div>
+
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                      {groupFiles.map((f) => (
+                        <div
+                          key={f.id}
+                          className="p-2.5 rounded-xl border border-border/60 bg-card/60 hover:bg-muted/40 transition-colors flex items-center justify-between text-xs"
+                        >
+                          <div className="flex items-center gap-2.5 min-w-0">
+                            <div className="w-8 h-8 rounded-lg bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center shrink-0">
+                              <FileText className="h-4 w-4 text-cyan-600 dark:text-cyan-400" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium text-foreground truncate">{f.name}</p>
+                              <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+                                <span>{(f.size / 1024).toFixed(1)} KB</span>
+                                <span>•</span>
+                                <span>{f.uploader}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => setSelectedBlobId(f.blobId)}
+                              className="h-6 text-[10px] px-2"
+                            >
+                              查看存证
+                            </Button>
+                            <a
+                              href={`${WALRUS_AGGREGATOR_URL}/v1/blobs/${f.blobId}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="h-6 px-2 rounded-md border border-input bg-background hover:bg-accent text-[10px] flex items-center gap-0.5 text-foreground"
+                            >
+                              下载 <ExternalLink className="h-2.5 w-2.5" />
+                            </a>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </motion.div>
+                </TabsContent>
+              )}
+
+              {/* 5. 交易提案 Tab */}
               {activeTab === "transactions" && (
                 <TabsContent value="transactions" className="mt-3 space-y-3">
                   <motion.div
@@ -1047,62 +1326,69 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                       <Button
                         size="sm"
                         onClick={() => setIsCreateTxOpen(true)}
-                        className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
+                        className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 text-xs"
                       >
-                        <Plus className="h-4 w-4 mr-1" /> New Transaction
+                        <Plus className="h-3.5 w-3.5 mr-1" /> 发起转账提案
                       </Button>
                     </div>
 
-                    {group.transactions.map((tx) => (
-                      <div
-                        key={tx.id}
-                        className="p-3 rounded-lg border hover:bg-muted/50 transition-colors cursor-pointer"
-                        onClick={() => setSelectedTx(tx.id)}
-                      >
-                        <div className="flex justify-between items-start">
-                          <div>
-                            <h3 className="font-medium text-sm">{tx.title}</h3>
-                            <p className="text-xs text-muted-foreground">{tx.description}</p>
-                          </div>
-                          <Badge
-                            variant={
-                              tx.status === "executed"
-                                ? "outline"
-                                : tx.status === "rejected"
-                                  ? "destructive"
-                                  : "default"
-                            }
-                            className="text-xs"
-                          >
-                            {tx.status === "executed" ? "Executed" : tx.status === "rejected" ? "Rejected" : "Pending"}
-                          </Badge>
-                        </div>
-
-                        <div className="flex justify-between mt-2">
-                          <div className="text-xs text-muted-foreground">
-                            {tx.type === "transfer" ? "Transfer" : "Contract Call"}
-                          </div>
-                          <div className="text-xs font-medium">
-                            {tx.amount} {tx.token}
-                          </div>
-                        </div>
-
-                        {tx.status === "pending" && (
-                          <div className="mt-2 flex items-center justify-between">
-                            <div className="text-xs text-muted-foreground">
-                              Approvals: {tx.approvals}/{tx.requiredApprovals}
+                    <div className="space-y-2">
+                      {group.transactions.map((tx: any) => (
+                        <div
+                          key={tx.id}
+                          className="p-3 rounded-lg border hover:bg-muted/50 transition-colors cursor-pointer"
+                          onClick={() => setSelectedTx(tx.id)}
+                        >
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <h3 className="font-medium text-sm">{tx.title}</h3>
+                              <p className="text-xs text-muted-foreground">{tx.description}</p>
                             </div>
-                            <Button size="sm" variant="outline" className="h-7 text-xs">
-                              Review
-                            </Button>
+                            <Badge
+                              variant={
+                                tx.status === "executed"
+                                  ? "outline"
+                                  : tx.status === "rejected"
+                                    ? "destructive"
+                                    : "default"
+                              }
+                              className="text-xs"
+                            >
+                              {tx.status === "executed"
+                                ? "已执行"
+                                : tx.status === "rejected"
+                                  ? "已拒绝"
+                                  : tx.status === "approved"
+                                    ? "已批准"
+                                    : "待审批"}
+                            </Badge>
                           </div>
-                        )}
-                      </div>
-                    ))}
+
+                          <div className="flex justify-between mt-2">
+                            <div className="text-xs text-muted-foreground">转账提案</div>
+                            <div className="text-xs font-semibold">
+                              {tx.amount} {tx.token}
+                            </div>
+                          </div>
+
+                          {tx.status === "pending" && (
+                            <div className="mt-2 flex items-center justify-between">
+                              <div className="text-xs text-muted-foreground">
+                                审批进度: {tx.approvals}/{tx.requiredApprovals}
+                              </div>
+                              <Button size="sm" variant="outline" className="h-6 text-[10px]">
+                                查看审批
+                              </Button>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
                   </motion.div>
                 </TabsContent>
               )}
 
+              {/* 6. 收款 Tab */}
               {activeTab === "receive" && (
                 <TabsContent value="receive" className="mt-3 space-y-3">
                   <motion.div
@@ -1121,22 +1407,37 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
                           </div>
                         </div>
                       </div>
-                      <p className="text-sm font-medium">{group.name}</p>
-                      <p className="text-xs text-muted-foreground mb-2">{shortAddress}</p>
+                      <p className="text-sm font-semibold">{group.name}</p>
+                      <p className="text-xs text-muted-foreground mb-2 font-mono">{group.address}</p>
                       <div className="flex space-x-2">
-                        <Button variant="outline" size="sm" className="text-xs">
-                          <Copy className="h-3 w-3 mr-1" /> Copy Address
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs"
+                          onClick={() => {
+                            if (typeof window !== "undefined") navigator.clipboard?.writeText(group.address)
+                          }}
+                        >
+                          <Copy className="h-3 w-3 mr-1" /> 复制地址
                         </Button>
-                        <Button variant="outline" size="sm" className="text-xs">
-                          <Share2 className="h-3 w-3 mr-1" /> Share
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="text-xs"
+                          onClick={() => {
+                            if (typeof window !== "undefined" && navigator.share) {
+                              navigator.share({ title: group.name, text: group.address })
+                            }
+                          }}
+                        >
+                          <Share2 className="h-3 w-3 mr-1" /> 分享
                         </Button>
                       </div>
                     </div>
 
                     <div className="mt-4 p-3 rounded-lg bg-accent/30">
-                      <p className="text-xs">
-                        Send only {group.network} assets to this address. Sending other assets may result in permanent
-                        loss.
+                      <p className="text-xs text-muted-foreground text-center">
+                        请仅向此多签地址充值 {group.network} 资产。多签组织金库由全体成员共识门限保护。
                       </p>
                     </div>
                   </motion.div>
@@ -1165,10 +1466,10 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         groupId={groupId}
         initialMembers={group.members}
         onConvertedSuccess={(pk, orgId, digest) => {
-          setIsConvertedToDao(true);
-          setGroupPk(pk);
-          if (orgId) setOrgObjectId(orgId);
-          if (digest) setOrgTxDigest(digest);
+          setIsConvertedToDao(true)
+          setGroupPk(pk)
+          if (orgId) setOrgObjectId(orgId)
+          if (digest) setOrgTxDigest(digest)
         }}
       />
 

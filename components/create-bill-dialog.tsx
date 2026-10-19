@@ -73,7 +73,42 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
   const [showQrScanner, setShowQrScanner] = useState(false)
   const [searchTerm, setSearchTerm] = useState("")
 
-  const tokens = ["USDC", "USDT", "APT"]
+  const [title, setTitle] = useState("团队协作餐叙 AA")
+  const [description, setDescription] = useState("测试网团队例会分账")
+  const [totalAmount, setTotalAmount] = useState("10")
+  const [selectedToken, setSelectedToken] = useState("SUI")
+
+  const tokens = ["SUI", "USDC", "USDT"]
+
+  const handleFinalSubmit = () => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("sui_bills") || "[]")
+      const parsedAmt = parseFloat(totalAmount) || 10
+      const activePayees = payees.filter((p) => p.address)
+      const newBill = {
+        id: `bill_${Date.now()}`,
+        title: title || "团队账单分摊",
+        description: description || "账单结算",
+        amount: parsedAmt,
+        token: selectedToken,
+        participants: activePayees.length > 0 ? activePayees.length : 2,
+        paid: 0,
+        deadline: new Date(Date.now() + 86400000 * 7).toISOString().slice(0, 10),
+        progress: 0,
+        status: "pending",
+        color: "from-blue-500 to-cyan-400",
+        payees: activePayees.map((p) => ({
+          ...p,
+          amount: splitType === "equal" ? (parsedAmt / Math.max(1, activePayees.length)).toFixed(2) : p.amount,
+          paid: false,
+        })),
+        creator: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+      }
+      localStorage.setItem("sui_bills", JSON.stringify([newBill, ...stored]))
+      window.dispatchEvent(new CustomEvent("sui-bills-updated", { detail: newBill }))
+    } catch {}
+    onOpenChange(false)
+  }
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -152,7 +187,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
     const updatedPayees = [
       ...filteredPayees,
       ...groupContacts.map((contact) => ({
-        id: Date.now() + Math.random().toString(),
+        id: `gp_${Date.now()}_${contact.id}`,
         address: contact.address,
         amount: "",
         name: contact.name,
@@ -164,21 +199,20 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
   }
 
   const handleQrScan = (result: string) => {
-    // In a real app, this would process the QR scan result
-    // For demo purposes, we'll just add a mock wallet address
-    const mockWalletAddress = "0x" + Math.random().toString(16).substring(2, 14)
+    // 真实的 Sui 扫码结果或有效测试网地址
+    const validAddress = result?.startsWith("0x") ? result : "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
 
     // Find an empty payee slot or add a new one
     const emptyPayee = payees.find((p) => !p.address)
 
     if (emptyPayee) {
-      updatePayee(emptyPayee.id, { address: mockWalletAddress, type: "wallet" })
+      updatePayee(emptyPayee.id, { address: validAddress, type: "wallet" })
     } else {
       setPayees([
         ...payees,
         {
           id: Date.now().toString(),
-          address: mockWalletAddress,
+          address: validAddress,
           amount: "",
           type: "wallet" as const,
         },
@@ -272,7 +306,13 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                       Bill Title
                     </Label>
                     <div className="relative">
-                      <Input id="title" placeholder="Dinner, Trip, etc." className="pl-9" />
+                      <Input
+                        id="title"
+                        value={title}
+                        onChange={(e) => setTitle(e.target.value)}
+                        placeholder="Dinner, Trip, etc."
+                        className="pl-9"
+                      />
                       <DollarSign className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     </div>
                   </div>
@@ -281,7 +321,13 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                     <Label htmlFor="description" className="text-xs font-medium">
                       Description (Optional)
                     </Label>
-                    <Textarea id="description" placeholder="Add details about this bill" className="resize-none h-20" />
+                    <Textarea
+                      id="description"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="Add details about this bill"
+                      className="resize-none h-20"
+                    />
                   </div>
 
                   <div className="grid grid-cols-2 gap-3">
@@ -289,13 +335,19 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                       <Label htmlFor="total" className="text-xs font-medium">
                         Total Amount
                       </Label>
-                      <Input id="total" type="number" placeholder="0.00" />
+                      <Input
+                        id="total"
+                        type="number"
+                        value={totalAmount}
+                        onChange={(e) => setTotalAmount(e.target.value)}
+                        placeholder="0.00"
+                      />
                     </div>
                     <div className="space-y-1">
                       <Label htmlFor="token" className="text-xs font-medium">
                         Token
                       </Label>
-                      <Select>
+                      <Select value={selectedToken} onValueChange={setSelectedToken}>
                         <SelectTrigger id="token">
                           <SelectValue placeholder="Select" />
                         </SelectTrigger>
@@ -649,8 +701,8 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                         className="h-7 text-xs flex items-center"
                         onClick={() => {
                           // Add all recent contacts
-                          const newPayees = recentContacts.map((contact) => ({
-                            id: Date.now() + Math.random().toString(),
+                          const newPayees = recentContacts.map((contact, idx) => ({
+                            id: `rc_${Date.now()}_${idx}`,
                             address: contact.address,
                             amount: "",
                             name: contact.name,
@@ -748,7 +800,8 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                 </Button>
               ) : (
                 <Button
-                  type="submit"
+                  type="button"
+                  onClick={handleFinalSubmit}
                   size="sm"
                   className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
                 >

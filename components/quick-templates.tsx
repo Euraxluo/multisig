@@ -38,7 +38,7 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
       id: "template-3",
       name: "Token Swap",
       type: "contract",
-      description: "Swap APT for USDC on DEX",
+      description: "Swap SUI for USDC on DEX",
     },
   ]
 

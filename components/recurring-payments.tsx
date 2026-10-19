@@ -34,13 +34,26 @@ interface RecurringPaymentsProps {
 export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
   const [cancelPaymentId, setCancelPaymentId] = useState<string | null>(null)
 
-  // Mock recurring payments data
-  const recurringPayments = [
+  // Mock recurring payments data (typed loosely so heterogeneous record shapes coexist)
+  const recurringPayments: Array<{
+    id: string
+    type: "recurring" | "stream"
+    name: string
+    recipient: string
+    amount: string
+    token: string
+    frequency?: string
+    nextPayment?: Date
+    startDate?: Date
+    endDate?: Date
+    progress?: number
+    status: "active" | "paused"
+  }> = [
     {
       id: "payment-1",
       type: "recurring",
       name: "Team Salaries",
-      recipient: "0x1234...5678",
+      recipient: "0x0000...0000",
       amount: "1000",
       token: "USDC",
       frequency: "Monthly",
@@ -51,7 +64,7 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
       id: "payment-2",
       type: "stream",
       name: "Contractor Payment",
-      recipient: "0xabcd...efgh",
+      recipient: "0x0000...0000",
       amount: "500",
       token: "USDC",
       startDate: addDays(new Date(), -10),
@@ -63,7 +76,7 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
       id: "payment-3",
       type: "recurring",
       name: "Server Costs",
-      recipient: "0x9876...5432",
+      recipient: "0x0000...0000",
       amount: "50",
       token: "USDT",
       frequency: "Weekly",
@@ -181,7 +194,7 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
                     {payment.type === "recurring" ? (
                       <div className="mt-2 flex items-center text-xs text-muted-foreground">
                         <Clock className="h-3 w-3 mr-1" />
-                        Next payment: {format(payment.nextPayment, "MMM d, yyyy")}
+                        Next payment: {payment.nextPayment ? format(payment.nextPayment, "MMM d, yyyy") : "—"}
                         <span className="mx-1">•</span>
                         <Calendar className="h-3 w-3 mr-1" />
                         {payment.frequency}
@@ -191,7 +204,8 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
                         <div className="flex items-center justify-between text-xs text-muted-foreground">
                           <span>Progress: {payment.progress}%</span>
                           <span>
-                            {format(payment.startDate, "MMM d")} - {format(payment.endDate, "MMM d, yyyy")}
+                            {payment.startDate ? format(payment.startDate, "MMM d") : "—"} -{" "}
+                            {payment.endDate ? format(payment.endDate, "MMM d, yyyy") : "—"}
                           </span>
                         </div>
                         <Progress value={payment.progress} className="h-1.5" />
