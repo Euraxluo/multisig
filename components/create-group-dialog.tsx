@@ -27,26 +27,23 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Slider } from "@/components/ui/slider"
 
+import { getCachedDevAccounts } from "@/lib/dev-keystore"
+
 interface CreateGroupDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-// Mock recent contacts data
-const recentContacts = [
-  { id: "1", name: "Alex", address: "0x1a2b3c4d5e6f7g8h9i0j", type: "wallet" as const },
-  { id: "2", name: "Jamie", address: "jamie@gmail.com", type: "email" as const },
-  { id: "3", name: "Taylor", address: "0x2k3l4m5n6o7p8q9r0s1t", type: "wallet" as const },
-  { id: "4", name: "Sam", address: "sam@gmail.com", type: "email" as const },
-  { id: "5", name: "Jordan", address: "0x3u4v5w6x7y8z9a0b1c2d", type: "wallet" as const },
-  { id: "6", name: "Casey", address: "casey@gmail.com", type: "email" as const },
+const defaultRecentContacts = [
+  { id: "1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", type: "wallet" as const },
+  { id: "2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
+  { id: "3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", type: "wallet" as const },
+  { id: "4", name: "Sui Community Treasury", address: "0x0000000000000000000000000000000000000000000000000000000000000002", type: "wallet" as const },
 ]
 
-// Mock historical transaction participants
 const historicalParticipants = [
-  { id: "h1", name: "Morgan", address: "morgan@gmail.com", type: "email" as const },
-  { id: "h2", name: "Riley", address: "0x9a8b7c6d5e4f3g2h1i", type: "wallet" as const },
-  { id: "h3", name: "Quinn", address: "quinn@gmail.com", type: "email" as const },
+  { id: "h1", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
+  { id: "h2", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", type: "wallet" as const },
 ]
 
 interface Member {
@@ -58,6 +55,7 @@ interface Member {
 }
 
 export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps) {
+  const [recentContacts, setRecentContacts] = useState(defaultRecentContacts)
   const [members, setMembers] = useState<Member[]>([{ id: "1", address: "", weight: 1 }])
   const [step, setStep] = useState(1)
   const [currentInput, setCurrentInput] = useState("")
@@ -66,6 +64,20 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   const [threshold, setThreshold] = useState(2)
   const [totalWeight, setTotalWeight] = useState(1)
   const [groupTitle, setGroupTitle] = useState("")
+
+  useEffect(() => {
+    const devAccs = getCachedDevAccounts()
+    if (devAccs.length > 0) {
+      setRecentContacts(
+        devAccs.map((a, i) => ({
+          id: String(i + 1),
+          name: a.name,
+          address: a.address,
+          type: "wallet" as const,
+        }))
+      )
+    }
+  }, [open])
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -190,6 +202,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
         createdAt: new Date().toISOString(),
       })
       localStorage.setItem("user_groups", JSON.stringify(newGroups))
+      window.dispatchEvent(new CustomEvent("sui-groups-updated", { detail: newGroups }))
+      window.dispatchEvent(new Event("storage"))
       onOpenChange(false)
     } catch (e) {
       console.warn("Failed to save group to localStorage", e)

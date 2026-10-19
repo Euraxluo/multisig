@@ -1,6 +1,5 @@
 "use client"
 
-import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc"
 import { getProposals, saveProposals, ProposalItem, TESTNET_PACKAGE_ID, KNOWN_TESTNET_ORG_ID } from "./onchain-store"
 
 const SUI_TESTNET_RPC = "https://fullnode.testnet.sui.io:443"
@@ -36,7 +35,14 @@ function saveStoredCursor(eventType: string, cursor: EventCursor): void {
 export async function runIncrementalSync(): Promise<number> {
   if (typeof window === "undefined") return 0
 
-  const client = new SuiJsonRpcClient({ url: SUI_TESTNET_RPC, network: "testnet" })
+  let client: any
+  try {
+    const { SuiClient, getFullnodeUrl } = await import("@mysten/sui/client")
+    client = new SuiClient({ url: getFullnodeUrl("testnet") })
+  } catch {
+    const { SuiJsonRpcClient } = await import("@mysten/sui/jsonRpc") as any
+    client = new SuiJsonRpcClient({ url: SUI_TESTNET_RPC, network: "testnet" })
+  }
   let newEventsCount = 0
 
   try {

@@ -18,17 +18,40 @@ export async function signAndExecuteWithWallet(tx: Transaction): Promise<{
   const devKeypair = getActiveDevKeypair()
   if (devKeypair) {
     try {
-      const { SuiJsonRpcClient } = await import("@mysten/sui/jsonRpc") as any
-      const client = new SuiJsonRpcClient({
-        url: "https://fullnode.testnet.sui.io:443",
-        network: "testnet",
-      })
+      let client: any
+      try {
+        const { SuiClient, getFullnodeUrl } = await import("@mysten/sui/client")
+        client = new SuiClient({ url: getFullnodeUrl("testnet") })
+      } catch {
+        const { SuiJsonRpcClient } = await import("@mysten/sui/jsonRpc") as any
+        client = new SuiJsonRpcClient({
+          url: "https://fullnode.testnet.sui.io:443",
+          network: "testnet",
+        })
+      }
 
-      const res = await client.signAndExecuteTransaction({
-        signer: devKeypair,
-        transaction: tx,
-        options: { showEffects: true },
-      })
+      let res: any
+      if (typeof client.signAndExecuteTransaction === "function") {
+        res = await client.signAndExecuteTransaction({
+          signer: devKeypair,
+          transaction: tx,
+          options: { showEffects: true },
+        })
+      } else if (typeof client.signAndExecuteTransactionBlock === "function") {
+        res = await client.signAndExecuteTransactionBlock({
+          signer: devKeypair,
+          transactionBlock: tx,
+          options: { showEffects: true },
+        })
+      } else {
+        const bytes = await tx.build({ client })
+        const { signature } = await devKeypair.signTransaction(bytes)
+        res = await client.executeTransactionBlock({
+          transactionBlock: bytes,
+          signature,
+          options: { showEffects: true },
+        })
+      }
 
       const digest = res?.digest
       if (!digest) throw new Error("Keystore 签名提交未返回 digest")
@@ -78,12 +101,26 @@ export async function signAndExecuteWithWallet(tx: Transaction): Promise<{
   const digest = res?.digest
   if (!digest) throw new Error("交易未返回 digest")
 
-  const { SuiJsonRpcClient } = await import("@mysten/sui/jsonRpc") as any
-  const client = new SuiJsonRpcClient({ url: "https://fullnode.testnet.sui.io:443", network: "testnet" })
-  const txResult = await client.getTransactionBlock({
-    digest,
-    options: { showEffects: true },
-  })
+  let client: any
+  try {
+    const { SuiClient, getFullnodeUrl } = await import("@mysten/sui/client")
+    client = new SuiClient({ url: getFullnodeUrl("testnet") })
+  } catch {
+    const { SuiJsonRpcClient } = await import("@mysten/sui/jsonRpc") as any
+    client = new SuiJsonRpcClient({ url: "https://fullnode.testnet.sui.io:443", network: "testnet" })
+  }
+  let txResult: any
+  if (typeof client.getTransactionBlock === "function") {
+    txResult = await client.getTransactionBlock({
+      digest,
+      options: { showEffects: true },
+    })
+  } else if (typeof client.getTransaction === "function") {
+    txResult = await client.getTransaction({
+      digest,
+      options: { showEffects: true },
+    })
+  }
   const effects = (txResult as any)?.effects?.effects ?? (txResult as any)?.effects
   const created = (effects?.created ?? [])
     .map((o: any) => o?.reference?.objectId ?? o?.objectId)

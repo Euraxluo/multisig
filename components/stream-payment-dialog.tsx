@@ -40,14 +40,31 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
   const tokens = ["SUI", "USDC", "USDT"]
 
   const handleSubmit = () => {
+    if (!recipient.trim() || !totalAmount.trim()) return
     setIsProcessing(true)
-
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("sui_recurring_payments") || "[]")
+      const newStream = {
+        id: `stream-${Date.now()}`,
+        type: "stream",
+        name: description.trim() || `Stream payment to ${recipient.slice(0, 8)}...`,
+        recipient: recipient.trim(),
+        amount: totalAmount.trim(),
+        token,
+        startDate: startDate || new Date(),
+        endDate: endDate || addDays(new Date(), 30),
+        progress: 0,
+        status: "active",
+      }
+      localStorage.setItem("sui_recurring_payments", JSON.stringify([newStream, ...stored]))
+      window.dispatchEvent(new CustomEvent("sui-recurring-updated", { detail: newStream }))
+      window.dispatchEvent(new Event("storage"))
+    } catch (e) {
+      console.warn("Failed to save stream payment", e)
+    } finally {
       setIsProcessing(false)
       onOpenChange(false)
-      // In a real app, you would save the stream payment here
-    }, 1500)
+    }
   }
 
   const getDurationInDays = () => {

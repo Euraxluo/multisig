@@ -16,190 +16,92 @@ import {
   Eye,
   EyeOff,
   BarChart,
-  AlertCircle,
   CalendarClock,
   Plus,
+  Play,
 } from "lucide-react"
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { VoteDetailsDialog } from "@/components/vote-details-dialog"
 import { CreateVoteDialog } from "@/components/create-vote-dialog"
+import { getProposals, getActiveAccount, type ProposalItem } from "@/lib/onchain-store"
 
 export default function Votes() {
   const [selectedVote, setSelectedVote] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState("active")
   const [createVoteOpen, setCreateVoteOpen] = useState(false)
+  const [proposals, setProposals] = useState<ProposalItem[]>([])
   const [customVotes, setCustomVotes] = useState<any[]>([])
 
   useEffect(() => {
     const load = () => {
+      setProposals(getProposals())
       try {
         const stored = JSON.parse(localStorage.getItem("sui_governance_votes") || "[]")
         setCustomVotes(stored)
       } catch {}
     }
     load()
+    window.addEventListener("sui-proposals-updated", load)
     window.addEventListener("sui-votes-updated", load)
     window.addEventListener("storage", load)
     return () => {
+      window.removeEventListener("sui-proposals-updated", load)
       window.removeEventListener("sui-votes-updated", load)
       window.removeEventListener("storage", load)
     }
   }, [])
 
-  // 治理投票提案列表 (Governance Proposals)
-  const defaultActiveVotes = [
-    {
-      id: "vote-1",
-      title: "增加市场预算提案",
-      description: "提议将每月市场预算从5000美元增加到8000美元",
-      creator: "Alex",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: "2025-03-10T12:00:00Z",
-      expiresAt: "2025-04-01T12:00:00Z",
-      voteType: "single",
-      totalVotes: 5,
-      myVote: null,
-      status: "active",
-      progress: {
-        option1: 3,
-        option2: 2,
-      },
-      group: "团队财务",
-      isAnonymous: false,
-      color: "from-green-500 to-emerald-400",
-      showResultsDuring: true,
-    },
-    {
-      id: "vote-2",
-      title: "选择新的办公空间",
-      description: "为团队选择新的办公空间位置",
-      creator: "Jamie",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: "2025-03-15T12:00:00Z",
-      expiresAt: "2025-03-30T12:00:00Z",
-      voteType: "ranked",
-      totalVotes: 8,
-      myVote: "已投票",
-      status: "active",
-      progress: {
-        option1: 4,
-        option2: 2,
-        option3: 2,
-      },
-      group: "管理委员会",
-      isAnonymous: true,
-      color: "from-blue-500 to-cyan-400",
-      showResultsDuring: false,
-    },
-    {
-      id: "vote-3",
-      title: "新产品功能优先级",
-      description: "为下一季度确定产品功能开发优先级",
-      creator: "Taylor",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: "2025-03-18T12:00:00Z",
-      expiresAt: "2025-03-28T12:00:00Z",
-      voteType: "multiple",
-      totalVotes: 12,
-      myVote: null,
-      status: "active",
-      progress: {
-        option1: 8,
-        option2: 6,
-        option3: 4,
-        option4: 2,
-      },
-      group: "产品团队",
-      isAnonymous: false,
-      color: "from-primary to-purple-500",
-      showResultsDuring: true,
-    },
-  ]
+  const currentAddress = getActiveAccount()?.address || ""
 
-  const activeVotes = [...customVotes, ...defaultActiveVotes]
+  // 将链上真实提案转换为治理投票视图
+  const proposalVotes = proposals.map((p) => {
+    const hasVoted = currentAddress ? p.voters.includes(currentAddress) : false
+    const isCompleted = p.status === "executed" || p.status === "rejected"
+    return {
+      id: p.id,
+      onChainId: p.onChainId,
+      title: p.title,
+      description: p.description || `${p.amount} ${p.token} 治理划转`,
+      creator: p.voters[0] ? `${p.voters[0].slice(0, 6)}...` : "DAO 成员",
+      createdAt: p.createdAt,
+      expiresAt: p.expiresAt,
+      endedAt: p.executedAt || p.expiresAt,
+      voteType: "single",
+      totalVotes: p.approvals,
+      requiredApprovals: p.requiredApprovals,
+      myVote: hasVoted ? "已投票" : null,
+      status: isCompleted ? "completed" : "active",
+      result: p.status === "executed" ? "已执行" : p.status === "approved" ? "已达法定票数" : "审批中",
+      winningOption: "通过划款",
+      progress: {
+        "赞成": p.approvals,
+        "门限目标": p.requiredApprovals,
+      },
+      group: p.groupName || "Team Treasury",
+      isAnonymous: false,
+      color: p.color || "from-primary to-purple-500",
+      showResultsDuring: true,
+      amount: p.amount,
+      token: p.token,
+    }
+  })
 
-  const completedVotes = [
-    {
-      id: "vote-4",
-      title: "聘请新的营销总监",
-      description: "选择新的营销总监候选人",
-      creator: "Alex",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: "2025-02-01T12:00:00Z",
-      endedAt: "2025-02-15T12:00:00Z",
-      voteType: "single",
-      totalVotes: 7,
-      myVote: "已投票",
-      status: "completed",
-      result: "通过",
-      winningOption: "Sarah Johnson",
-      progress: {
-        option1: 5,
-        option2: 2,
-      },
-      group: "管理委员会",
-      isAnonymous: false,
-      color: "from-primary to-purple-500",
-    },
-    {
-      id: "vote-5",
-      title: "季度预算分配",
-      description: "决定第二季度的预算分配方案",
-      creator: "Jamie",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: "2025-02-10T12:00:00Z",
-      endedAt: "2025-02-25T12:00:00Z",
-      voteType: "single",
-      totalVotes: 9,
-      myVote: "已投票",
-      status: "completed",
-      result: "方案B",
-      winningOption: "方案B",
-      progress: {
-        option1: 3,
-        option2: 6,
-      },
-      group: "团队财务",
-      isAnonymous: true,
-      color: "from-green-500 to-emerald-400",
-    },
-    {
-      id: "vote-6",
-      title: "新Logo设计选择",
-      description: "为公司选择新的品牌Logo设计",
-      creator: "Riley",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: "2025-02-20T12:00:00Z",
-      endedAt: "2025-03-05T12:00:00Z",
-      voteType: "ranked",
-      totalVotes: 15,
-      myVote: "未投票",
-      status: "completed",
-      result: "设计C",
-      winningOption: "设计C",
-      progress: {
-        option1: 5,
-        option2: 4,
-        option3: 6,
-      },
-      group: "设计团队",
-      isAnonymous: false,
-      color: "from-blue-500 to-cyan-400",
-    },
-  ]
+  // 合并链上提案与自定义治理投票
+  const allVotes = [...proposalVotes, ...customVotes]
+  const activeVotes = allVotes.filter((v) => v.status === "active")
+  const completedVotes = allVotes.filter((v) => v.status === "completed")
 
   const container = {
     hidden: { opacity: 0 },
     show: {
       opacity: 1,
       transition: {
-        staggerChildren: 0.1,
+        staggerChildren: 0.08,
       },
     },
   }
 
   const item = {
-    hidden: { opacity: 0, y: 20 },
+    hidden: { opacity: 0, y: 15 },
     show: { opacity: 1, y: 0 },
   }
 
@@ -211,43 +113,20 @@ export default function Votes() {
     })
   }
 
-  const getVoteTypeIcon = (type: string) => {
-    switch (type) {
-      case "single":
-        return <CheckCircle2 className="h-4 w-4" />
-      case "multiple":
-        return <BarChart2 className="h-4 w-4" />
-      case "ranked":
-        return <BarChart className="h-4 w-4" />
-      default:
-        return <Vote className="h-4 w-4" />
-    }
-  }
-
-  const getVoteTypeText = (type: string) => {
-    switch (type) {
-      case "single":
-        return "单选投票"
-      case "multiple":
-        return "多选投票"
-      case "ranked":
-        return "排序投票"
-      default:
-        return "投票"
-    }
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xl font-bold">投票提案</h2>
+        <div>
+          <h2 className="text-xl font-bold tracking-tight">治理投票与提案</h2>
+          <p className="text-xs text-muted-foreground">Sui Move 异步投票、门限协签与影子跟投</p>
+        </div>
         <Button
           variant="default"
           size="sm"
-          className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
+          className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 shadow-sm"
           onClick={() => setCreateVoteOpen(true)}
         >
-          <Plus className="h-4 w-4 mr-1" /> 创建投票
+          <Plus className="h-4 w-4 mr-1" /> 新建提案
         </Button>
       </div>
 
@@ -255,176 +134,163 @@ export default function Votes() {
         <TabsList className="grid w-full grid-cols-2 p-1 bg-muted/50 rounded-xl">
           <TabsTrigger
             value="active"
-            className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+            className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm text-xs font-medium"
           >
-            <Clock className="h-4 w-4 mr-1.5" />
-            进行中
+            <Clock className="h-3.5 w-3.5 mr-1.5" />
+            进行中 ({activeVotes.length})
           </TabsTrigger>
           <TabsTrigger
             value="completed"
-            className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
+            className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm text-xs font-medium"
           >
-            <CheckCircle2 className="h-4 w-4 mr-1.5" />
-            已结束
+            <CheckCircle2 className="h-3.5 w-3.5 mr-1.5" />
+            已结束 ({completedVotes.length})
           </TabsTrigger>
         </TabsList>
 
         <AnimatePresence mode="wait">
           {activeTab === "active" && (
             <TabsContent value="active" className="mt-3 space-y-3">
-              <motion.div variants={container} initial="hidden" animate="show" exit={{ opacity: 0 }}>
-                {activeVotes.map((vote) => (
-                  <motion.div key={vote.id} variants={item}>
-                    <Card
-                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
-                      onClick={() => setSelectedVote(vote.id)}
-                    >
-                      <div className={`h-1 bg-gradient-to-r ${vote.color}`}></div>
-                      <CardHeader className="p-3 pb-0">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h3 className="font-medium text-sm">{vote.title}</h3>
-                            <p className="text-xs text-muted-foreground">{vote.group}</p>
-                          </div>
-                          <div className="flex items-center space-x-2">
-                            {vote.isAnonymous ? (
-                              <Badge variant="outline" className="text-xs">
-                                <EyeOff className="h-3 w-3 mr-1" /> 匿名投票
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-xs">
-                                <Eye className="h-3 w-3 mr-1" /> 公开投票
-                              </Badge>
-                            )}
-                            <Badge variant="default" className="text-xs">
-                              进行中
-                            </Badge>
-                          </div>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="p-3 pt-2">
-                        <div className="flex items-center justify-between mb-1.5 mt-1">
-                          <div className="flex items-center text-xs text-muted-foreground">
-                            {getVoteTypeIcon(vote.voteType)}
-                            <span className="ml-1">{getVoteTypeText(vote.voteType)}</span>
-                          </div>
-                          <div className="flex items-center text-xs text-muted-foreground">
-                            <UserCheck className="h-3 w-3 mr-1" />
-                            <span>{vote.totalVotes} 已投票</span>
-                          </div>
-                        </div>
-
-                        {vote.showResultsDuring && (
-                          <div className="mt-2 space-y-1">
-                            <div className="flex items-center justify-between text-xs">
-                              <span>当前结果</span>
-                              <span className="text-muted-foreground">选项数: {Object.keys(vote.progress).length}</span>
+              {activeVotes.length === 0 ? (
+                <div className="text-center py-10 bg-muted/20 border border-dashed rounded-xl">
+                  <Vote className="h-8 w-8 mx-auto text-muted-foreground/60 mb-2" />
+                  <p className="text-sm font-medium">暂无进行中的治理提案</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">点击右上角「新建提案」发起治理投票</p>
+                </div>
+              ) : (
+                <motion.div variants={container} initial="hidden" animate="show" exit={{ opacity: 0 }} className="space-y-3">
+                  {activeVotes.map((vote) => (
+                    <motion.div key={vote.id} variants={item}>
+                      <Card
+                        className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm cursor-pointer"
+                        onClick={() => setSelectedVote(vote.id)}
+                      >
+                        <div className={`h-1 bg-gradient-to-r ${vote.color}`}></div>
+                        <CardHeader className="p-3 pb-0">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <h3 className="font-semibold text-sm">{vote.title}</h3>
+                              <p className="text-xs text-muted-foreground">{vote.group}</p>
                             </div>
-                            <Progress
-                              value={(Math.max(...(Object.values(vote.progress) as number[])) / (vote.totalVotes || 1)) * 100}
-                              className="h-1.5 rounded-full"
-                              indicatorClassName={`bg-gradient-to-r ${vote.color}`}
-                            />
-                          </div>
-                        )}
-
-                        <div className="flex items-center justify-between mt-3">
-                          <div className="flex items-center text-xs text-muted-foreground">
-                            <CalendarClock className="h-3 w-3 mr-1" />
-                            <span>截止日期: {formatDate(vote.expiresAt)}</span>
-                          </div>
-                          <div>
-                            {vote.myVote ? (
-                              <Badge variant="outline" className="text-xs">
-                                <CheckCircle2 className="h-3 w-3 mr-1" /> 已投票
+                            <div className="flex items-center space-x-1.5">
+                              {vote.onChainId && (
+                                <Badge variant="outline" className="text-[10px] bg-primary/10 text-primary border-primary/20">
+                                  链上提案
+                                </Badge>
+                              )}
+                              <Badge variant="default" className="text-xs">
+                                进行中
                               </Badge>
-                            ) : (
-                              <Button size="sm" className="h-7 text-xs">
-                                投票
-                              </Button>
-                            )}
+                            </div>
                           </div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                ))}
-              </motion.div>
+                        </CardHeader>
+                        <CardContent className="p-3 pt-2">
+                          <p className="text-xs text-muted-foreground line-clamp-1 mb-2">{vote.description}</p>
+                          <div className="flex items-center justify-between mb-1.5 mt-1">
+                            <div className="flex items-center text-xs text-muted-foreground">
+                              <CheckCircle2 className="h-3.5 w-3.5 mr-1 text-primary" />
+                              <span>门限进度: {vote.totalVotes}/{vote.requiredApprovals || 2} 票</span>
+                            </div>
+                            <div className="flex items-center text-xs text-muted-foreground">
+                              <UserCheck className="h-3.5 w-3.5 mr-1" />
+                              <span>{vote.totalVotes} 成员已签署</span>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 space-y-1">
+                            <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-gradient-to-r from-primary to-purple-500"
+                                style={{
+                                  width: `${Math.min(100, (vote.totalVotes / (vote.requiredApprovals || 2)) * 100)}%`,
+                                }}
+                              />
+                            </div>
+                          </div>
+
+                          <div className="flex items-center justify-between mt-3">
+                            <div className="flex items-center text-xs text-muted-foreground">
+                              <CalendarClock className="h-3.5 w-3.5 mr-1" />
+                              <span>截止: {formatDate(vote.expiresAt)}</span>
+                            </div>
+                            <div>
+                              {vote.myVote ? (
+                                <Badge variant="outline" className="text-xs bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20">
+                                  <CheckCircle2 className="h-3 w-3 mr-1" /> 已投票
+                                </Badge>
+                              ) : (
+                                <Button size="sm" className="h-7 text-xs bg-gradient-to-r from-primary to-purple-500 text-white">
+                                  参与投票 / 影子跟投
+                                </Button>
+                              )}
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              )}
             </TabsContent>
           )}
 
           {activeTab === "completed" && (
             <TabsContent value="completed" className="mt-3 space-y-3">
-              <motion.div variants={container} initial="hidden" animate="show" exit={{ opacity: 0 }}>
-                {completedVotes.map((vote) => (
-                  <motion.div key={vote.id} variants={item}>
-                    <Card
-                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
-                      onClick={() => setSelectedVote(vote.id)}
-                    >
-                      <div className={`h-1 bg-gradient-to-r ${vote.color}`}></div>
-                      <CardHeader className="p-3 pb-0">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <h3 className="font-medium text-sm">{vote.title}</h3>
-                            <p className="text-xs text-muted-foreground">{vote.group}</p>
+              {completedVotes.length === 0 ? (
+                <div className="text-center py-10 bg-muted/20 border border-dashed rounded-xl">
+                  <CheckCircle2 className="h-8 w-8 mx-auto text-muted-foreground/60 mb-2" />
+                  <p className="text-sm font-medium">暂无已结束的治理记录</p>
+                </div>
+              ) : (
+                <motion.div variants={container} initial="hidden" animate="show" exit={{ opacity: 0 }} className="space-y-3">
+                  {completedVotes.map((vote) => (
+                    <motion.div key={vote.id} variants={item}>
+                      <Card
+                        className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm cursor-pointer"
+                        onClick={() => setSelectedVote(vote.id)}
+                      >
+                        <div className={`h-1 bg-gradient-to-r ${vote.color}`}></div>
+                        <CardHeader className="p-3 pb-0">
+                          <div className="flex items-start justify-between">
+                            <div>
+                              <h3 className="font-semibold text-sm">{vote.title}</h3>
+                              <p className="text-xs text-muted-foreground">{vote.group}</p>
+                            </div>
+                            <Badge
+                              variant="outline"
+                              className={
+                                vote.result === "已执行"
+                                  ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 text-xs"
+                                  : "bg-muted text-muted-foreground text-xs"
+                              }
+                            >
+                              {vote.result || "已结项"}
+                            </Badge>
                           </div>
-                          <Badge variant="outline" className="text-xs">
-                            已结束
-                          </Badge>
-                        </div>
-                      </CardHeader>
-                      <CardContent className="p-3 pt-2">
-                        <div className="flex items-center justify-between mb-1.5 mt-1">
-                          <div className="flex items-center text-xs text-muted-foreground">
-                            {getVoteTypeIcon(vote.voteType)}
-                            <span className="ml-1">{getVoteTypeText(vote.voteType)}</span>
+                        </CardHeader>
+                        <CardContent className="p-3 pt-2">
+                          <p className="text-xs text-muted-foreground line-clamp-1 mb-2">{vote.description}</p>
+                          <div className="flex items-center justify-between text-xs text-muted-foreground">
+                            <span>最终票数: {vote.totalVotes} 票</span>
+                            <span>归档时间: {formatDate(vote.endedAt || vote.expiresAt)}</span>
                           </div>
-                          <div className="flex items-center text-xs text-muted-foreground">
-                            <UserCheck className="h-3 w-3 mr-1" />
-                            <span>{vote.totalVotes} 参与</span>
-                          </div>
-                        </div>
-
-                        <div className="p-2 bg-muted/50 rounded-lg my-2">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-medium">结果: {vote.result}</span>
-                            {vote.myVote === "已投票" ? (
-                              <Badge variant="outline" className="text-xs">
-                                <CheckCircle2 className="h-3 w-3 mr-1" /> 已参与
-                              </Badge>
-                            ) : (
-                              <Badge variant="outline" className="text-xs text-destructive border-destructive/50">
-                                <AlertCircle className="h-3 w-3 mr-1" /> 未参与
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex items-center justify-between mt-2">
-                          <div className="flex items-center">
-                            <Avatar className="h-6 w-6 mr-1.5">
-                              <AvatarImage src={vote.creatorAvatar || "/placeholder.svg"} alt={vote.creator} />
-                              <AvatarFallback>{vote.creator.charAt(0)}</AvatarFallback>
-                            </Avatar>
-                            <span className="text-xs">{vote.creator}</span>
-                          </div>
-                          <div className="text-xs text-muted-foreground">{formatDate(vote.endedAt)}</div>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                ))}
-              </motion.div>
+                        </CardContent>
+                      </Card>
+                    </motion.div>
+                  ))}
+                </motion.div>
+              )}
             </TabsContent>
           )}
         </AnimatePresence>
       </Tabs>
 
-      {/* 投票详情对话框 */}
-      <VoteDetailsDialog open={!!selectedVote} onOpenChange={() => setSelectedVote(null)} voteId={selectedVote || ""} />
+      <VoteDetailsDialog
+        open={!!selectedVote}
+        onOpenChange={() => setSelectedVote(null)}
+        voteId={selectedVote || ""}
+      />
 
-      {/* 创建投票对话框 */}
       <CreateVoteDialog open={createVoteOpen} onOpenChange={setCreateVoteOpen} />
     </div>
   )

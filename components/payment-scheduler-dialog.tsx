@@ -53,14 +53,31 @@ export function PaymentSchedulerDialog({ open, onOpenChange, groupId }: PaymentS
   ]
 
   const handleSubmit = () => {
+    if (!recipient.trim() || !amount.trim()) return
     setIsProcessing(true)
-
-    // Simulate API call
-    setTimeout(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem("sui_recurring_payments") || "[]")
+      const nextDays = frequency === "daily" ? 1 : frequency === "weekly" ? 7 : frequency === "biweekly" ? 14 : 30
+      const newPayment = {
+        id: `rec-${Date.now()}`,
+        type: "recurring",
+        name: description.trim() || `${frequency} payment to ${recipient.slice(0, 8)}...`,
+        recipient: recipient.trim(),
+        amount: amount.trim(),
+        token,
+        frequency: frequency.charAt(0).toUpperCase() + frequency.slice(1),
+        nextPayment: new Date(Date.now() + 86400000 * nextDays),
+        status: "active",
+      }
+      localStorage.setItem("sui_recurring_payments", JSON.stringify([newPayment, ...stored]))
+      window.dispatchEvent(new CustomEvent("sui-recurring-updated", { detail: newPayment }))
+      window.dispatchEvent(new Event("storage"))
+    } catch (e) {
+      console.warn("Failed to save recurring payment", e)
+    } finally {
       setIsProcessing(false)
       onOpenChange(false)
-      // In a real app, you would save the recurring payment here
-    }, 1500)
+    }
   }
 
   const getFrequencyText = () => {

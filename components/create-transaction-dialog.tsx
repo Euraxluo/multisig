@@ -110,33 +110,36 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
     } catch {}
   }, [groupId])
 
-  // Mock templates
-  const templates: TransactionTemplate[] = [
+  const [templates, setTemplates] = useState<TransactionTemplate[]>([
     {
       id: "template-1",
-      name: "Monthly Salary Payment",
+      name: "每月团队津贴发放",
       type: "transfer",
-      recipient: "0x0000...0000",
-      amount: "500",
-      token: "USDC",
+      recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+      amount: "50",
+      token: "SUI",
     },
     {
       id: "template-2",
-      name: "Staking Rewards",
+      name: "生态流动性金库充值",
       type: "contract",
-      contract: "0x0000...0000",
-      function: "claimRewards",
+      contract: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
+      function: "deposit",
       args: '{"amount": "100"}',
     },
-    {
-      id: "template-3",
-      name: "Token Swap",
-      type: "contract",
-      contract: "0x0000...0000",
-      function: "swap",
-      args: '{"tokenIn": "SUI", "tokenOut": "USDC", "amountIn": "10"}',
-    },
-  ]
+  ])
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem("sui_payment_templates")
+      if (stored) {
+        const parsed = JSON.parse(stored)
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTemplates(parsed)
+        }
+      }
+    } catch {}
+  }, [open])
 
   // Reset state when dialog opens/closes
   useEffect(() => {

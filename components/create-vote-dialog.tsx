@@ -41,42 +41,25 @@ import {
 } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
+import { getCachedDevAccounts } from "@/lib/dev-keystore"
+import { getActiveAccount, createTransferProposalOnChain, KNOWN_TESTNET_ORG_ID } from "@/lib/onchain-store"
+
 interface CreateVoteDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-// Mock data for groups
-const groups = [
+const defaultGroups = [
   {
     id: "group-1",
-    name: "Team Treasury",
+    name: "Team Treasury (Sui MultiSig)",
+    orgObjectId: KNOWN_TESTNET_ORG_ID,
     members: [
-      { id: "user-1", name: "Alex", address: "0x1a2b...3c4d", weight: 2 },
-      { id: "user-2", name: "Jamie", address: "jamie@gmail.com", weight: 1 },
-      { id: "user-3", name: "Taylor", address: "0x2k3l...4m5n", weight: 3 },
-      { id: "user-4", name: "Sam", address: "0x6o7p...8q9r", weight: 2 },
+      { id: "user-1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", weight: 2 },
+      { id: "user-2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", weight: 1 },
+      { id: "user-3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f", weight: 1 },
     ],
   },
-  {
-    id: "group-2",
-    name: "DAO Fund",
-    members: [
-      { id: "user-1", name: "Alex", address: "0x1a2b...3c4d", weight: 1 },
-      { id: "user-5", name: "Morgan", address: "morgan@gmail.com", weight: 1 },
-      { id: "user-6", name: "Riley", address: "0x9a8b...7c6d", weight: 1 },
-    ],
-  },
-]
-
-// Mock data for recent contacts
-const recentContacts = [
-  { id: "user-1", name: "Alex", address: "0x1a2b...3c4d", type: "wallet" as const },
-  { id: "user-2", name: "Jamie", address: "jamie@gmail.com", type: "email" as const },
-  { id: "user-3", name: "Taylor", address: "0x2k3l...4m5n", type: "wallet" as const },
-  { id: "user-4", name: "Sam", address: "sam@gmail.com", type: "email" as const },
-  { id: "user-5", name: "Morgan", address: "morgan@gmail.com", type: "email" as const },
-  { id: "user-6", name: "Riley", address: "0x9a8b...7c6d", type: "wallet" as const },
 ]
 
 interface VoteOption {
@@ -96,6 +79,28 @@ const initialVoteOption = { id: "option-1", text: "" }
 
 export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) {
   const [step, setStep] = useState(1)
+  const [groups, setGroups] = useState(defaultGroups)
+  const [recentContacts, setRecentContacts] = useState<Array<{ id: string; name: string; address: string; type: "wallet" | "email" }>>([])
+
+  useEffect(() => {
+    try {
+      const storedGroups = JSON.parse(localStorage.getItem("user_groups") || "[]")
+      if (Array.isArray(storedGroups) && storedGroups.length > 0) {
+        setGroups(storedGroups)
+      }
+    } catch {}
+
+    const devAccs = getCachedDevAccounts()
+    if (devAccs.length > 0) {
+      setRecentContacts(devAccs.map((a, i) => ({ id: `dev-${i}`, name: a.name, address: a.address, type: "wallet" as const })))
+    } else {
+      setRecentContacts([
+        { id: "user-1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", type: "wallet" as const },
+        { id: "user-2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
+        { id: "user-3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f", type: "wallet" as const },
+      ])
+    }
+  }, [open])
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [voteType, setVoteType] = useState("single") // single, multiple, ranked
@@ -244,6 +249,19 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
       stored.unshift(newVote)
       localStorage.setItem("sui_governance_votes", JSON.stringify(stored))
       window.dispatchEvent(new CustomEvent("sui-votes-updated", { detail: stored }))
+
+      if (createTransaction) {
+        createTransferProposalOnChain({
+          title: title.trim(),
+          recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+          amount: 10,
+          token: "SUI",
+          description: description.trim() || "关联治理转账提案",
+          groupId: selectedGroup || "group-1",
+          groupName: groups.find((g) => g.id === selectedGroup)?.name || "Team Treasury",
+          deadlineMs: expiryDate ? expiryDate.getTime() : undefined,
+        }).catch((err) => console.warn("Attached onchain proposal notice:", err))
+      }
     } catch (e) {
       console.warn("Failed to save vote to localStorage", e)
     }

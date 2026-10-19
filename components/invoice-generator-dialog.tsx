@@ -20,6 +20,7 @@ import { cn } from "@/lib/utils"
 import { CalendarIcon, FileText, Plus, Trash, Download, Share2, Copy } from "lucide-react"
 import { Textarea } from "@/components/ui/textarea"
 import { Switch } from "@/components/ui/switch"
+import { getActiveAccount } from "@/lib/onchain-store"
 
 interface InvoiceGeneratorDialogProps {
   open: boolean
@@ -56,13 +57,27 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
     }
 
     setIsProcessing(true)
-
-    // Simulate API call
-    setTimeout(() => {
-      setIsProcessing(false)
-      setIsPreview(true)
-      // In a real app, you would save the invoice here
-    }, 1500)
+    try {
+      const stored = JSON.parse(localStorage.getItem("sui_invoices") || "[]")
+      const myAddress = getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
+      const total = calculateTotal()
+      const newInvoice = {
+        invoiceNumber,
+        recipient: recipient.trim() || myAddress,
+        recipientEmail,
+        issueDate: issueDate?.toISOString(),
+        dueDate: dueDate?.toISOString(),
+        token,
+        items,
+        notes,
+        total,
+        paymentAddress: myAddress,
+        paymentUri: `sui:${myAddress}?amount=${total}&coin=${token}&desc=Invoice-${invoiceNumber}`,
+      }
+      localStorage.setItem("sui_invoices", JSON.stringify([newInvoice, ...stored]))
+    } catch {}
+    setIsProcessing(false)
+    setIsPreview(true)
   }
 
   const addItem = () => {
@@ -209,22 +224,47 @@ export function InvoiceGeneratorDialog({ open, onOpenChange, groupId }: InvoiceG
               )}
 
               <div className="mt-8 border-t pt-4 text-center">
-                <p className="text-sm text-muted-foreground">Payment can be made to wallet address: 0x0000...0000</p>
+                <p className="text-xs text-muted-foreground font-mono">
+                  Sui 收款钱包地址: {getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"}
+                </p>
               </div>
             </div>
 
             <div className="flex justify-center space-x-2">
-              <Button variant="outline" className="flex items-center">
-                <Download className="h-4 w-4 mr-2" />
-                Download PDF
-              </Button>
-              <Button variant="outline" className="flex items-center">
+              <Button
+                variant="outline"
+                className="flex items-center text-xs"
+                onClick={() => {
+                  const myAddress = getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
+                  const total = calculateTotal()
+                  const paymentUri = `sui:${myAddress}?amount=${total}&coin=${token}&desc=Invoice-${invoiceNumber}`
+                  navigator.clipboard.writeText(paymentUri)
+                  alert("支付链接已复制到剪贴板！")
+                }}
+              >
                 <Copy className="h-4 w-4 mr-2" />
-                Copy Link
+                复制收款链接
               </Button>
-              <Button variant="outline" className="flex items-center">
-                <Share2 className="h-4 w-4 mr-2" />
-                Share
+              <Button
+                variant="outline"
+                className="flex items-center text-xs"
+                onClick={() => {
+                  const invoiceText = `Sui Web3 商业账单
+账单编号: ${invoiceNumber}
+金额: ${calculateTotal()} ${token}
+收款人: ${getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"}
+日期: ${format(issueDate || new Date(), "yyyy-MM-dd")}`
+                  const blob = new Blob([invoiceText], { type: "text/plain" })
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement("a")
+                  a.href = url
+                  a.download = `${invoiceNumber}.txt`
+                  a.click()
+                  URL.revokeObjectURL(url)
+                }}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                导出账单文本
               </Button>
             </div>
           </div>

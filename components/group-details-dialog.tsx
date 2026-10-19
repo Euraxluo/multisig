@@ -160,8 +160,8 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
   const [redPackets, setRedPackets] = useState<Record<string, RedPacketData>>({
     rp_genesis: {
       id: "rp_genesis",
-      sender: "0x1a2b...3c4d",
-      senderName: "Alice (群主)",
+      sender: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+      senderName: "Agent-Alice (群发起人)",
       totalAmount: 6.0,
       totalCount: 3,
       remainingAmount: 2.2,
@@ -173,8 +173,8 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
       claims: [
         {
           id: "c1",
-          claimer: "0x5e6f...7g8h",
-          claimerName: "Eve (舰长)",
+          claimer: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
+          claimerName: "Agent-Bob (审计员)",
           amount: 3.8,
           claimedAt: "14:23",
           isBest: true,
@@ -258,17 +258,30 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     }
 
     let claimAmount = 0
-    if (packet.remainingCount === 1) {
+    if (packet.remainingCount <= 1) {
       claimAmount = packet.remainingAmount
+    } else if (packet.packetType === "EQUAL") {
+      claimAmount = Number((packet.remainingAmount / packet.remainingCount).toFixed(3))
     } else {
-      const avg = packet.remainingAmount / packet.remainingCount
-      const maxClaim = Math.min(packet.remainingAmount - (packet.remainingCount - 1) * 0.001, avg * 2)
-      claimAmount = +(Math.random() * (maxClaim - 0.05) + 0.05).toFixed(3)
+      // 严格对齐 Move agent_vault::red_packet::calculate_payout 二倍均值算法
+      const now = Date.now()
+      const remainingMist = BigInt(Math.round(packet.remainingAmount * 1e9))
+      const remCount = BigInt(packet.remainingCount)
+      const salt = BigInt(now) + remainingMist + (remCount * 17n)
+      const avg = remainingMist / remCount
+      const maxPossible = avg * 2n
+      const randomPart = maxPossible > 0n ? (salt % maxPossible) : avg
+      const payoutMist = randomPart === 0n ? 1_000_000n : randomPart
+      claimAmount = Math.max(0.001, Number(payoutMist) / 1e9)
+      claimAmount = Number(claimAmount.toFixed(3))
+      if (claimAmount > packet.remainingAmount - (packet.remainingCount - 1) * 0.001) {
+        claimAmount = Number((packet.remainingAmount - (packet.remainingCount - 1) * 0.001).toFixed(3))
+      }
     }
 
     const newClaim = {
       id: `c_${Date.now()}`,
-      claimer: acc?.address || "0x6o7p...8q9r",
+      claimer: acc?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
       claimerName: "You (当前用户)",
       amount: claimAmount,
       claimedAt: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
@@ -347,7 +360,7 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
     const newId = onChainId || `rp_${Date.now()}`
     const newPacket: RedPacketData = {
       id: newId,
-      sender: acc?.address || "0x6o7p...8q9r",
+      sender: acc?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
       senderName: "You (群成员)",
       totalAmount: params.totalAmount,
       totalCount: params.totalCount,
@@ -418,10 +431,10 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
 
     if (cmd === "/tip") {
       const acc = getActiveAccount()
-      const eveAddr = "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f"
+      const bobAddr = "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36"
       if (acc?.address) {
         try {
-          const tx = vaultClient.buildDirectTransferPTB(eveAddr, 1_000_000_000n)
+          const tx = vaultClient.buildDirectTransferPTB(bobAddr, 1_000_000_000n)
           await signAndExecuteWithWallet(tx)
         } catch (e: any) {
           console.warn("[Tip] Direct transfer fallback notice:", e.message)
@@ -435,11 +448,11 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
           sender: "You",
           role: "成员",
           time: new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
-          text: "向 @Eve 打赏了 1.0 SUI 💰",
+          text: "向 @Agent-Bob 打赏了 1.0 SUI 💰",
           isSubagent: true,
         },
       ])
-      setClaimedNotice("打赏成功：已向 @Eve 转账 1.0 SUI")
+      setClaimedNotice("打赏成功：已向 @Agent-Bob 转账 1.0 SUI")
       setTimeout(() => setClaimedNotice(null), 4000)
       return
     }
@@ -615,12 +628,12 @@ export function GroupDetailsDialog({ open, onOpenChange, groupId }: GroupDetails
         creator: "0xaf08...e2e4",
         creatorName: "Alex",
         members: [
-          { address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", name: "Alex", weight: 2 },
-          { address: "0x00000000000000000000000000000000000000000000000000000000000000a1", name: "Taylor", weight: 3 },
-          { address: "0x00000000000000000000000000000000000000000000000000000000000000b2", name: "You", weight: 2 },
+          { address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", name: "Agent-Alice (理事长)", weight: 2 },
+          { address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", name: "Agent-Bob (审计员)", weight: 1 },
+          { address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", name: "Agent-Carol (执行官)", weight: 1 },
         ],
-        threshold: 4,
-        totalWeight: 7,
+        threshold: 2,
+        totalWeight: 4,
         transactions: realProposals,
         agents: [
           {

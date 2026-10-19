@@ -69,7 +69,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
       description: "向流动性池注入做市资金",
       createdAt: "2025-02-10T12:00:00Z",
       lastUsed: "2025-03-10T12:00:00Z",
-      contract: "0x83fb...5a36",
+      contract: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
       function: "deposit",
       args: '{"amount": "100"}',
     },
@@ -79,7 +79,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
       type: "contract",
       description: "在 DeepBook / Cetus 执行稳定币兑换",
       createdAt: "2025-02-05T12:00:00Z",
-      contract: "0x0000...0002",
+      contract: "0x0000000000000000000000000000000000000000000000000000000000000002",
       function: "swap",
       args: '{"tokenIn": "SUI", "tokenOut": "USDC", "amountIn": "10"}',
     },
@@ -148,7 +148,8 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
   }
 
   const handleDeleteTemplate = (id: string) => {
-    setTemplates(templates.filter((template) => template.id !== id))
+    const updated = templates.filter((template) => template.id !== id)
+    persistTemplates(updated)
     setDeleteTemplateId(null)
   }
 
@@ -210,11 +211,13 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
       batchItems: formState.batchItems,
     }
 
+    let updated: TransactionTemplate[]
     if (editingTemplate) {
-      setTemplates(templates.map((t) => (t.id === editingTemplate.id ? newTemplate : t)))
+      updated = templates.map((t) => (t.id === editingTemplate.id ? newTemplate : t))
     } else {
-      setTemplates([...templates, newTemplate])
+      updated = [...templates, newTemplate]
     }
+    persistTemplates(updated)
 
     setIsEditMode(false)
     setEditingTemplate(null)

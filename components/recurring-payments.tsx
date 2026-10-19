@@ -1,10 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { CalendarClock, Waves, Clock, Calendar, MoreHorizontal, Pause, Play, X } from "lucide-react"
+import { CalendarClock, Waves, MoreHorizontal, Pause, Play, X } from "lucide-react"
 import { motion } from "framer-motion"
 import { format, addDays } from "date-fns"
 import { Progress } from "@/components/ui/progress"
@@ -31,59 +31,100 @@ interface RecurringPaymentsProps {
   groupId?: string
 }
 
+interface PaymentRecord {
+  id: string
+  type: "recurring" | "stream"
+  name: string
+  recipient: string
+  amount: string
+  token: string
+  frequency?: string
+  nextPayment?: any
+  startDate?: any
+  endDate?: any
+  progress?: number
+  status: "active" | "paused"
+}
+
+const DEFAULT_PAYMENTS: PaymentRecord[] = [
+  {
+    id: "payment-1",
+    type: "recurring",
+    name: "Team Salaries (核心开发者津贴)",
+    recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+    amount: "100",
+    token: "SUI",
+    frequency: "Monthly",
+    nextPayment: addDays(new Date(), 15),
+    status: "active",
+  },
+  {
+    id: "payment-2",
+    type: "stream",
+    name: "Audit Stream (Move 安全审计流支付)",
+    recipient: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
+    amount: "50",
+    token: "USDC",
+    startDate: addDays(new Date(), -5),
+    endDate: addDays(new Date(), 25),
+    progress: 20,
+    status: "active",
+  },
+]
+
 export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
+  const [payments, setPayments] = useState<PaymentRecord[]>(DEFAULT_PAYMENTS)
   const [cancelPaymentId, setCancelPaymentId] = useState<string | null>(null)
 
-  // Mock recurring payments data (typed loosely so heterogeneous record shapes coexist)
-  const recurringPayments: Array<{
-    id: string
-    type: "recurring" | "stream"
-    name: string
-    recipient: string
-    amount: string
-    token: string
-    frequency?: string
-    nextPayment?: Date
-    startDate?: Date
-    endDate?: Date
-    progress?: number
-    status: "active" | "paused"
-  }> = [
-    {
-      id: "payment-1",
-      type: "recurring",
-      name: "Team Salaries",
-      recipient: "0x0000...0000",
-      amount: "1000",
-      token: "USDC",
-      frequency: "Monthly",
-      nextPayment: addDays(new Date(), 15),
-      status: "active",
-    },
-    {
-      id: "payment-2",
-      type: "stream",
-      name: "Contractor Payment",
-      recipient: "0x0000...0000",
-      amount: "500",
-      token: "USDC",
-      startDate: addDays(new Date(), -10),
-      endDate: addDays(new Date(), 20),
-      progress: 33,
-      status: "active",
-    },
-    {
-      id: "payment-3",
-      type: "recurring",
-      name: "Server Costs",
-      recipient: "0x0000...0000",
-      amount: "50",
-      token: "USDT",
-      frequency: "Weekly",
-      nextPayment: addDays(new Date(), 3),
-      status: "paused",
-    },
-  ]
+  useEffect(() => {
+    const load = () => {
+      try {
+        const stored = localStorage.getItem("sui_recurring_payments")
+        if (stored) {
+          const parsed = JSON.parse(stored)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setPayments(parsed)
+            return
+          }
+        }
+        localStorage.setItem("sui_recurring_payments", JSON.stringify(DEFAULT_PAYMENTS))
+      } catch {}
+    }
+    load()
+    window.addEventListener("sui-recurring-updated", load)
+    window.addEventListener("storage", load)
+    return () => {
+      window.removeEventListener("sui-recurring-updated", load)
+      window.removeEventListener("storage", load)
+    }
+  }, [])
+
+  const saveList = (updated: PaymentRecord[]) => {
+    setPayments(updated)
+    try {
+      localStorage.setItem("sui_recurring_payments", JSON.stringify(updated))
+      window.dispatchEvent(new CustomEvent("sui-recurring-updated", { detail: updated }))
+    } catch {}
+  }
+
+  const togglePaymentStatus = (paymentId: string) => {
+    const updated = payments.map((p) => {
+      if (p.id === paymentId) {
+        return {
+          ...p,
+          status: (p.status === "active" ? "paused" : "active") as "active" | "paused",
+        }
+      }
+      return p
+    })
+    saveList(updated)
+  }
+
+  const cancelPayment = (paymentId: string) => {
+    const updated = payments.filter((p) => p.id !== paymentId)
+    saveList(updated)
+    setCancelPaymentId(null)
+  }
 
   const container = {
     hidden: { opacity: 0 },
@@ -100,33 +141,20 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
     show: { opacity: 1, y: 0 },
   }
 
-  const togglePaymentStatus = (paymentId: string, currentStatus: string) => {
-    // In a real app, you would update the payment status here
-    console.log(
-      `Toggling payment ${paymentId} from ${currentStatus} to ${currentStatus === "active" ? "paused" : "active"}`,
-    )
-  }
-
-  const cancelPayment = (paymentId: string) => {
-    // In a real app, you would cancel the payment here
-    console.log(`Cancelling payment ${paymentId}`)
-    setCancelPaymentId(null)
-  }
-
   return (
     <>
       <div className="mb-4">
-        <h3 className="text-lg font-semibold mb-3">Active Payments</h3>
+        <h3 className="text-lg font-semibold mb-3">周期与流支付</h3>
 
-        {recurringPayments.length === 0 ? (
+        {payments.length === 0 ? (
           <Card className="border-dashed">
             <CardContent className="p-6 flex flex-col items-center justify-center">
-              <p className="text-muted-foreground text-sm">No active recurring or stream payments</p>
+              <p className="text-muted-foreground text-sm">暂无活跃的周期计划或流支付</p>
             </CardContent>
           </Card>
         ) : (
           <motion.div className="grid gap-2" variants={container} initial="hidden" animate="show">
-            {recurringPayments.map((payment) => (
+            {payments.map((payment) => (
               <motion.div key={payment.id} variants={item}>
                 <Card className="overflow-hidden border-none shadow-sm">
                   <div
@@ -147,13 +175,13 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
                             <h4 className="text-sm font-medium">{payment.name}</h4>
                             <Badge
                               variant={payment.status === "active" ? "default" : "outline"}
-                              className={`ml-2 text-xs ${payment.status === "active" ? "bg-green-500/20 text-green-700 hover:bg-green-500/20" : "text-muted-foreground"}`}
+                              className={`ml-2 text-xs ${payment.status === "active" ? "bg-green-500/20 text-green-700 dark:text-green-400 border-green-500/30" : "text-muted-foreground"}`}
                             >
-                              {payment.status === "active" ? "Active" : "Paused"}
+                              {payment.status === "active" ? "生效中" : "已暂停"}
                             </Badge>
                           </div>
-                          <p className="text-xs text-muted-foreground">
-                            {payment.amount} {payment.token} to {payment.recipient}
+                          <p className="text-xs text-muted-foreground font-mono">
+                            {payment.amount} {payment.token} → {payment.recipient.length > 14 ? `${payment.recipient.slice(0, 8)}...${payment.recipient.slice(-4)}` : payment.recipient}
                           </p>
                         </div>
                       </div>
@@ -165,18 +193,18 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                          <DropdownMenuLabel>操作菜单</DropdownMenuLabel>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => togglePaymentStatus(payment.id, payment.status)}>
+                          <DropdownMenuItem onClick={() => togglePaymentStatus(payment.id)}>
                             {payment.status === "active" ? (
                               <>
                                 <Pause className="h-4 w-4 mr-2" />
-                                Pause Payment
+                                暂停计划
                               </>
                             ) : (
                               <>
                                 <Play className="h-4 w-4 mr-2" />
-                                Resume Payment
+                                恢复计划
                               </>
                             )}
                           </DropdownMenuItem>
@@ -185,30 +213,26 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
                             className="text-destructive focus:text-destructive"
                           >
                             <X className="h-4 w-4 mr-2" />
-                            Cancel Payment
+                            终止计划
                           </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </div>
 
-                    {payment.type === "recurring" ? (
-                      <div className="mt-2 flex items-center text-xs text-muted-foreground">
-                        <Clock className="h-3 w-3 mr-1" />
-                        Next payment: {payment.nextPayment ? format(payment.nextPayment, "MMM d, yyyy") : "—"}
-                        <span className="mx-1">•</span>
-                        <Calendar className="h-3 w-3 mr-1" />
-                        {payment.frequency}
+                    {payment.type === "recurring" && payment.nextPayment && (
+                      <div className="mt-2 pt-2 border-t flex justify-between text-xs text-muted-foreground">
+                        <span>周期: {payment.frequency}</span>
+                        <span>下期划款: {format(new Date(payment.nextPayment), "yyyy-MM-dd")}</span>
                       </div>
-                    ) : (
-                      <div className="mt-2 space-y-1">
-                        <div className="flex items-center justify-between text-xs text-muted-foreground">
-                          <span>Progress: {payment.progress}%</span>
-                          <span>
-                            {payment.startDate ? format(payment.startDate, "MMM d") : "—"} -{" "}
-                            {payment.endDate ? format(payment.endDate, "MMM d, yyyy") : "—"}
-                          </span>
+                    )}
+
+                    {payment.type === "stream" && (
+                      <div className="mt-2 pt-2 border-t space-y-1">
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>流式释放进度</span>
+                          <span>{payment.progress || 0}%</span>
                         </div>
-                        <Progress value={payment.progress} className="h-1.5" />
+                        <Progress value={payment.progress || 0} className="h-1.5" />
                       </div>
                     )}
                   </CardContent>
@@ -219,21 +243,21 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
         )}
       </div>
 
-      <AlertDialog open={!!cancelPaymentId} onOpenChange={(open) => !open && setCancelPaymentId(null)}>
+      <AlertDialog open={!!cancelPaymentId} onOpenChange={() => setCancelPaymentId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Cancel Payment</AlertDialogTitle>
+            <AlertDialogTitle>确认终止该划款计划？</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to cancel this payment? This action cannot be undone.
+              终止后将停止后续所有自动化周期划转或流支付释放。此操作不可逆。
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => cancelPaymentId && cancelPayment(cancelPaymentId)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Yes, Cancel Payment
+              确认终止
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -104,7 +104,7 @@ export default function Profile() {
     }
   }, [])
 
-  const personalAddress = savedUser?.address || "0x0000000000000000000000000000000000000000"
+  const personalAddress = savedUser?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
   const personalLabel = savedUser ? `${savedUser.identifier} (${savedUser.authMethodLabel || savedUser.type})` : "未连接钱包 (点击右上角登录)"
 
   const dynamicGroupAccounts = userGroups.map((g: any, idx: number) => ({

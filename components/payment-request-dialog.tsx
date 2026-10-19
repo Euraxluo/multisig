@@ -47,15 +47,11 @@ export function PaymentRequestDialog({ open, onOpenChange, groupId }: PaymentReq
   const tokens = ["SUI", "USDC", "USDT"]
 
   const handleSubmit = () => {
-    setIsProcessing(true)
     const myAddress = getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
     const realUri = `sui:${myAddress}?amount=${amount || "1"}&coin=${token}&desc=${encodeURIComponent(description || "Wallet Transfer")}`
-
-    setTimeout(() => {
-      setIsProcessing(false)
-      setIsGenerated(true)
-      setRequestLink(realUri)
-    }, 400)
+    setIsProcessing(false)
+    setIsGenerated(true)
+    setRequestLink(realUri)
   }
 
   const copyToClipboard = (text: string) => {

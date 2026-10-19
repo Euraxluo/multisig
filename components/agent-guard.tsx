@@ -185,23 +185,21 @@ export default function AgentGuard() {
     }
 
     let txDigest = "";
+    const account = getActiveAccount();
+    if (!account?.address) {
+      alert("请先在右上角选择 Keystore 账户或连接钱包，以便在链上执行微支付");
+      return;
+    }
+
     try {
-      const account = getActiveAccount();
-      if (account?.address) {
-        const costMist = BigInt(Math.round(cost * 1e9));
-        const tx = vaultClient.buildDirectTransferPTB(targetCard.address, costMist);
-        const res = await signAndExecuteWithWallet(tx);
-        txDigest = res.digest;
-      } else {
-        const randomBytes = new Uint8Array(20);
-        crypto.getRandomValues(randomBytes);
-        txDigest = `0x${Array.from(randomBytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
-      }
+      const costMist = BigInt(Math.round(cost * 1e9));
+      const tx = vaultClient.buildDirectTransferPTB(targetCard.address, costMist);
+      const res = await signAndExecuteWithWallet(tx);
+      txDigest = res.digest;
     } catch (e: any) {
       console.warn("[AgentGuard] payment notice:", e.message);
-      const randomBytes = new Uint8Array(20);
-      crypto.getRandomValues(randomBytes);
-      txDigest = `0x${Array.from(randomBytes).map((b) => b.toString(16).padStart(2, "0")).join("")}`;
+      alert(`微支付执行失败: ${e.message || "钱包签署被取消或网络错误"}`);
+      return;
     }
 
     const updatedCards = cards.map((c) => {

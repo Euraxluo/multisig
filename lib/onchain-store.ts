@@ -77,7 +77,7 @@ const DEFAULT_PROPOSALS: ProposalItem[] = [
     deadlineMs: Date.now() + 3600000 * 24 * 7,
     type: "transfer",
     color: "from-primary to-purple-500",
-    voters: ["0x00000000000000000000000000000000000000000000000000000000000000a1"],
+    voters: ["0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"],
   },
   {
     id: "tx-init-2",
@@ -89,7 +89,7 @@ const DEFAULT_PROPOSALS: ProposalItem[] = [
     token: "SUI",
     groupId: "group-2",
     groupName: "DAO Fund (Sui Native)",
-    recipient: "0x0000000000000000000000000000000000000000000000000000000000000002",
+    recipient: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
     status: "pending",
     approvals: 1,
     requiredApprovals: 2,
@@ -98,7 +98,7 @@ const DEFAULT_PROPOSALS: ProposalItem[] = [
     deadlineMs: Date.now() + 3600000 * 24 * 5,
     type: "contract",
     color: "from-blue-500 to-cyan-400",
-    voters: [],
+    voters: ["0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36"],
   },
 ]
 
@@ -326,15 +326,18 @@ export async function createTransferProposalOnChain(params: {
  */
 export async function approveProposal(proposalId: string): Promise<{ success: boolean; isNowApproved: boolean; digest?: string }> {
   const account = getActiveAccount()
-  const userAddr = account?.address || "0x0000000000000000000000000000000000000000"
+  if (!account?.address) {
+    throw new Error("请先连接钱包或在右上角切换 Dev Keystore 账户后再进行投票审批")
+  }
+  const userAddr = account.address
 
   const proposals = getProposals()
   const idx = proposals.findIndex((p) => p.id === proposalId)
   if (idx === -1) throw new Error("Proposal not found")
 
   const target = proposals[idx]
-  if (target.voters.includes(userAddr) && userAddr !== "0x0000000000000000000000000000000000000000") {
-    throw new Error("You have already voted on this proposal")
+  if (target.voters.includes(userAddr)) {
+    throw new Error("当前账户已对该提案投票，请切换其他多签成员账户进行会签")
   }
 
   let voteDigest: string | undefined = undefined
@@ -417,11 +420,25 @@ export async function executeProposal(proposalId: string): Promise<{ success: bo
       const res = await signAndExecuteWithWallet(tx)
       executionDigest = res.digest
     } catch (e: any) {
-      console.warn("[onchain-store] On-chain execute withdrawal via wallet failed, marking state locally:", e.message)
+      console.warn("[onchain-store] On-chain execute withdrawal via vault failed:", e.message)
+      throw e
     }
   } else {
-    // 模拟生成可验证的模拟执行记录
-    executionDigest = `0xexec_${Date.now().toString(16)}`
+    // 零 Mock 真实链上交互：通过活跃钱包/多签理事实时提交执行 PTB，获得真实 Testnet 交易摘要
+    try {
+      const { Transaction } = await import("@mysten/sui/transactions")
+      const tx = new Transaction()
+      const mistAmount = BigInt(target.amountMist || "10000000") // 默认微额 0.01 SUI
+      // 避免测试环境 gas 不足，真实测试划转微额 SUI
+      const execMist = mistAmount > 10000000n ? 10000000n : mistAmount
+      const [coin] = tx.splitCoins(tx.gas, [execMist])
+      tx.transferObjects([coin], target.recipient)
+      const res = await signAndExecuteWithWallet(tx)
+      executionDigest = res.digest
+    } catch (e: any) {
+      console.warn("[onchain-store] Execution transaction failed on chain:", e)
+      throw e
+    }
   }
 
   proposals[idx] = {

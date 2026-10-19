@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
@@ -13,34 +13,57 @@ interface QuickTemplatesProps {
   groupId?: string
 }
 
+const DEFAULT_TEMPLATES = [
+  {
+    id: "template-1",
+    name: "每月团队津贴发放",
+    type: "transfer",
+    description: "向核心贡献者划拨 50 SUI 津贴",
+    lastUsed: new Date().toISOString(),
+  },
+  {
+    id: "template-2",
+    name: "生态流动性金库充值",
+    type: "contract",
+    description: "向流动性池注入做市资金",
+    lastUsed: new Date(Date.now() - 86400000 * 3).toISOString(),
+  },
+  {
+    id: "template-3",
+    name: "SUI/USDC 快捷对冲",
+    type: "contract",
+    description: "在 DeepBook / Cetus 执行稳定币兑换",
+  },
+]
+
 export function QuickTemplates({ groupId }: QuickTemplatesProps) {
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false)
   const [isCreateTransactionOpen, setIsCreateTransactionOpen] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
+  const [templates, setTemplates] = useState(DEFAULT_TEMPLATES)
 
-  // Mock templates data
-  const templates = [
-    {
-      id: "template-1",
-      name: "Monthly Salary Payment",
-      type: "transfer",
-      description: "Transfer 500 USDC to team members",
-      lastUsed: "2025-03-15T12:00:00Z",
-    },
-    {
-      id: "template-2",
-      name: "Staking Rewards",
-      type: "contract",
-      description: "Claim staking rewards from DeFi protocol",
-      lastUsed: "2025-03-10T12:00:00Z",
-    },
-    {
-      id: "template-3",
-      name: "Token Swap",
-      type: "contract",
-      description: "Swap SUI for USDC on DEX",
-    },
-  ]
+  useEffect(() => {
+    const load = () => {
+      try {
+        const stored = localStorage.getItem("sui_payment_templates")
+        if (stored) {
+          const parsed = JSON.parse(stored)
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTemplates(parsed)
+            return
+          }
+        }
+        localStorage.setItem("sui_payment_templates", JSON.stringify(DEFAULT_TEMPLATES))
+      } catch {}
+    }
+    load()
+    window.addEventListener("sui-templates-updated", load)
+    window.addEventListener("storage", load)
+    return () => {
+      window.removeEventListener("sui-templates-updated", load)
+      window.removeEventListener("storage", load)
+    }
+  }, [])
 
   const getTemplateIcon = (type: string) => {
     switch (type) {

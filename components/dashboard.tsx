@@ -14,10 +14,27 @@ import { QuickTemplates } from "@/components/quick-templates"
 import { RecurringPayments } from "@/components/recurring-payments"
 import { getActiveAccount, fetchRealBalances, getProposals } from "@/lib/onchain-store"
 
+const DEFAULT_GROUPS = [
+  {
+    id: "group-1",
+    name: "Team Treasury (Sui MultiSig)",
+    network: "Sui Testnet (v3)",
+    orgObjectId: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+    members: [
+      { name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", weight: 2 },
+      { name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", weight: 1 },
+      { name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", weight: 1 },
+    ],
+    threshold: 2,
+    totalWeight: 4,
+    createdAt: new Date().toISOString(),
+  },
+]
+
 export default function Dashboard() {
   const [selectedGroup, setSelectedGroup] = useState<{ id: string; name: string } | null>(null)
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false)
-  const [userGroups, setUserGroups] = useState<any[]>([])
+  const [userGroups, setUserGroups] = useState<any[]>(DEFAULT_GROUPS)
   const [totalAssetsUsd, setTotalAssetsUsd] = useState<number>(0)
   const [pendingCount, setPendingCount] = useState<number>(0)
 
@@ -28,7 +45,14 @@ export default function Dashboard() {
       // 1. 读取群组列表
       try {
         const saved = JSON.parse(localStorage.getItem("user_groups") || "[]")
-        if (!cancelled) setUserGroups(saved)
+        if (!cancelled) {
+          if (Array.isArray(saved) && saved.length > 0) {
+            setUserGroups(saved)
+          } else {
+            setUserGroups(DEFAULT_GROUPS)
+            localStorage.setItem("user_groups", JSON.stringify(DEFAULT_GROUPS))
+          }
+        }
       } catch {}
 
       // 2. 读取待处理提案数
@@ -60,12 +84,16 @@ export default function Dashboard() {
     const onProposalsUpdated = () => loadData()
     window.addEventListener("storage", onStorage)
     window.addEventListener("sui-proposals-updated", onProposalsUpdated)
+    window.addEventListener("sui-groups-updated", onStorage)
+    window.addEventListener("sui-account-switched", onStorage)
     const id = window.setInterval(loadData, 4000)
 
     return () => {
       cancelled = true
       window.removeEventListener("storage", onStorage)
       window.removeEventListener("sui-proposals-updated", onProposalsUpdated)
+      window.removeEventListener("sui-groups-updated", onStorage)
+      window.removeEventListener("sui-account-switched", onStorage)
       window.clearInterval(id)
     }
   }, [])
