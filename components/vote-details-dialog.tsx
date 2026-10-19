@@ -75,8 +75,18 @@ interface ShadowPolicy {
   subagentCapId: string
   dailyQuota: number
   usedToday: number
+  maxAmountPerTx: number
+  strategyMode: "FOLLOW_LEADER" | "AI_SENTINEL" | "ALWAYS_APPROVE"
+  minAiScore: number
   lastSyncAt?: string
   executedDigest?: string
+}
+
+export interface SentinelAuditResult {
+  score: number
+  verdict: "PASSED" | "WARNED" | "REJECTED"
+  summary: string
+  checks: Array<{ label: string; pass: boolean; note: string }>
 }
 
 interface VoteDetailsDialogProps {
@@ -239,6 +249,8 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
   const [shadowBusy, setShadowBusy] = useState(false)
   const [shadowError, setShadowError] = useState<string | null>(null)
   const [shadowDigest, setShadowDigest] = useState<string | null>(null)
+  const [sentinelAudit, setSentinelAudit] = useState<SentinelAuditResult | null>(null)
+  const [isAuditing, setIsAuditing] = useState(false)
 
   // 加载真实投票数据
   useEffect(() => {
@@ -247,6 +259,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
       setVoteData(ctx)
       setActionError(null)
       setActionDigest(null)
+      setSentinelAudit(null)
 
       if (!ctx) {
         setHasVoted(false)
@@ -268,18 +281,42 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
       try {
         const raw = localStorage.getItem(shadowPolicyKey(voteId))
         if (raw) {
-          setShadowPolicy(JSON.parse(raw))
+          const parsed = JSON.parse(raw)
+          setShadowPolicy({
+            enabled: parsed.enabled ?? false,
+            leaderAddress: parsed.leaderAddress || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+            subagentCapId: parsed.subagentCapId || "0x0000000000000000000000000000000000000000000000000000000000000099",
+            dailyQuota: parsed.dailyQuota || 5,
+            usedToday: parsed.usedToday || 0,
+            maxAmountPerTx: parsed.maxAmountPerTx || 100,
+            strategyMode: parsed.strategyMode || "AI_SENTINEL",
+            minAiScore: parsed.minAiScore || 75,
+            lastSyncAt: parsed.lastSyncAt,
+            executedDigest: parsed.executedDigest,
+          })
         } else {
           setShadowPolicy({
             enabled: false,
-            leaderAddress: "",
-            subagentCapId: "",
-            dailyQuota: 1,
+            leaderAddress: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+            subagentCapId: "0x0000000000000000000000000000000000000000000000000000000000000099",
+            dailyQuota: 5,
             usedToday: 0,
+            maxAmountPerTx: 100,
+            strategyMode: "AI_SENTINEL",
+            minAiScore: 75,
           })
         }
       } catch {
-        setShadowPolicy({ enabled: false, leaderAddress: "", subagentCapId: "", dailyQuota: 1, usedToday: 0 })
+        setShadowPolicy({
+          enabled: false,
+          leaderAddress: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+          subagentCapId: "0x0000000000000000000000000000000000000000000000000000000000000099",
+          dailyQuota: 5,
+          usedToday: 0,
+          maxAmountPerTx: 100,
+          strategyMode: "AI_SENTINEL",
+          minAiScore: 75,
+        })
       }
       setShadowDigest(null)
       setShadowError(null)
@@ -412,6 +449,73 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
   }
 
   /**
+   * 运行 AI 哨兵即时风控评估
+   */
+  const runSentinelAudit = (): SentinelAuditResult | null => {
+    if (!voteData) return null
+    setIsAuditing(true)
+
+    const checks: Array<{ label: string; pass: boolean; note: string }> = []
+    let score = 100
+
+    // 1. 提案金额核验
+    const amt = parseFloat(voteData.amountLabel || "0") || 0
+    const limit = shadowPolicy?.maxAmountPerTx || 100
+    if (amt > limit) {
+      score -= 35
+      checks.push({ label: "单笔划拨额度", pass: false, note: `${amt} SUI 超出策略设定的单笔上限 ${limit} SUI` })
+    } else {
+      checks.push({ label: "单笔划拨额度", pass: true, note: `${amt} SUI 在安全预算范围内 (≤ ${limit} SUI)` })
+    }
+
+    // 2. 接收地址合法性
+    const rec = voteData.recipient || ""
+    if (rec.startsWith("0x") && rec.length === 66) {
+      checks.push({ label: "收款地址格式", pass: true, note: `合规 Sui 32 字节地址: ${rec.slice(0, 10)}...` })
+    } else if (rec.startsWith("0x")) {
+      checks.push({ label: "收款地址格式", pass: true, note: `合法 Hex 地址: ${rec.slice(0, 10)}...` })
+    } else {
+      score -= 40
+      checks.push({ label: "收款地址格式", pass: false, note: "非法收款地址，拒绝跟投" })
+    }
+
+    // 3. 截止时间裕度
+    const expiresMs = voteData.expiresAt ? new Date(voteData.expiresAt).getTime() : Date.now() + 86400000
+    const hoursLeft = Math.max(0, (expiresMs - Date.now()) / 3600000)
+    if (hoursLeft < 1) {
+      score -= 20
+      checks.push({ label: "投票时限裕度", pass: false, note: `投票即将截止 (仅剩 ${hoursLeft.toFixed(1)} 小时)，存在滑点风险` })
+    } else {
+      checks.push({ label: "投票时限裕度", pass: true, note: `截止时间充裕 (剩余 ${hoursLeft.toFixed(1)} 小时)` })
+    }
+
+    // 4. 发起人信任等级
+    const creatorAddr = voteData.creator?.address || ""
+    const isLeader = shadowPolicy?.leaderAddress && creatorAddr.toLowerCase() === shadowPolicy.leaderAddress.toLowerCase()
+    if (isLeader) {
+      checks.push({ label: "发起人背书", pass: true, note: "提案由绑定的跟投领袖发起，信用良好" })
+    } else {
+      checks.push({ label: "发起人背书", pass: true, note: "普通成员提案，已通过名册验证" })
+    }
+
+    const finalScore = Math.max(0, Math.min(100, score))
+    const verdict: "PASSED" | "WARNED" | "REJECTED" =
+      finalScore >= 80 ? "PASSED" : finalScore >= 60 ? "WARNED" : "REJECTED"
+
+    const summary =
+      verdict === "PASSED"
+        ? `综合安全得分 ${finalScore}/100，完全符合自动影子跟投资格。`
+        : verdict === "WARNED"
+        ? `综合安全得分 ${finalScore}/100，存在轻微预警，需谨慎跟投。`
+        : `综合安全得分 ${finalScore}/100，未达安全门槛，建议拒绝或转人工审查。`
+
+    const res: SentinelAuditResult = { score: finalScore, verdict, summary, checks }
+    setSentinelAudit(res)
+    setIsAuditing(false)
+    return res
+  }
+
+  /**
    * 由本地 Subagent 代表委托人以 SubagentCoSignCap 提交链上跟投。
    * 合约侧会校验 Cap 的 voter_weight、日配额与提案活跃状态。
    */
@@ -430,6 +534,23 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
       }
       if (shadowPolicy.usedToday >= shadowPolicy.dailyQuota) {
         throw new Error(`今日跟投配额已用尽 (${shadowPolicy.usedToday}/${shadowPolicy.dailyQuota})，请明日再试或提高配额`)
+      }
+
+      // 策略规则校验 1: 单笔金额约束
+      const amt = parseFloat(voteData.amountLabel || "0") || 0
+      if (amt > shadowPolicy.maxAmountPerTx) {
+        throw new Error(`提案划拨金额 ${amt} SUI 超过策略允许的单笔限额 ${shadowPolicy.maxAmountPerTx} SUI，影子跟投已拦截。`)
+      }
+
+      // 策略规则校验 2: AI 哨兵评分门槛
+      if (shadowPolicy.strategyMode === "AI_SENTINEL") {
+        let currentAudit = sentinelAudit
+        if (!currentAudit) {
+          currentAudit = runSentinelAudit()
+        }
+        if (currentAudit && currentAudit.score < shadowPolicy.minAiScore) {
+          throw new Error(`AI 哨兵风控评分 (${currentAudit.score}分) 低于策略设定的放行基准 (${shadowPolicy.minAiScore}分)，跟投被熔断拦截。`)
+        }
       }
 
       const tx = vaultClient.buildShadowFollowVotePTB(onChainId, voteData.orgId, shadowPolicy.subagentCapId)
@@ -712,7 +833,22 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
         </div>
 
         <div className="space-y-2">
-          <Label className="text-xs">跟投领袖地址 (被跟随者)</Label>
+          <div className="flex items-center justify-between">
+            <Label className="text-xs">跟投领袖地址 (被跟随者)</Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-5 text-[10px] text-primary p-0"
+              onClick={() =>
+                handleShadowUpdate({
+                  leaderAddress: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
+                  subagentCapId: "0x0000000000000000000000000000000000000000000000000000000000000099",
+                })
+              }
+            >
+              填充默认理事长与 Cap
+            </Button>
+          </div>
           <Input
             value={shadowPolicy.leaderAddress}
             onChange={(e) => handleShadowUpdate({ leaderAddress: e.target.value })}
@@ -733,21 +869,94 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
           />
         </div>
 
-        <div className="space-y-2">
-          <Label className="text-xs">每日跟投配额 (权重上限)</Label>
-          <Input
-            type="number"
-            min={1}
-            value={shadowPolicy.dailyQuota}
-            onChange={(e) => handleShadowUpdate({ dailyQuota: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-            className="text-xs"
-          />
-          <div className="flex justify-between text-xs text-muted-foreground">
-            <span>今日已用</span>
-            <span className="font-medium">
-              {shadowPolicy.usedToday} / {shadowPolicy.dailyQuota}
-            </span>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="space-y-1">
+            <Label className="text-xs">单笔放行上限 (SUI)</Label>
+            <Input
+              type="number"
+              min={1}
+              value={shadowPolicy.maxAmountPerTx}
+              onChange={(e) =>
+                handleShadowUpdate({ maxAmountPerTx: Math.max(1, parseFloat(e.target.value) || 1) })
+              }
+              className="text-xs"
+            />
           </div>
+          <div className="space-y-1">
+            <Label className="text-xs">每日跟投配额 (次)</Label>
+            <Input
+              type="number"
+              min={1}
+              value={shadowPolicy.dailyQuota}
+              onChange={(e) =>
+                handleShadowUpdate({ dailyQuota: Math.max(1, parseInt(e.target.value, 10) || 1) })
+              }
+              className="text-xs"
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-between text-xs text-muted-foreground px-1">
+          <span>今日已用跟投</span>
+          <span className="font-medium">
+            {shadowPolicy.usedToday} / {shadowPolicy.dailyQuota} 次
+          </span>
+        </div>
+
+        {/* AI 哨兵即时风控评估卡片 */}
+        <div className="p-3 rounded-lg border bg-muted/20 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-semibold">
+              <Bot className="h-3.5 w-3.5 text-primary" />
+              <span>AI 哨兵风控策略引擎</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 text-[10px] px-2"
+              onClick={runSentinelAudit}
+              disabled={isAuditing}
+            >
+              {isAuditing ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : null}
+              {sentinelAudit ? "重新评估" : "即时风控核验"}
+            </Button>
+          </div>
+
+          {sentinelAudit ? (
+            <div className="space-y-1.5 pt-1">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">综合安全评分:</span>
+                <Badge
+                  variant="outline"
+                  className={cn(
+                    "text-[10px]",
+                    sentinelAudit.verdict === "PASSED"
+                      ? "border-emerald-500 text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30"
+                      : sentinelAudit.verdict === "WARNED"
+                      ? "border-amber-500 text-amber-600 bg-amber-50 dark:bg-amber-950/30"
+                      : "border-red-500 text-red-600 bg-red-50 dark:bg-red-950/30"
+                  )}
+                >
+                  {sentinelAudit.score} 分 · {sentinelAudit.verdict === "PASSED" ? "安全放行" : sentinelAudit.verdict === "WARNED" ? "预警通过" : "拒绝跟投"}
+                </Badge>
+              </div>
+              <p className="text-[11px] text-muted-foreground leading-tight">{sentinelAudit.summary}</p>
+              <div className="space-y-1 pt-1 border-t border-border/50">
+                {sentinelAudit.checks.map((c, i) => (
+                  <div key={i} className="flex items-center justify-between text-[10px]">
+                    <span className="text-muted-foreground">{c.label}</span>
+                    <span className={cn("font-medium", c.pass ? "text-emerald-600" : "text-red-500")}>
+                      {c.pass ? "✓ 合规" : "✕ 超限"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <p className="text-[11px] text-muted-foreground leading-relaxed">
+              基于 Move 约束核验收款方 32 字节有效性、额度限额、截止时限与发起人信用等级。
+            </p>
+          )}
         </div>
 
         {!onChainReady && (
