@@ -86,6 +86,30 @@ export async function GET() {
           }
         })
 
+        let activeAddr = ""
+        const clientYamlPath = path.join(os.homedir(), ".sui", "sui_config", "client.yaml")
+        if (fs.existsSync(clientYamlPath)) {
+          const yamlContent = fs.readFileSync(clientYamlPath, "utf-8")
+          const m = yamlContent.match(/active_address:\s*"?([0-9a-fA-Fx]+)"?/)
+          if (m) activeAddr = m[1].toLowerCase()
+        }
+
+        if (activeAddr) {
+          accounts.sort((a, b) => {
+            if (a.address.toLowerCase() === activeAddr) return -1
+            if (b.address.toLowerCase() === activeAddr) return 1
+            return 0
+          })
+        }
+
+        accounts.forEach((acc, i) => {
+          acc.index = i
+          acc.role = i === 0 ? "Default Active (群发起人)" : `Member #${i + 1}`
+          if (activeAddr && acc.address.toLowerCase() === activeAddr) {
+            acc.name = `本机活跃账户 · ${acc.schema} (Sui CLI Active)`
+          }
+        })
+
         if (accounts.length > 0) {
           return NextResponse.json({
             success: true,
