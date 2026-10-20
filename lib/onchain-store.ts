@@ -1,12 +1,29 @@
 "use client"
 
-import { AgentVaultClient } from "@sui-universal/sdk"
-import { createSuiClient, fetchBalances, type OwnedCoinBalance } from "@sui-universal/sdk"
+import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc"
+import { AgentVaultClient } from "./vault-client"
 import { signAndExecuteWithWallet } from "./sui-wallet-signer"
 
 export const TESTNET_PACKAGE_ID = "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36"
 export const KNOWN_TESTNET_ORG_ID = "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
 
+const TESTNET_RPC_URL = "https://fullnode.testnet.sui.io:443"
+
+function getTestnetClient() {
+  return new SuiJsonRpcClient({ url: TESTNET_RPC_URL, network: "testnet" })
+}
+
+interface OwnedCoinBalance {
+  coinType: string
+  totalBalance: bigint
+}
+
+async function fetchBalances(address: string): Promise<OwnedCoinBalance[]> {
+  const res = await getTestnetClient().getAllBalances({ owner: address })
+  return res.map((b) => ({ coinType: b.coinType, totalBalance: BigInt(b.totalBalance) }))
+}
+
+/** 链上 PTB 构造器。原 @sui-universal/sdk 的 AgentVaultClient，实现已内联到 ./vault-client。 */
 export const vaultClient = new AgentVaultClient({
   packageId: TESTNET_PACKAGE_ID,
   defaultCoinType: "0x2::sui::SUI",
@@ -130,7 +147,7 @@ export async function fetchRealBalances(address: string): Promise<{
   totalUsdValue: number
 }> {
   try {
-    const rawBalances = await fetchBalances("testnet", address)
+    const rawBalances = await fetchBalances(address)
 
     let suiMist = 0n
     let ssuiMist = 0n

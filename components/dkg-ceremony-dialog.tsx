@@ -19,7 +19,9 @@ import {
   Clock,
   ExternalLink,
 } from "lucide-react";
-import { DKGParticipant, GennaroResharingParticipant, ThresholdSignerNode, AgentVaultClient } from "@sui-universal/sdk";
+import { DKGParticipant } from "@/lib/crypto/ceremony";
+import { GennaroResharingParticipant } from "@/lib/crypto/resharing";
+import { ThresholdSignerNode } from "@/lib/crypto/threshold_signer";
 import { signAndExecuteWithWallet, TESTNET_PACKAGE_ID } from "@/lib/sui-wallet-signer";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { bcs } from "@mysten/sui/bcs";
