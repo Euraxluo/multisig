@@ -1,534 +1,350 @@
-"use client";
+"use client"
 
-import { useState, useEffect } from "react";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Progress } from "@/components/ui/progress";
-import { motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Card, CardContent, CardHeader } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
+import { motion } from "framer-motion"
 import {
-  TrendingUp,
-  Clock,
-  Plus,
-  ShieldCheck,
-  Bot,
-  Zap,
-  ShieldAlert,
-  ArrowRight,
-  Flame,
-  Key,
-} from "lucide-react";
-import { AgentVirtualCard, SpendingLog, VaultState } from "@/types/agent";
-import { AgentDetailsDialog } from "@/components/agent-details-dialog";
-import { CreateAgentDialog } from "@/components/create-agent-dialog";
-import { AdjustBudgetDialog } from "@/components/adjust-budget-dialog";
-import { ExportConfigDialog } from "@/components/export-config-dialog";
-import { EmergencyLiquidationDialog } from "@/components/emergency-liquidation-dialog";
-import { getActiveAccount, vaultClient } from "@/lib/onchain-store";
-import { signAndExecuteWithWallet } from "@/lib/sui-wallet-signer";
+  TrendingUp, Clock, Plus, ShieldCheck, Zap, ShieldAlert, ArrowRight, Flame, RefreshCw, Coins, Landmark, EyeOff, ExternalLink,
+} from "lucide-react"
+import { AgentDetailsDialog } from "@/components/agent-details-dialog"
+import { CreateAgentDialog } from "@/components/create-agent-dialog"
+import { AdjustBudgetDialog } from "@/components/adjust-budget-dialog"
+import { ExportConfigDialog } from "@/components/export-config-dialog"
+import { EmergencyLiquidationDialog } from "@/components/emergency-liquidation-dialog"
+import { AgentVaultActionDialog, createAgentVault, type VaultAction } from "@/components/agent-vault-actions-dialog"
+import { SpendDialog } from "@/components/agent-spend-dialog"
+import { formatSuiUnits, parseLegacyAgentRecords, createAgentVaultWriters } from "@/lib/agent-vault-chain"
+import { submitAgentTransaction } from "@/lib/agent-vault-transactions"
+import { remainingBudget, useAgentVault } from "@/lib/use-agent-vault"
+import { useI18n } from "@/components/i18n-provider"
+import type { AgentCapView, AgentVaultView } from "@/types/agent"
 
-const DEFAULT_VAULT: VaultState = {
-  vaultId: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
-  vaultName: "Primary AI Operations Treasury",
-  network: "Sui Testnet (v3)",
-  totalBalance: 100.0,
-  epochNumber: 528,
-  epochResetsIn: "3h 48m",
-  activeAgentsCount: 2,
-  totalAgentsCount: 2,
-  todaySpentTotal: 0.5,
-  todayRequestsTotal: 12,
-  blockedAttemptsTotal: 0,
-  blockedLoopsCount: 0,
-  version: 3,
-};
+const STATUS_LABEL: Record<AgentCapView["status"], string> = {
+  ACTIVE: "agents.statusActive", QUOTA_REACHED: "agents.statusQuotaReached", PAUSED: "agents.statusPaused", REVOKED: "agents.statusRevoked", STALE: "agents.statusStale", UNVERIFIED: "agents.statusUnverified",
+}
+const STATUS_CLASS: Record<AgentCapView["status"], string> = {
+  ACTIVE: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+  QUOTA_REACHED: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+  PAUSED: "bg-muted text-muted-foreground",
+  REVOKED: "bg-red-500/10 text-red-500 border-red-500/20",
+  STALE: "bg-red-500/10 text-red-500 border-red-500/20",
+  UNVERIFIED: "bg-muted text-muted-foreground",
+}
 
-const DEFAULT_CARDS: AgentVirtualCard[] = [
-  {
-    id: "card-deepseek-1",
-    name: "DeepSeek-Reasoner-01",
-    purpose: "x402 DeepSeek V3/R1 Model Inference Calls",
-    category: "LLM_INFERENCE",
-    address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-    capId: "0xcap_deepseek_v3",
-    dailyBudget: 10.0,
-    spentToday: 0.5,
-    totalSpent: 12.8,
-    requestCount: 42,
-    status: "ACTIVE",
-    allowedServices: ["api.deepseek.sui", "api.siliconflow.sui", "x402-gateway.sui"],
-    lastActive: "刚刚",
-    color: "from-blue-600 to-indigo-600",
-  },
-  {
-    id: "card-walrus-store",
-    name: "Walrus-Blob-Store",
-    purpose: "Agent Memory Vector & Ephemeral Context Persistence",
-    category: "STORAGE",
-    address: "0x0000000000000000000000000000000000000000000000000000000000000002",
-    capId: "0xcap_walrus_store",
-    dailyBudget: 2.0,
-    spentToday: 0.0,
-    totalSpent: 4.5,
-    requestCount: 15,
-    status: "ACTIVE",
-    allowedServices: ["publisher.walrus-testnet.walrus.space"],
-    lastActive: "15 分钟前",
-    color: "from-emerald-500 to-teal-600",
-  },
-];
+interface LegacyHistory { cards: number; logs: number; names: string[] }
 
 export default function AgentGuard() {
-  const [cards, setCards] = useState<AgentVirtualCard[]>(DEFAULT_CARDS);
-  const [vault, setVault] = useState<VaultState>(DEFAULT_VAULT);
-  const [logs, setLogs] = useState<SpendingLog[]>([]);
+  const { t } = useI18n()
+  const vault = useAgentVault()
+  const [selectedCap, setSelectedCap] = useState<AgentCapView | null>(null)
+  const [createOpen, setCreateOpen] = useState(false)
+  const [adjustCap, setAdjustCap] = useState<AgentCapView | null>(null)
+  const [exportCap, setExportCap] = useState<AgentCapView | null>(null)
+  const [spendCap, setSpendCap] = useState<AgentCapView | null>(null)
+  const [purgeVault, setPurgeVault] = useState<AgentVaultView | null>(null)
+  const [vaultAction, setVaultAction] = useState<VaultAction | null>(null)
+  const [actionVault, setActionVault] = useState<AgentVaultView | null>(null)
+  const [busy, setBusy] = useState("")
+  const [error, setError] = useState("")
+  const [notice, setNotice] = useState("")
+  const [legacy, setLegacy] = useState<LegacyHistory>({ cards: 0, logs: 0, names: [] })
+  const [showLegacy, setShowLegacy] = useState(false)
+  const generation = useRef(0)
 
   useEffect(() => {
     try {
-      const storedCards = localStorage.getItem("sui_agent_cards");
-      if (storedCards) {
-        const parsed = JSON.parse(storedCards);
-        if (Array.isArray(parsed) && parsed.length > 0) setCards(parsed);
-      }
-      const storedLogs = localStorage.getItem("sui_agent_logs");
-      if (storedLogs) {
-        const parsed = JSON.parse(storedLogs);
-        if (Array.isArray(parsed)) setLogs(parsed);
-      }
-    } catch {}
-  }, []);
+      const parsed = (key: string) => { const raw = localStorage.getItem(key); try { const value = JSON.parse(raw || "[]"); return Array.isArray(value) ? value : [] } catch { return [] } }
+      const records = parseLegacyAgentRecords(parsed("sui_agent_cards"), parsed("sui_agent_logs"))
+      setLegacy({ cards: records.cards.length, logs: records.logs, names: records.cards.map(record => record.name).slice(0, 6) })
+    } catch { setLegacy({ cards: 0, logs: 0, names: [] }) }
+  }, [])
 
-  const saveCards = (newCards: AgentVirtualCard[]) => {
-    setCards(newCards);
-    try {
-      localStorage.setItem("sui_agent_cards", JSON.stringify(newCards));
-    } catch {}
-  };
+  // Keep the open dialog bound to a fresh chain read after every reload.
+  const allCaps = useMemo(() => vault.vaults.flatMap(row => row.caps), [vault.vaults])
+  useEffect(() => {
+    if (selectedCap) setSelectedCap(allCaps.find(cap => cap.capId === selectedCap.capId) ?? null)
+    if (adjustCap) setAdjustCap(allCaps.find(cap => cap.capId === adjustCap.capId) ?? null)
+    if (exportCap) setExportCap(allCaps.find(cap => cap.capId === exportCap.capId) ?? null)
+    if (spendCap) setSpendCap(allCaps.find(cap => cap.capId === spendCap.capId) ?? null)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allCaps])
 
-  const saveLogs = (newLogs: SpendingLog[]) => {
-    setLogs(newLogs);
-    try {
-      localStorage.setItem("sui_agent_logs", JSON.stringify(newLogs));
-    } catch {}
-  };
+  const totalBalance = vault.vaults.reduce((sum, row) => sum + row.balanceUnits, 0n)
+  const epochSpent = allCaps.reduce((sum, cap) => sum + cap.effectiveSpentUnits, 0n)
+  // A sum over zero verified vaults is not a balance of zero; show the absence instead.
+  const balanceLabel = vault.vaults.length ? `${formatSuiUnits(totalBalance)}` : "—"
+  const spentLabel = allCaps.length ? formatSuiUnits(epochSpent) : "—"
+  const pausedCaps = allCaps.filter(cap => cap.status === "PAUSED" || cap.status === "STALE").length
+  const spendRows = allCaps.flatMap(cap => cap.spends.map(row => ({ ...row, cap })))
+    .sort((a, b) => (b.timestampMs ?? 0) - (a.timestampMs ?? 0)).slice(0, 6)
 
-  // Dialog states
-  const [selectedCard, setSelectedCard] = useState<AgentVirtualCard | null>(null);
-  const [isCreateOpen, setIsCreateOpen] = useState(false);
-  const [isEmergencyPurgeOpen, setIsEmergencyPurgeOpen] = useState(false);
-  const [adjustTargetCard, setAdjustTargetCard] = useState<AgentVirtualCard | null>(null);
-  const [exportTargetCard, setExportTargetCard] = useState<AgentVirtualCard | null>(null);
+  const run = async (label: string, task: () => Promise<void>) => {
+    const current = ++generation.current
+    setBusy(label); setError(""); setNotice("")
+    try { await task() }
+    catch (cause) { if (current === generation.current) setError(cause instanceof Error ? cause.message : t("agents.operationFailed")) }
+    finally { if (current === generation.current) setBusy("") }
+  }
 
-  // Handlers
-  const handleTogglePause = (cardId: string) => {
-    setCards((prev) =>
-      prev.map((c) => {
-        if (c.id === cardId) {
-          return {
-            ...c,
-            status: c.status === "PAUSED" ? "ACTIVE" : "PAUSED",
-          };
-        }
-        return c;
-      })
-    );
-  };
+  const handleCreateVault = () => run("vault", async () => {
+    const created = await createAgentVault()
+    setNotice(t("agents.guard.vaultCreated", { vaultId: created.vaultId, masterCapId: created.masterCapId, digest: created.digest }))
+    await vault.reload()
+  })
 
-  const handleSaveBudget = async (cardId: string, newBudget: number) => {
-    try {
-      const account = getActiveAccount();
-      if (account?.address) {
-        // 构建 set_agent_budget PTB
-        const budgetMist = BigInt(Math.round(newBudget * 1e9));
-        const tx = vaultClient.buildSetAgentBudgetPTB(
-          "0x0000000000000000000000000000000000000000000000000000000000000004",
-          "0x0000000000000000000000000000000000000000000000000000000000000001",
-          cardId.startsWith("0x") ? cardId : "0x0000000000000000000000000000000000000000000000000000000000000005",
-          budgetMist
-        );
-        await signAndExecuteWithWallet(tx);
-      }
-    } catch (e) {
-      console.warn("[AgentGuard] on-chain budget adjustment notice:", e);
-    }
+  const handleInitializeVault = (action: VaultAction, target: AgentVaultView) => { setActionVault(target); setVaultAction(action) }
 
-    setCards((prev) =>
-      prev.map((c) => {
-        if (c.id === cardId) {
-          return {
-            ...c,
-            dailyBudget: newBudget,
-            status: c.spentToday >= newBudget ? "QUOTA_REACHED" : "ACTIVE",
-          };
-        }
-        return c;
-      })
-    );
-  };
-
-  const handleCardCreated = (newCard: AgentVirtualCard) => {
-    const updated = [newCard, ...cards];
-    saveCards(updated);
-  };
-
-  const handleExecuteAgentPayment = async () => {
-    const activeCards = cards.filter((c) => c.status === "ACTIVE");
-    if (activeCards.length === 0) return;
-
-    const targetCard = activeCards[0];
-    const cost = 0.05;
-
-    if (targetCard.spentToday + cost > targetCard.dailyBudget) {
-      handleExceededBudgetBlock();
-      return;
-    }
-
-    let txDigest = "";
-    const account = getActiveAccount();
-    if (!account?.address) {
-      alert("请先在右上角选择 Keystore 账户或连接钱包，以便在链上执行微支付");
-      return;
-    }
-
-    try {
-      const costMist = BigInt(Math.round(cost * 1e9));
-      const tx = vaultClient.buildDirectTransferPTB(targetCard.address, costMist);
-      const res = await signAndExecuteWithWallet(tx);
-      txDigest = res.digest;
-    } catch (e: any) {
-      console.warn("[AgentGuard] payment notice:", e.message);
-      alert(`微支付执行失败: ${e.message || "钱包签署被取消或网络错误"}`);
-      return;
-    }
-
-    const updatedCards = cards.map((c) => {
-      if (c.id === targetCard.id) {
-        const spentToday = Number((c.spentToday + cost).toFixed(3));
-        return {
-          ...c,
-          spentToday,
-          requestCount: c.requestCount + 1,
-          lastActive: "刚刚",
-          status: (spentToday >= c.dailyBudget ? "QUOTA_REACHED" : "ACTIVE") as any,
-        };
-      }
-      return c;
-    });
-    saveCards(updatedCards);
-
-    const newLog: SpendingLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString(),
-      agentId: targetCard.id,
-      agentName: targetCard.name,
-      amount: cost,
-      currency: "SUI",
-      targetService: targetCard.allowedServices[0] || "api.deepseek.sui",
-      type: "x402_INFERENCE",
-      status: "SUCCESS",
-      details: "x402 协议：Agent 链上自主微支付调用已完成",
-      txDigest,
-    };
-    saveLogs([newLog, ...logs]);
-  };
-
-  const handleExceededBudgetBlock = () => {
-    setVault((prev) => ({
-      ...prev,
-      blockedLoopsCount: prev.blockedLoopsCount + 1,
-    }));
-
-    const newLog: SpendingLog = {
-      id: `log-${Date.now()}`,
-      timestamp: new Date().toLocaleTimeString(),
-      agentId: cards[0]?.id || "agent-1",
-      agentName: cards[0]?.name || "DeepSeek-01",
-      amount: 0.05,
-      currency: "SUI",
-      targetService: "api.deepseek.sui",
-      type: "x402_INFERENCE",
-      status: "BLOCKED",
-      details: "Move 合约硬规则拦截: 单日配额超出上限 (E_BUDGET_EXCEEDED)",
-    };
-    saveLogs([newLog, ...logs]);
-  };
-
-  const handleEmergencyPurge = async () => {
-    try {
-      const account = getActiveAccount();
-      if (account?.address) {
-        // 调用合约 vault::emergency_unilateral_purge
-        const purgeTx = vaultClient.buildEmergencyPurgePTB(
-          "0x0000000000000000000000000000000000000000000000000000000000000003",
-          "0x0000000000000000000000000000000000000000000000000000000000000001",
-          account.address
-        );
-        await signAndExecuteWithWallet(purgeTx);
-      }
-    } catch (e) {
-      console.warn("[AgentGuard] on-chain emergency purge notice:", e);
-    }
-    setCards((prev) => prev.map((c) => ({ ...c, status: "REVOKED" })));
-    setVault((prev) => ({ ...prev, version: prev.version + 1, totalBalance: 0 }));
-  };
-
-  const container = {
-    hidden: { opacity: 0 },
-    show: { opacity: 1, transition: { staggerChildren: 0.08 } },
-  };
-
-  const item = {
-    hidden: { opacity: 0, y: 15 },
-    show: { opacity: 1, y: 0 },
-  };
+  const container = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08 } } }
+  const item = { hidden: { opacity: 0, y: 15 }, show: { opacity: 1, y: 0 } }
 
   return (
     <div className="space-y-4">
-      {/* Header Banner */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-start justify-between gap-2">
         <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-xl font-bold tracking-tight">AI Agent 虚拟副卡</h2>
-            <Badge variant="outline" className="bg-primary/10 text-primary border-primary/20 text-xs">
-              Sui Move 沙盒
+          <div className="flex flex-wrap items-center gap-2">
+            <h2 className="text-xl font-bold tracking-tight">{t("agents.guard.title")}</h2>
+            <Badge variant="outline" className="border-primary/20 bg-primary/10 text-xs text-primary">
+              {t("common.testnetBadge")}
             </Badge>
           </div>
-          <p className="text-xs text-muted-foreground mt-0.5">
-            基于受限 AgentCap 与 x402 协议，为 AI Agent 设立单日配额与防爆卡死循环保护
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {t("agents.guard.subtitle")}
           </p>
         </div>
-        <Button
-          size="sm"
-          className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 text-white text-xs gap-1"
-          onClick={() => setIsCreateOpen(true)}
-        >
-          <Plus className="w-3.5 h-3.5" /> 签发副卡
-        </Button>
+        <div className="flex shrink-0 gap-1">
+          <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" disabled={vault.loading || !!busy} onClick={() => void vault.reload()}>
+            <RefreshCw className={`h-3.5 w-3.5 ${vault.loading ? "animate-spin" : ""}`} />
+          </Button>
+          <Button size="sm" className="gap-1 bg-primary text-xs text-primary-foreground hover:bg-primary/90"
+            onClick={() => setCreateOpen(true)}>
+            <Plus className="h-3.5 w-3.5" /> {t("agents.guard.issueCard")}
+          </Button>
+        </div>
       </div>
 
-      {/* 6 Quick Action Grid */}
+      {!vault.account && !vault.loading && (
+        <p role="status" className="rounded-lg border p-3 text-xs text-muted-foreground">{t("agents.guard.connectFirst")}</p>
+      )}
+      {vault.loading && <p role="status" className="rounded-lg border p-3 text-xs text-muted-foreground">{t("agents.guard.verifying")}</p>}
+      {vault.error && <p role="alert" className="break-all rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">{vault.error}</p>}
+      {!!vault.errors.length && <div role="alert" className="space-y-1 rounded-lg border border-amber-500/30 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-400">{vault.errors.map((row, index) => <p key={`${row}:${index}`} className="break-all">{row}</p>)}</div>}
+      {error && <p role="alert" className="break-all rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-xs text-destructive">{error}</p>}
+      {notice && <p role="status" className="break-all rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3 text-xs text-emerald-700 dark:text-emerald-400">{notice}</p>}
+
       <div className="grid grid-cols-3 gap-2">
-        <Card
-          className="cursor-pointer hover:shadow-md transition-all border border-border/50 bg-card/60"
-          onClick={() => setIsCreateOpen(true)}
-        >
-          <CardContent className="p-2.5 flex flex-col items-center justify-center text-center">
-            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-primary to-purple-500 flex items-center justify-center text-white mb-1.5 shadow-xs">
-              <Plus className="h-4 w-4" />
-            </div>
-            <span className="text-xs font-bold">新建副卡</span>
-            <span className="text-[10px] text-muted-foreground">签发 AgentCap</span>
+        <Card className="cursor-pointer border border-border/50 bg-card/60 transition-all hover:shadow-md" onClick={() => setCreateOpen(true)}>
+          <CardContent className="flex flex-col items-center justify-center p-2.5 text-center">
+            <div className="mb-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-white shadow-xs"><Plus className="h-4 w-4" /></div>
+            <span className="text-xs font-bold">{t("agents.guard.newCard")}</span>
+            <span className="text-xs text-muted-foreground">{t("agents.guard.newCardHint")}</span>
           </CardContent>
         </Card>
-
-        <Card
-          className="cursor-pointer hover:shadow-md transition-all border border-border/50 bg-card/60"
-          onClick={handleExecuteAgentPayment}
-        >
-          <CardContent className="p-2.5 flex flex-col items-center justify-center text-center">
-            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-amber-500 to-orange-400 flex items-center justify-center text-white mb-1.5 shadow-xs">
-              <Zap className="h-4 w-4" />
-            </div>
-            <span className="text-xs font-bold">x402 扣费</span>
-            <span className="text-[10px] text-muted-foreground">执行链上支付</span>
+        <Card className={`border border-border/50 bg-card/60 transition-all ${allCaps.length ? "cursor-pointer hover:shadow-md" : "opacity-60"}`}
+          onClick={() => (allCaps.length ? setSpendCap(allCaps.find(cap => cap.status === "ACTIVE") ?? allCaps[0]) : setNotice(t("agents.guard.noCapsYet")))}>
+          <CardContent className="flex flex-col items-center justify-center p-2.5 text-center">
+            <div className="mb-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-amber-500 text-white shadow-xs"><Zap className="h-4 w-4" /></div>
+            <span className="text-xs font-bold">{t("agents.guard.spendTitle")}</span>
+            <span className="text-xs text-muted-foreground">{t("agents.guard.spendHint")}</span>
           </CardContent>
         </Card>
-
-        <Card
-          className="cursor-pointer hover:shadow-md transition-all border border-border/50 bg-card/60"
-          onClick={handleExceededBudgetBlock}
-        >
-          <CardContent className="p-2.5 flex flex-col items-center justify-center text-center">
-            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-red-500 to-rose-400 flex items-center justify-center text-white mb-1.5 shadow-xs">
-              <ShieldAlert className="h-4 w-4" />
-            </div>
-            <span className="text-xs font-bold">防爆拦截</span>
-            <span className="text-[10px] text-muted-foreground">超限安全拒付</span>
+        <Card className="cursor-pointer border border-border/50 bg-card/60 transition-all hover:shadow-md" onClick={() => void vault.reload()}>
+          <CardContent className="flex flex-col items-center justify-center p-2.5 text-center">
+            <div className="mb-1.5 flex h-8 w-8 items-center justify-center rounded-full bg-red-500 text-white shadow-xs"><ShieldAlert className="h-4 w-4" /></div>
+            <span className="text-xs font-bold">{t("agents.guard.guardTitle")}</span>
+            <span className="text-[10px] text-muted-foreground">{pausedCaps ? t("agents.guard.limitedCount", { count: pausedCaps }) : t("agents.guard.recheck")}</span>
           </CardContent>
         </Card>
       </div>
 
-      {/* 3 Metric Cards */}
       <div className="grid grid-cols-3 gap-2.5">
-        <Card className="bg-gradient-to-br from-primary/10 to-purple-500/10 border-none shadow-sm">
-          <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-            <TrendingUp className="h-5 w-5 text-primary mb-1" />
-            <p className="text-base font-bold text-foreground">{vault.totalBalance.toFixed(1)} SUI</p>
-            <p className="text-[11px] text-muted-foreground">金库总资产</p>
+        <Card className="border-none bg-primary/5 shadow-sm">
+          <CardContent className="flex flex-col items-center justify-center p-3 text-center">
+            <TrendingUp className="mb-1 h-5 w-5 text-primary" />
+            <p className="text-base font-bold text-foreground">{vault.account ? balanceLabel : "—"}</p>
+            <p className="text-xs text-muted-foreground">{t("agents.guard.totalAssets")}</p>
           </CardContent>
         </Card>
-
-        <Card className="bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-none shadow-sm">
-          <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-            <Clock className="h-5 w-5 text-amber-500 mb-1" />
-            <p className="text-base font-bold text-foreground">{vault.todaySpentTotal.toFixed(2)} SUI</p>
-            <p className="text-[11px] text-muted-foreground">今日消耗配额</p>
+        <Card className="border-none bg-amber-500/5 shadow-sm">
+          <CardContent className="flex flex-col items-center justify-center p-3 text-center">
+            <Clock className="mb-1 h-5 w-5 text-amber-500" />
+            <p className="text-base font-bold text-foreground">{vault.account ? spentLabel : "—"}</p>
+            <p className="text-xs text-muted-foreground">{t("agents.guard.epochSpent")}</p>
           </CardContent>
         </Card>
-
-        <Card className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 border-none shadow-sm">
-          <CardContent className="p-3 flex flex-col items-center justify-center text-center">
-            <ShieldCheck className="h-5 w-5 text-emerald-500 mb-1" />
-            <p className="text-base font-bold text-foreground">{vault.blockedLoopsCount} 次拦截</p>
-            <p className="text-[11px] text-muted-foreground">沙盒死循环防护</p>
+        <Card className="border-none bg-emerald-500/5 shadow-sm">
+          <CardContent className="flex flex-col items-center justify-center p-3 text-center">
+            <ShieldCheck className="mb-1 h-5 w-5 text-emerald-500" />
+            <p className="text-base font-bold text-foreground">{vault.epoch ? `#${vault.epoch.epoch.toString()}` : "—"}</p>
+            <p className="text-xs text-muted-foreground">{t("agents.guard.currentEpoch")}</p>
           </CardContent>
         </Card>
       </div>
+      {vault.epoch && (
+        <p className="text-xs text-muted-foreground">{t("agents.guard.epochWindow", { start: new Date(vault.epoch.startedAtMs).toLocaleString(), hours: Math.round(vault.epoch.durationMs / 3_600_000) })}</p>
+      )}
+      {vault.epochError && <p className="break-all text-xs text-amber-600">{t("agents.guard.epochWindowError", { error: vault.epochError })}</p>}
+      {vault.vaults.some(v => v.caps.some(c => !c.epochKnown && c.status === "QUOTA_REACHED")) && <p role="alert" className="text-xs text-amber-600">{t("agents.guard.quotaEpochCaveat")}</p>}
 
-      {/* Virtual Cards List */}
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-            运行中的副卡 ({cards.length})
-          </h3>
-          <span className="text-[11px] text-muted-foreground">每 24h Epoch 自动重置</span>
+          <h3 className="text-sm font-semibold text-foreground">{t("agents.guard.vaultsAndCaps", { count: allCaps.length })}</h3>
+          <span className="text-xs text-muted-foreground">{t("agents.guard.verifiedVaults", { count: vault.vaults.length })}</span>
         </div>
+
+        {vault.account && !vault.loading && vault.vaults.length === 0 && !vault.error && (
+          <div className="space-y-2 rounded-xl border border-dashed p-4 text-xs text-muted-foreground">
+            <p>{t("agents.guard.emptyAccount")}</p>
+            {legacy.cards > 0 && <p className="text-amber-600">{t("agents.guard.legacyDetected", { count: legacy.cards })}</p>}
+            <Button size="sm" disabled={!!busy} onClick={() => void handleCreateVault()} className="gap-1 text-xs">
+              <Landmark className="h-3.5 w-3.5" />{busy === "vault" ? t("agents.awaitWalletSigning") : t("agents.guard.createVault")}
+            </Button>
+          </div>
+        )}
 
         <motion.div className="grid gap-3" variants={container} initial="hidden" animate="show">
-          {cards.map((card) => {
-            const quotaPercent = Math.min(100, Math.round((card.spentToday / card.dailyBudget) * 100));
-
-            return (
-              <motion.div key={card.id} variants={item}>
-                <Card
-                  className="overflow-hidden hover:shadow-md transition-all border-none shadow-sm bg-card cursor-pointer group"
-                  onClick={() => setSelectedCard(card)}
-                >
-                  <div className={`h-1.5 bg-gradient-to-r ${card.color}`} />
-                  <CardHeader className="p-3 pb-1">
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <h4 className="font-semibold text-sm group-hover:text-primary transition-colors">
-                          {card.name}
-                        </h4>
-                        <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">{card.purpose}</p>
-                      </div>
-                      <Badge
-                        variant="outline"
-                        className={`text-[10px] font-medium px-2 py-0.5 ${
-                          card.status === "ACTIVE"
-                            ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                            : card.status === "QUOTA_REACHED"
-                            ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
-                            : "bg-muted text-muted-foreground"
-                        }`}
-                      >
-                        {card.status === "ACTIVE" && "● 运行中"}
-                        {card.status === "QUOTA_REACHED" && "⏳ 额度达上限"}
-                        {card.status === "PAUSED" && "⏸ 已暂停"}
-                      </Badge>
+          {vault.vaults.map(row => (
+            <motion.div key={row.vaultId} variants={item}>
+              <Card className="overflow-hidden border-none bg-card shadow-sm">
+                <CardHeader className="p-3 pb-1">
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <h4 className="text-sm font-semibold">{formatSuiUnits(row.balanceUnits)} SUI</h4>
+                      <p className="break-all font-mono text-[11px] text-muted-foreground">{t("agents.guard.vaultLine", { vaultId: row.vaultId, version: row.vaultVersion.toString(), count: row.totalSubagents.toString() })}</p>
                     </div>
-                  </CardHeader>
-
-                  <CardContent className="p-3 pt-2">
-                    <div className="space-y-1.5 mb-2.5">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="text-muted-foreground text-[11px]">今日消耗 / 每日限额</span>
-                        <span className="font-mono font-medium text-xs">
-                          {card.spentToday.toFixed(2)} / {card.dailyBudget.toFixed(2)} SUI
-                        </span>
-                      </div>
-                      <Progress value={quotaPercent} className="h-1.5" />
+                    <div className="flex flex-wrap items-center gap-1">
+                      {row.paused && <Badge variant="outline" className="border-red-500/20 bg-red-500/10 text-[10px] text-red-500">{t("agents.vaultPausedGlobal")}</Badge>}
+                      {row.masterCapIds.length ? <Badge variant="outline" className="border-emerald-500/20 bg-emerald-500/10 text-[10px] text-emerald-600">Master</Badge> : null}
+                      {row.operatorCaps.some(cap => cap.vaultVersion === row.vaultVersion) && <Badge variant="outline" className="text-[10px]">Operator</Badge>}
                     </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-3 pt-2">
+                  <div className="mb-2 flex flex-wrap gap-1.5">
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={!!busy} onClick={() => handleInitializeVault("deposit", row)}><Coins className="h-3 w-3" />{t("agents.guard.deposit")}</Button>
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={!!busy || !row.masterCapIds.length} onClick={() => handleInitializeVault("withdraw", row)}>{t("agents.guard.withdraw")}</Button>
+                    <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={!!busy || !row.masterCapIds.length} onClick={() => handleInitializeVault("operator", row)}>{t("agents.guard.issueOperator")}</Button>
+                    {row.paused && <Button size="sm" variant="outline" className="h-7 gap-1 text-[11px]" disabled={!!busy || !row.masterCapIds.length} onClick={() => handleInitializeVault("unpause", row)}>{t("agents.guard.unpause")}</Button>}
+                    <Button size="sm" variant="outline" className="h-7 gap-1 border-red-500/30 text-[11px] text-red-500 hover:bg-red-500/10" disabled={!!busy || !row.masterCapIds.length}
+                      onClick={() => setPurgeVault(row)}><Flame className="h-3 w-3" />{t("agents.guard.emergencyPurge")}</Button>
+                    <a href={`https://suiscan.xyz/testnet/object/${row.vaultId}`} target="_blank" rel="noreferrer" className="ml-auto inline-flex items-center text-[11px] text-primary">{t("agents.guard.onchain")}<ExternalLink className="ml-1 h-3 w-3" /></a>
+                  </div>
+                  {row.operatorCaps.length > 0 && (
+                    <p className="break-all font-mono text-[11px] text-muted-foreground">{t("agents.guard.operatorCapsLine", { caps: row.operatorCaps.map(cap => `${cap.capId.slice(0, 12)}…@v${cap.vaultVersion}`).join(" · ") })}</p>
+                  )}
+                  {row.masterCapIds.length === 0 && !row.operatorCaps.length && <p className="text-xs text-muted-foreground">{t("agents.guard.noCaps")}</p>}
 
-                    <div className="flex items-center justify-between pt-1 border-t border-border/40">
-                      <span className="text-[11px] text-muted-foreground font-mono">
-                        {card.allowedServices[0] || "x402-gateway.sui"}
-                      </span>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 text-xs text-primary flex items-center gap-1 hover:bg-primary/10"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setSelectedCard(card);
-                        }}
-                      >
-                        查看详情 <ArrowRight className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            );
-          })}
+                  <div className="mt-3 space-y-2">
+                    {row.caps.length === 0 && <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">{t("agents.guard.noCardsInVault")}</p>}
+                    {row.caps.map(cap => {
+                      const percent = cap.dailyBudgetUnits > 0n ? Number((cap.effectiveSpentUnits * 100n) / cap.dailyBudgetUnits) : 0
+                      return (
+                        <button key={cap.capId} type="button" onClick={() => setSelectedCap(cap)}
+                          className="w-full space-y-2 rounded-xl border border-border/60 bg-background/60 p-3 text-left transition-colors hover:border-primary/40">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-xs font-semibold">{cap.label?.name || `${cap.capId.slice(0, 10)}…`}</p>
+                              <p className="truncate text-[10px] text-muted-foreground">{cap.label?.purpose || t("agents.guard.untaggedPurpose")}</p>
+                            </div>
+                            <Badge variant="outline" className={`shrink-0 text-[10px] ${STATUS_CLASS[cap.status]}`}>{t(STATUS_LABEL[cap.status])}</Badge>
+                          </div>
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-[10px] text-muted-foreground">
+                              <span>{t("agents.guard.epochUsage", { spent: formatSuiUnits(cap.effectiveSpentUnits), budget: formatSuiUnits(cap.dailyBudgetUnits) })}</span>
+                              <span>{t("agents.guard.remaining", { amount: formatSuiUnits(remainingBudget(cap)) })}</span>
+                            </div>
+                            <Progress value={Math.min(100, percent)} className="h-1.5" />
+                          </div>
+                          <div className="flex items-center justify-between text-[10px] text-muted-foreground">
+                            <span className="truncate font-mono">Agent {cap.agentAddress.slice(0, 14)}…</span>
+                            <span className="inline-flex items-center gap-1 text-primary">{t("agents.guard.details")} <ArrowRight className="h-3 w-3" /></span>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </CardContent>
+              </Card>
+            </motion.div>
+          ))}
         </motion.div>
+
+        {vault.unverified.length > 0 && (
+          <div className="space-y-1 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3 text-xs">
+            <p className="font-semibold text-amber-700 dark:text-amber-400">{t("agents.guard.unverifiedTitle", { count: vault.unverified.length })}</p>
+            <p className="text-xs text-muted-foreground">{t("agents.guard.unverifiedDesc")}</p>
+            {vault.unverified.map(row => <p key={row.capId} className="break-all font-mono text-[11px] text-muted-foreground">{t("agents.guard.unverifiedRow", { capId: row.capId, reason: row.reason })}</p>)}
+          </div>
+        )}
       </div>
 
-      {/* x402 Micropayments Stream */}
       <div className="space-y-2 pt-2">
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider">
-          实时 x402 微支付与沙盒拦截流
-        </h3>
-        <div className="space-y-2">
-          {logs.slice(0, 4).map((log) => {
-            const isBlocked = log.status.startsWith("BLOCKED");
-            return (
-              <div
-                key={log.id}
-                className="flex items-center justify-between p-2.5 rounded-xl border border-border/40 bg-card/40 text-xs"
-              >
-                <div className="flex items-center gap-2.5">
-                  <div
-                    className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${
-                      isBlocked ? "bg-red-500/15 text-red-500" : "bg-emerald-500/15 text-emerald-500"
-                    }`}
-                  >
-                    {isBlocked ? <ShieldAlert className="w-3.5 h-3.5" /> : <Zap className="w-3.5 h-3.5" />}
-                  </div>
-                  <div>
-                    <p className="font-semibold text-xs">{log.agentName}</p>
-                    <p className="text-[10px] text-muted-foreground font-mono">{log.details}</p>
-                  </div>
-                </div>
-                <div className="text-right shrink-0">
-                  <p className={`font-mono font-bold ${isBlocked ? "text-red-500 line-through" : "text-foreground"}`}>
-                    {isBlocked ? "+0.00 SUI" : `-${log.amount.toFixed(3)} SUI`}
-                  </p>
-                  <span className="text-[10px] text-muted-foreground">{log.timestamp}</span>
-                </div>
-              </div>
-            );
-          })}
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">{t("agents.guard.spendHistoryTitle")}</h3>
+          <span className="text-xs text-muted-foreground">{t("agents.guard.spendHistoryHint")}</span>
         </div>
+        {spendRows.length === 0 && <p className="rounded-xl border border-dashed p-4 text-xs text-muted-foreground">{t("agents.guard.noSpendEvents")}</p>}
+        {spendRows.map(row => (
+          <div key={`${row.cap.capId}:${row.digest}`} className="flex items-center justify-between rounded-xl border border-border/40 bg-card/40 p-2.5 text-xs">
+            <div className="flex min-w-0 items-center gap-2.5">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-emerald-500/15 text-emerald-500"><Zap className="h-3.5 w-3.5" /></div>
+              <div className="min-w-0">
+                <p className="truncate text-xs font-semibold">{row.cap.label?.name || row.cap.capId.slice(0, 10)}</p>
+                <p className="truncate font-mono text-[11px] text-muted-foreground">→ {row.recipient}</p>
+                <p className="text-[10px] text-muted-foreground">{t("agents.guard.spendRowMeta", { epoch: row.epoch.toString(), time: row.timestampMs ? new Date(row.timestampMs).toLocaleString() : t("agents.guard.timeUnconfirmed") })}</p>
+              </div>
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="font-mono font-bold">-{formatSuiUnits(row.amountUnits)} SUI</p>
+              <a href={`https://suiscan.xyz/testnet/tx/${row.digest}`} target="_blank" rel="noreferrer" className="text-[10px] text-primary">{t("agents.guard.viewTx")}</a>
+            </div>
+          </div>
+        ))}
       </div>
 
-      {/* Dialogs */}
-      <AgentDetailsDialog
-        card={selectedCard}
-        open={Boolean(selectedCard)}
-        onOpenChange={(open) => !open && setSelectedCard(null)}
-        onTogglePause={handleTogglePause}
-        onOpenAdjust={(card) => setAdjustTargetCard(card)}
-        onOpenExport={(card) => setExportTargetCard(card)}
-      />
+      {legacy.cards > 0 && (
+        <div className="space-y-2 rounded-xl border border-border/60 bg-muted/20 p-3">
+          <button type="button" className="flex w-full items-center justify-between text-left" onClick={() => setShowLegacy(value => !value)}>
+            <span className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground"><EyeOff className="h-3.5 w-3.5" />{t("agents.guard.legacyToggle")}</span>
+            <span className="text-xs text-muted-foreground">{t("agents.guard.legacySummary", { cards: legacy.cards, logs: legacy.logs })}</span>
+          </button>
+          <p className="text-xs text-muted-foreground">{t("agents.guard.legacyDesc")}</p>
+          {showLegacy && <div className="space-y-1">{legacy.names.map((name, index) => <p key={`${name}:${index}`} className="font-mono text-[11px] text-muted-foreground">{name}</p>)}</div>}
+        </div>
+      )}
 
-      <CreateAgentDialog
-        open={isCreateOpen}
-        onOpenChange={setIsCreateOpen}
-        onCreateCard={handleCardCreated}
-      />
+      <AgentDetailsDialog cap={selectedCap} open={!!selectedCap} onOpenChange={next => !next && setSelectedCap(null)}
+        onTogglePause={cap => { setSelectedCap(null); setAdjustCap(null); void run("pause", async () => {
+          const vaultRow = vault.vaults.find(row => row.vaultId === cap.vaultId)
+          const operator = vaultRow?.operatorCaps.find(row => row.vaultVersion === vaultRow.vaultVersion)
+          if (!operator) throw new Error(t("agents.guard.noMatchingOperator"))
+          const tx = createAgentVaultWriters().setPaused(operator.capId, cap.vaultId, cap.agentAddress, cap.isActive)
+          const result = await submitAgentTransaction(tx, { action: "agent-cap-pause", scope: `${cap.capId}:${cap.isActive}`, metadata: { capId: cap.capId, vaultId: cap.vaultId, operatorCapId: operator.capId, paused: String(cap.isActive) } })
+          setNotice(cap.isActive ? t("agents.guard.capPausedNotice", { digest: result.digest }) : t("agents.guard.capResumedNotice", { digest: result.digest }))
+          await vault.reload()
+        }) }}
+        onOpenAdjust={cap => setAdjustCap(cap)}
+        onOpenExport={cap => setExportCap(cap)}
+        busy={!!busy} />
 
-      <AdjustBudgetDialog
-        card={adjustTargetCard}
-        open={Boolean(adjustTargetCard)}
-        onOpenChange={(open) => !open && setAdjustTargetCard(null)}
-        onSave={handleSaveBudget}
-      />
+      <CreateAgentDialog open={createOpen} onOpenChange={setCreateOpen} vaults={vault.vaults} account={vault.account}
+        onCreated={() => { void vault.reload() }} />
 
-      <ExportConfigDialog
-        card={exportTargetCard}
-        open={Boolean(exportTargetCard)}
-        onOpenChange={(open) => !open && setExportTargetCard(null)}
-      />
+      <AdjustBudgetDialog cap={adjustCap} vault={adjustCap ? vault.vaults.find(row => row.vaultId === adjustCap.vaultId) ?? null : null}
+        open={!!adjustCap} onOpenChange={next => !next && setAdjustCap(null)} onSaved={() => { void vault.reload() }} />
 
-      <EmergencyLiquidationDialog
-        open={isEmergencyPurgeOpen}
-        onOpenChange={setIsEmergencyPurgeOpen}
-        totalBalance={vault.totalBalance}
-        onConfirmPurge={handleEmergencyPurge}
-      />
+      <ExportConfigDialog cap={exportCap} vault={exportCap ? vault.vaults.find(row => row.vaultId === exportCap.vaultId) ?? null : null}
+        open={!!exportCap} onOpenChange={next => !next && setExportCap(null)} />
+
+      <SpendDialog cap={spendCap} open={!!spendCap} onOpenChange={next => !next && setSpendCap(null)} onDone={() => { void vault.reload() }} />
+
+      <EmergencyLiquidationDialog open={!!purgeVault} onOpenChange={next => !next && setPurgeVault(null)} vault={purgeVault}
+        defaultRecipient={vault.account} onDone={() => { void vault.reload() }} />
+
+      <AgentVaultActionDialog action={vaultAction} vault={actionVault} account={vault.account} open={!!vaultAction}
+        onOpenChange={next => { if (!next) { setVaultAction(null); setActionVault(null) } }} onDone={() => { void vault.reload() }} />
     </div>
-  );
+  )
 }

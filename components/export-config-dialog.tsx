@@ -1,7 +1,7 @@
-"use client";
+"use client"
 
-import React, { useState } from "react";
-import { KeyRound, Copy, Check } from "lucide-react";
+import React, { useState } from "react"
+import { KeyRound, Copy, Check } from "lucide-react"
 import {
   Dialog,
   DialogContent,
@@ -9,85 +9,79 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { AgentVirtualCard } from "@/types/agent";
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { AGENT_VAULT_PACKAGE_ID, formatSuiUnits } from "@/lib/agent-vault-chain"
+import type { AgentCapView, AgentVaultView } from "@/types/agent"
+import { useI18n } from "@/components/i18n-provider"
 
 interface ExportConfigDialogProps {
-  card: AgentVirtualCard | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+  cap: AgentCapView | null
+  vault: AgentVaultView | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
 }
 
-export function ExportConfigDialog({ card, open, onOpenChange }: ExportConfigDialogProps) {
-  const [copied, setCopied] = useState(false);
+/**
+ * Exports only verified values. The agent's private key is never generated or
+ * exported here: spawning a card transfers the AgentCap to an address chosen by
+ * the operator, and that key must stay wherever the agent runtime keeps it.
+ */
+export function ExportConfigDialog({ cap, vault, open, onOpenChange }: ExportConfigDialogProps) {
+  const { t } = useI18n()
+  const [copied, setCopied] = useState(false)
 
-  if (!card) return null;
+  if (!cap) return null
 
-  const envSnippet = `# Configuration for ${card.name}
-SUI_VAULT_ID="0x7a8b9c4d2e1f0a5b6c7d8e9f0a1b2c3d4e5f6a7b"
-SUI_AGENT_CAP_ID="${card.agentCapId || card.capId}"
-SUI_AGENT_ADDRESS="${card.address}"
-SUI_DAILY_BUDGET_SUI="${card.dailyBudget}"
-SUI_ALLOWED_SERVICES="${card.allowedServices.join(",")}"
-SUI_NETWORK="https://fullnode.mainnet.sui.io:443"
-`;
+  const envSnippet = `# AgentVault configuration · Sui testnet
+# Values below were read from chain; verify them again before use.
+SUI_NETWORK="testnet"
+SUI_AGENT_VAULT_PACKAGE="${AGENT_VAULT_PACKAGE_ID}"
+SUI_VAULT_ID="${cap.vaultId}"
+SUI_AGENT_CAP_ID="${cap.capId}"
+SUI_AGENT_ADDRESS="${cap.agentAddress}"
+SUI_AGENT_EPOCH_BUDGET="${formatSuiUnits(cap.dailyBudgetUnits)}"
+SUI_AGENT_SERVICE_TARGET="${new TextDecoder().decode(cap.serviceHash)}"
+# The AgentCap object is owned by ${cap.capOwner ?? "a non-address owner"}.
+# That address must sign spend/pause/budget transactions; this file grants nothing.
+# The contract does not enforce SUI_AGENT_SERVICE_TARGET.
+`
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(envSnippet);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const copy = () => {
+    void navigator.clipboard.writeText(envSnippet)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[480px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
-            <KeyRound className="w-5 h-5 text-primary" />
-            <span>导出 Agent .env 运行环境</span>
+            <KeyRound className="h-5 w-5 text-primary" />
+            <span>{t("misc.exp.title")}</span>
           </DialogTitle>
           <DialogDescription className="text-xs">
-            用于提供给 <span className="font-semibold text-foreground">{card.name}</span> 容器执行微支付。
+            {t("misc.exp.hint", { status: vault ? ` ${vault.vaultId}` : t("misc.exp.unverified") })}
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 py-2">
           <div className="relative">
-            <pre className="p-3 rounded-lg bg-black/80 border border-border/60 text-[11px] font-mono text-purple-300 overflow-x-auto select-all leading-relaxed">
-              {envSnippet}
-            </pre>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={handleCopy}
-              className="absolute top-2 right-2 h-7 text-xs border-border/80 bg-background/80 hover:bg-background gap-1"
-            >
-              {copied ? (
-                <>
-                  <Check className="w-3 h-3 text-emerald-400" />
-                  已复制
-                </>
-              ) : (
-                <>
-                  <Copy className="w-3 h-3" />
-                  复制
-                </>
-              )}
+            <pre className="select-all overflow-x-auto rounded-lg border border-border/60 bg-black/80 p-3 font-mono text-[11px] leading-relaxed text-purple-300">{envSnippet}</pre>
+            <Button size="sm" variant="outline" onClick={copy} className="absolute right-2 top-2 h-7 gap-1 border-border/80 bg-background/80 text-xs hover:bg-background">
+              {copied ? <><Check className="h-3 w-3 text-emerald-400" />{t("common.copied")}</> : <><Copy className="h-3 w-3" />{t("common.copy")}</>}
             </Button>
           </div>
-
           <p className="text-xs text-muted-foreground">
-            将这些环境变量配置到您的 Python / TypeScript AI Agent 进程中，Agent 即可在受限沙盒内通过 HTTP 402 请求自动完成 SUI 微支付扣款。
+            {t("misc.exp.noteA")}<span className="font-mono">spend_x402_budget</span>{t("misc.exp.noteB")}
           </p>
         </div>
 
         <DialogFooter>
-          <Button size="sm" onClick={() => onOpenChange(false)} className="text-xs">
-            关闭
-          </Button>
+          <Button size="sm" onClick={() => onOpenChange(false)} className="text-xs">{t("common.close")}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

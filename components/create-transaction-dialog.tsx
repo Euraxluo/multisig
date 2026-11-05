@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
   Dialog,
   DialogContent,
@@ -24,12 +24,27 @@ import { format } from "date-fns"
 import { Calendar as CalendarComponent } from "@/components/ui/calendar"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { createTransferProposalOnChain } from "@/lib/onchain-store"
+import { createTransferProposalOnChain, getUserGroups } from "@/lib/onchain-store"
+import { groupVaults, type GroupVaultRow } from "@/lib/group-vaults"
+import { createSubmissionGuard } from "@/lib/wallet-creation-state"
+import { usePendingCreation } from "@/lib/use-pending-creation"
+import { TransactionReceiptError } from "@/lib/pending-transactions"
+import { getPaymentTemplates, savePaymentTemplates } from "@/lib/local-records"
+import { paymentUnits } from "@/lib/scheduled-payments-chain"
+import { errorMessage as describeError } from "@/lib/error-message"
+import { useI18n } from "@/components/i18n-provider"
+import { MIST_PER_SUI } from "@mysten/sui/utils"
+
+const formatSuiBalance = (mist: bigint) => {
+  const fraction = (mist % MIST_PER_SUI).toString().padStart(9, "0").replace(/0+$/, "")
+  return `${mist / MIST_PER_SUI}${fraction ? `.${fraction}` : ""} SUI`
+}
 
 interface CreateTransactionDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  groupId?: string
+  groupId: string
+  initialTemplate?: TransactionTemplate
 }
 
 interface TransactionTemplate {
@@ -57,7 +72,8 @@ interface BatchTransaction {
   payload?: string
 }
 
-export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateTransactionDialogProps) {
+export function CreateTransactionDialog({ open, onOpenChange, groupId, initialTemplate }: CreateTransactionDialogProps) {
+  const { t } = useI18n()
   const [step, setStep] = useState(1)
   const [transactionType, setTransactionType] = useState("transfer")
   const [advancedMode, setAdvancedMode] = useState(false)
@@ -83,86 +99,78 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
-  // Real or fallback group
-  const [currentGroup, setCurrentGroup] = useState({
-    id: groupId || "group-1",
-    name: "Team Treasury (Sui MultiSig)",
-    balance: 1250,
-    token: "SUI",
-    orgObjectId: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-  })
-
+  const [currentGroup, setCurrentGroup] = useState({ id: "", name: t("vault.noOrgSelected"), balance: "—", token: "SUI", orgObjectId: "", vaultId: "", masterCapId: "" })
+  const [treasuries, setTreasuries] = useState<GroupVaultRow[]>([])
+  const [selectedTreasuryId, setSelectedTreasuryId] = useState("")
+  const [legacySource, setLegacySource] = useState("")
+  const submissionGuard = useRef(createSubmissionGuard())
+  const groupGeneration = useRef(0)
+  const treasuryScope = selectedTreasuryId || currentGroup.vaultId || "unselected"
+  const proposalCreateAction = selectedTreasuryId ? "group-treasury-proposal-create" : legacySource ? "personal-cap-proposal-create" : "group-treasury-proposal-create"
+  const recovery = usePendingCreation(open, proposalCreateAction, treasuryScope)
   useEffect(() => {
-    try {
-      const groups = JSON.parse(localStorage.getItem("user_groups") || "[]")
-      if (groups.length > 0) {
-        const found = groupId ? groups.find((g: any) => g.id === groupId) : groups[0]
-        if (found) {
-          setCurrentGroup({
-            id: found.id,
-            name: found.name,
-            balance: 1250,
-            token: "SUI",
-            orgObjectId: found.orgObjectId || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-          })
+    let cancelled = false
+    const generation = ++groupGeneration.current
+    const load = async () => {
+      const found = getUserGroups().find(group => group.id === groupId)
+      const next = { id: found?.id || "", name: found?.name || t("vault.noOrgSelected"), balance: "—", token: "SUI", orgObjectId: found?.orgObjectId || "", vaultId: found?.vaultId || "", masterCapId: found?.masterCapId || "" }
+      setCurrentGroup(next)
+      setTreasuries([])
+      setSelectedTreasuryId("")
+      setLegacySource("")
+      setTemplates(getPaymentTemplates())
+      if (!found?.orgObjectId) return
+      try {
+        const result = await groupVaults.listVaults(found.orgObjectId)
+        if (cancelled || generation !== groupGeneration.current) return
+        const choices = result.vaults.filter(vault => vault.authority.verified && vault.authority.status === "organization-treasury" && vault.coinType === "0x2::sui::SUI" && vault.treasuryId)
+        setTreasuries(choices)
+        const first = choices[0]
+        if (first) {
+          setCurrentGroup(value => ({ ...value, balance: t("vault.pickTreasury"), token: "SUI" }))
         }
+      } catch (error) {
+        if (!cancelled && generation === groupGeneration.current) setErrorMessage(error instanceof Error ? error.message : t("vault.treasuryReadFailed"))
       }
-    } catch {}
-  }, [groupId])
-
-  const [templates, setTemplates] = useState<TransactionTemplate[]>([
-    {
-      id: "template-1",
-      name: "每月团队津贴发放",
-      type: "transfer",
-      recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-      amount: "50",
-      token: "SUI",
-    },
-    {
-      id: "template-2",
-      name: "生态流动性金库充值",
-      type: "contract",
-      contract: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
-      function: "deposit",
-      args: '{"amount": "100"}',
-    },
-  ])
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("sui_payment_templates")
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setTemplates(parsed)
-        }
-      }
-    } catch {}
-  }, [open])
-
-  // Reset state when dialog opens/closes
-  useEffect(() => {
-    if (!open) {
-      setTimeout(() => {
-        setStep(1)
-        setTransactionType("transfer")
-        setAdvancedMode(false)
-        setScheduleType("immediate")
-        setExecuteDate(undefined)
-        setConditionType("none")
-        setPriceCondition("above")
-        setPriceThreshold("100")
-        setPriceToken("SUI")
-        setSaveAsTemplate(false)
-        setTemplateName("")
-        setSelectedTemplate(null)
-        setBatchMode(false)
-        setBatchTransactions([])
-        setExpandedBatchIndex(null)
-      }, 300)
     }
-  }, [open])
+    void load()
+    const onGroupsUpdated = () => void load()
+    const onTemplatesUpdated = () => void load()
+    const onStorage = () => void load()
+    window.addEventListener("sui-groups-updated", onGroupsUpdated)
+    window.addEventListener("sui-templates-updated", onTemplatesUpdated)
+    window.addEventListener("storage", onStorage)
+    const invalidate = () => { groupGeneration.current++ }
+    return () => { cancelled = true; invalidate(); window.removeEventListener("sui-groups-updated", onGroupsUpdated); window.removeEventListener("sui-templates-updated", onTemplatesUpdated); window.removeEventListener("storage", onStorage) }
+  }, [groupId, open])
+  const [templates, setTemplates] = useState<TransactionTemplate[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    setStep(1)
+    setTransactionType(initialTemplate?.type || "transfer")
+    setTitle(initialTemplate?.name || "")
+    setRecipient(initialTemplate?.recipient || "")
+    setAmount(initialTemplate?.amount || "")
+    setSelectedToken(initialTemplate?.token || "SUI")
+    setDescription("")
+    setErrorMessage(null)
+    setAdvancedMode(false)
+    setScheduleType("immediate")
+    setExecuteDate(undefined)
+    setConditionType("none")
+    setPriceCondition("above")
+    setPriceThreshold("100")
+    setPriceToken("SUI")
+    setSaveAsTemplate(false)
+    setTemplateName("")
+    setSelectedTemplate(initialTemplate?.id || null)
+    setBatchMode(false)
+    setBatchTransactions([])
+    setExpandedBatchIndex(null)
+    setSelectedTreasuryId("")
+    setLegacySource("")
+  }, [open, groupId, initialTemplate])
 
   const nextStep = () => {
     setStep(step + 1)
@@ -193,42 +201,118 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
   const handleSubmitTransaction = async () => {
     setErrorMessage(null)
     if (!title.trim()) {
-      setErrorMessage("请输入提案标题 (Title is required)")
+      setErrorMessage(t("vault.titleRequired"))
       return
     }
 
-    const numAmount = parseFloat(amount) || 0
+    // The contract can only execute one fixed coin transfer per proposal
+    // (organization_treasury::create_transfer / asynchronous_proposal). Off-chain
+    // descriptions of contract calls, batches, schedules and price conditions
+    // must not be presented as proposals that would actually execute.
+    if (transactionType !== "transfer") {
+      setErrorMessage(t("vault.proposalSuiOnly"))
+      return
+    }
+    if (batchMode) {
+      setErrorMessage(t("vault.batchProposalUnsupported"))
+      return
+    }
+    if (scheduleType !== "immediate") {
+      setErrorMessage(t("vault.scheduledProposalUnsupported"))
+      return
+    }
+    if (conditionType !== "none") {
+      setErrorMessage(t("vault.conditionProposalUnsupported"))
+      return
+    }
+    if (saveAsTemplate && !templateName.trim()) {
+      setErrorMessage(t("vault.templateNameRequired"))
+      return
+    }
+    const selectedGroup = getUserGroups().find(group => group.id === groupId)
+    if (!groupId || !currentGroup.orgObjectId || selectedGroup?.orgObjectId !== currentGroup.orgObjectId) {
+      setErrorMessage(t("vault.reenterFromGroup"))
+      return
+    }
+    if (selectedToken !== "SUI") { setErrorMessage(t("vault.treasurySuiOnly")); return }
     if (transactionType === "transfer") {
-      if (!recipient.trim() || !recipient.startsWith("0x")) {
-        setErrorMessage("请输入合法的 Sui 接收者地址 (需以 0x 开头)")
+      if (!recipient.trim()) {
+        setErrorMessage(t("vault.recipientRequired"));
         return
       }
-      if (numAmount <= 0) {
-        setErrorMessage("转账金额必须大于 0")
+      if (!/^\d+(\.\d+)?$/.test(amount.trim())) {
+        setErrorMessage(t("vault.amountDecimalHint"));
+        return
+      }
+      try { paymentUnits(amount.trim(), 9) } catch (amountError) {
+        setErrorMessage(amountError instanceof Error ? amountError.message : t("vault.amountInvalid"))
         return
       }
     }
-
+    if (!selectedTreasuryId && !legacySource) {
+      setErrorMessage(t("vault.selectTreasuryFirst"))
+      return
+    }
+    if (recovery.blocked) { setErrorMessage(recovery.receiptError || t("vault.pendingProposalRecover")); return }
+    if (!submissionGuard.current.enter()) return
+    const runGeneration = groupGeneration.current
     setIsSubmitting(true)
     try {
       await createTransferProposalOnChain({
         title: title.trim(),
-        recipient: recipient.trim() || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-        amount: numAmount > 0 ? numAmount : 1,
+        recipient: recipient.trim(),
+        amount,
         token: selectedToken,
         description: description.trim() || `${transactionType} proposal`,
         groupId: currentGroup.id,
         groupName: currentGroup.name,
         orgId: currentGroup.orgObjectId,
+        treasuryId: selectedTreasuryId || undefined,
+        legacyVaultId: legacySource ? currentGroup.vaultId : undefined,
+        legacyMasterCapId: legacySource ? currentGroup.masterCapId : undefined,
         deadlineMs: executeDate ? executeDate.getTime() : undefined,
+        assertContext: () => {
+          if (runGeneration !== groupGeneration.current || getUserGroups().find(group => group.id === groupId)?.orgObjectId !== currentGroup.orgObjectId) throw new Error(t("vault.groupSwitchedDuringSubmit"))
+        },
       })
+      if (saveAsTemplate) {
+        // Persist only after the proposal is confirmed on chain, so a failed
+        // submission cannot leave a "template" implying a real transaction.
+        const now = new Date().toISOString()
+        const template = {
+          id: `template-${Date.now()}`,
+          name: templateName.trim(),
+          type: "transfer",
+          description: description.trim() || `${recipient.trim()} · ${amount.trim()} SUI`,
+          createdAt: now,
+          recipient: recipient.trim(),
+          amount: amount.trim(),
+          token: "SUI",
+          sourceStatus: "local" as const,
+        }
+        savePaymentTemplates([...getPaymentTemplates(), template])
+      }
       onOpenChange(false)
-    } catch (e: any) {
-      console.error("[CreateTx] failed:", e)
-      setErrorMessage(e.message || "创建提案失败")
+    } catch (e) {
+      if (e instanceof TransactionReceiptError) recovery.setPending(e.status === "failed" ? undefined : e.receipt)
+      setErrorMessage(describeError(e, t("vault.createProposalFailed")))
     } finally {
+      submissionGuard.current.leave()
       setIsSubmitting(false)
     }
+  }
+  const handleResumeTransaction = async () => {
+    if (!recovery.pending || !submissionGuard.current.enter()) return
+    setIsSubmitting(true); setErrorMessage(null)
+    try {
+      const { resumeTransferProposalCreation } = await import("@/lib/onchain-store")
+      await resumeTransferProposalCreation(recovery.pending)
+      recovery.setPending(undefined)
+      onOpenChange(false)
+    } catch (error) {
+      if (error instanceof TransactionReceiptError) recovery.setPending(error.status === "failed" ? undefined : error.receipt)
+      setErrorMessage(error instanceof Error ? error.message : t("vault.originalTxUnconfirmed"))
+    } finally { submissionGuard.current.leave(); setIsSubmitting(false) }
   }
 
   const addBatchTransaction = () => {
@@ -261,14 +345,27 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px] p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-4 pb-0">
-          <DialogTitle>Create Transaction</DialogTitle>
-          <DialogDescription>Create a new transaction for approval by group members.</DialogDescription>
+          <DialogTitle>{t("vault.newGroupProposal")}</DialogTitle>
+          <DialogDescription>{t("vault.newGroupProposalDesc")}</DialogDescription>
+          {selectedTemplate && (
+            <p className="text-xs text-muted-foreground">
+              {t("vault.appliedTemplate", { name: templates.find((template) => template.id === selectedTemplate)?.name ?? selectedTemplate })}
+            </p>
+          )}
         </DialogHeader>
 
         <div className="relative overflow-hidden">
           <div className="flex justify-between px-4 pt-4">
             {[1, 2].map((i) => (
-              <div key={i} className="flex flex-col items-center" onClick={() => i < step && setStep(i)}>
+              <button
+                key={i}
+                type="button"
+                disabled={i >= step}
+                onClick={() => setStep(i)}
+                aria-current={i === step ? "step" : undefined}
+                aria-label={t("vault.stepAria", { i, label: i === 1 ? "Transaction Type" : "Details" })}
+                className="flex flex-col items-center rounded-md disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
                 <div
                   className={`h-8 w-8 rounded-full flex items-center justify-center text-sm ${
                     i < step
@@ -281,7 +378,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                   {i}
                 </div>
                 <div className="text-xs mt-1 text-muted-foreground">{i === 1 ? "Transaction Type" : "Details"}</div>
-              </div>
+              </button>
             ))}
             <div className="absolute top-[28px] left-[120px] w-[120px] h-[2px] bg-muted">
               <div className={`h-full bg-primary transition-all ${step > 1 ? "w-full" : "w-0"}`}></div>
@@ -300,7 +397,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
               >
                 <div className="space-y-3">
                   <div className="space-y-1">
-                    <Label className="text-xs font-medium">Transaction Type</Label>
+                    <Label className="text-xs font-medium">{t("vault.formTxType")}</Label>
                     <Tabs value={transactionType} onValueChange={setTransactionType} className="w-full">
                       <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl h-9">
                         <TabsTrigger
@@ -329,16 +426,35 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                   </div>
 
                   <div className="p-3 rounded-lg bg-muted/50">
-                    <p className="text-xs text-muted-foreground">Current Group</p>
+                    <p className="text-xs text-muted-foreground">{t("vault.proposalGroup")}</p>
                     <p className="font-medium">{currentGroup.name}</p>
+                    <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{currentGroup.orgObjectId || t("vault.orgNotLinked")}</p>
 
                     <div className="flex items-center justify-between mt-2">
                       <div>
-                        <p className="text-xs text-muted-foreground">Available Balance</p>
+                        <p className="text-xs text-muted-foreground">{t("vault.formAvailableBalance")}</p>
                         <p className="font-medium">
                           {currentGroup.balance} {currentGroup.token}
                         </p>
                       </div>
+                    </div>
+                    <div className="mt-3 space-y-1">
+                      <Label className="text-xs font-medium">{t("vault.fundingSource")}</Label>
+                      <Select value={selectedTreasuryId || legacySource} onValueChange={(value) => {
+                        if (value === "legacy") { setSelectedTreasuryId(""); setLegacySource("legacy") }
+                        else { setLegacySource(""); setSelectedTreasuryId(value) }
+                        const row = treasuries.find(treasury => treasury.treasuryId === value)
+                        if (row) setCurrentGroup(group => ({ ...group, balance: formatSuiBalance(row.balance), vaultId: row.id, masterCapId: row.masterCapId || "" }))
+                      }}>
+                        <SelectTrigger className="w-full"><SelectValue placeholder={t("vault.selectTreasuryPlaceholder")} /></SelectTrigger>
+                        <SelectContent>
+                          {treasuries.map(treasury => <SelectItem key={treasury.treasuryId} value={treasury.treasuryId!}>
+                            {t("vault.orgTreasuryOption", { balance: formatSuiBalance(treasury.balance) })}
+                          </SelectItem>)}
+                          {currentGroup.vaultId && currentGroup.masterCapId && <SelectItem value="legacy">{t("vault.legacyVaultOption")}</SelectItem>}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-[11px] text-muted-foreground">{t("vault.treasurySourceHint")}</p>
                     </div>
                   </div>
 
@@ -353,7 +469,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         </Label>
                         <Select onValueChange={(value) => loadTemplate(value)}>
                           <SelectTrigger id="template" className="h-7 w-[130px] text-xs">
-                            <SelectValue placeholder="Select" />
+                            <SelectValue placeholder={t("vault.phSelect")} />
                           </SelectTrigger>
                           <SelectContent>
                             {templates.map((template) => (
@@ -370,7 +486,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         id="title"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        placeholder="Payment for services, Token transfer, etc."
+                        placeholder={t("vault.phTitle")}
                         className="pl-9"
                       />
                       <FileText className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -385,7 +501,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                       id="description"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Add details about this transaction"
+                      placeholder={t("vault.phDescription")}
                       className="resize-none h-20"
                     />
                   </div>
@@ -408,22 +524,22 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                   {advancedMode && (
                     <div className="space-y-3 pt-2 border-t">
                       <div className="space-y-1">
-                        <Label className="text-xs font-medium">Execution Schedule</Label>
+                        <Label className="text-xs font-medium">{t("vault.formExecutionSchedule")}</Label>
                         <Select value={scheduleType} onValueChange={setScheduleType}>
                           <SelectTrigger className="w-full">
-                            <SelectValue placeholder="Select schedule type" />
+                            <SelectValue placeholder={t("vault.phSelectSchedule")} />
                           </SelectTrigger>
                           <SelectContent>
                             <SelectItem value="immediate">Immediate (After Approval)</SelectItem>
-                            <SelectItem value="scheduled">Scheduled Date</SelectItem>
-                            <SelectItem value="conditional">Conditional Execution</SelectItem>
+                            <SelectItem value="scheduled">{t("vault.formScheduledDate")}</SelectItem>
+                            <SelectItem value="conditional">{t("vault.formConditionalExecution")}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
 
                       {scheduleType === "scheduled" && (
                         <div className="space-y-1">
-                          <Label className="text-xs font-medium">Execute On</Label>
+                          <Label className="text-xs font-medium">{t("vault.formExecuteOn")}</Label>
                           <Popover>
                             <PopoverTrigger asChild>
                               <Button
@@ -451,15 +567,15 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                       {scheduleType === "conditional" && (
                         <div className="space-y-3">
                           <div className="space-y-1">
-                            <Label className="text-xs font-medium">Condition Type</Label>
+                            <Label className="text-xs font-medium">{t("vault.formConditionType")}</Label>
                             <Select value={conditionType} onValueChange={setConditionType}>
                               <SelectTrigger className="w-full">
-                                <SelectValue placeholder="Select condition type" />
+                                <SelectValue placeholder={t("vault.phSelectConditionType")} />
                               </SelectTrigger>
                               <SelectContent>
-                                <SelectItem value="price">Price Condition</SelectItem>
-                                <SelectItem value="balance">Balance Condition</SelectItem>
-                                <SelectItem value="time">Time-Based Condition</SelectItem>
+                                <SelectItem value="price">{t("vault.formPriceCondition")}</SelectItem>
+                                <SelectItem value="balance">{t("vault.formBalanceCondition")}</SelectItem>
+                                <SelectItem value="time">{t("vault.formTimeCondition")}</SelectItem>
                               </SelectContent>
                             </Select>
                           </div>
@@ -468,10 +584,10 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                             <div className="space-y-3">
                               <div className="flex items-center space-x-2">
                                 <div className="flex-1">
-                                  <Label className="text-xs font-medium">Token</Label>
+                                  <Label className="text-xs font-medium">{t("vault.formToken")}</Label>
                                   <Select value={priceToken} onValueChange={setPriceToken}>
                                     <SelectTrigger>
-                                      <SelectValue placeholder="Select token" />
+                                      <SelectValue placeholder={t("vault.phSelectToken")} />
                                     </SelectTrigger>
                                     <SelectContent>
                                       {tokens.map((token) => (
@@ -483,14 +599,14 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                   </Select>
                                 </div>
                                 <div className="flex-1">
-                                  <Label className="text-xs font-medium">Condition</Label>
+                                  <Label className="text-xs font-medium">{t("vault.formCondition")}</Label>
                                   <Select value={priceCondition} onValueChange={setPriceCondition}>
                                     <SelectTrigger>
-                                      <SelectValue placeholder="Select condition" />
+                                      <SelectValue placeholder={t("vault.phSelectCondition")} />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="above">Price Above</SelectItem>
-                                      <SelectItem value="below">Price Below</SelectItem>
+                                      <SelectItem value="above">{t("vault.formPriceAbove")}</SelectItem>
+                                      <SelectItem value="below">{t("vault.formPriceBelow")}</SelectItem>
                                     </SelectContent>
                                   </Select>
                                 </div>
@@ -506,10 +622,9 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                   <span className="text-xs font-medium">USD</span>
                                 </div>
                               </div>
-                              <div className="p-2 bg-accent/30 rounded-md">
-                                <p className="text-xs">
-                                  Transaction will execute when {priceToken} price is {priceCondition} ${priceThreshold}{" "}
-                                  USD
+                              <div className="p-2 rounded-md border border-amber-500/40 bg-amber-500/10">
+                                <p className="text-xs text-amber-700 dark:text-amber-300">
+                                  {t("vault.priceConditionWarning", { token: priceToken, condition: priceCondition, threshold: priceThreshold })}
                                 </p>
                               </div>
                             </div>
@@ -527,11 +642,11 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                       {saveAsTemplate && (
                         <div className="space-y-1">
                           <Label htmlFor="template-name" className="text-xs font-medium">
-                            Template Name
+                            {t("vault.formTemplateName")}
                           </Label>
                           <Input
                             id="template-name"
-                            placeholder="Monthly Payment, Staking, etc."
+                            placeholder={t("vault.phTemplateName")}
                             value={templateName}
                             onChange={(e) => setTemplateName(e.target.value)}
                           />
@@ -563,7 +678,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                           id="recipient"
                           value={recipient}
                           onChange={(e) => setRecipient(e.target.value)}
-                          placeholder="0x..."
+                          placeholder="0x… / alice.sui / alice.id"
                         />
                       </div>
 
@@ -586,7 +701,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                           </Label>
                           <Select value={selectedToken} onValueChange={setSelectedToken}>
                             <SelectTrigger id="token">
-                              <SelectValue placeholder="Select" />
+                              <SelectValue placeholder={t("vault.phSelect")} />
                             </SelectTrigger>
                             <SelectContent>
                               {tokens.map((token) => (
@@ -614,7 +729,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         <Label htmlFor="function" className="text-xs font-medium">
                           Function Name
                         </Label>
-                        <Input id="function" placeholder="transfer, mint, etc." />
+                        <Input id="function" placeholder={t("vault.phTags")} />
                       </div>
 
                       <div className="space-y-1">
@@ -638,7 +753,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         </Label>
                         <Textarea
                           id="payload"
-                          placeholder="Paste your custom transaction payload here..."
+                          placeholder={t("vault.phPayload")}
                           className="resize-none h-32 font-mono text-xs"
                         />
                       </div>
@@ -646,7 +761,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                       <div className="p-3 rounded-lg bg-accent/30">
                         <p className="text-xs">
                           Custom transactions allow you to execute any valid transaction on the blockchain. Make sure
-                          you understand what you're doing.
+                          you understand what you&apos;re doing.
                         </p>
                       </div>
                     </>
@@ -654,14 +769,23 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
 
                   <div className="space-y-1">
                     <Label htmlFor="deadline" className="text-xs font-medium">
-                      Expiration (Optional)
+                      {t("vault.deadlineLabel")}
                     </Label>
                     <div className="relative">
-                      <Input id="deadline" type="date" className="pl-9" />
+                      {/* This input used to render with no value/onChange, so typing a
+                          date silently did nothing while implying it set the expiry.
+                          It now writes the same `executeDate` the submission uses. */}
+                      <Input
+                        id="deadline"
+                        type="date"
+                        className="pl-9"
+                        value={executeDate ? format(executeDate, "yyyy-MM-dd") : ""}
+                        onChange={(event) => setExecuteDate(event.target.value ? new Date(event.target.value) : undefined)}
+                      />
                       <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      If not approved by this date, the transaction will expire
+                      {t("vault.deadlineHint")}
                     </p>
                   </div>
 
@@ -675,10 +799,10 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         )}
                         <p className="text-xs font-medium">
                           {scheduleType === "scheduled"
-                            ? `Scheduled to execute on ${executeDate ? format(executeDate, "PPP") : "selected date"}`
+                            ? t("vault.scheduledWarning", { date: executeDate ? format(executeDate, "PPP") : t("vault.noDatePicked") })
                             : conditionType === "price"
-                              ? `Will execute when ${priceToken} price is ${priceCondition} $${priceThreshold}`
-                              : "Will execute when conditions are met"}
+                              ? t("vault.priceConditionNoOracle", { token: priceToken, condition: priceCondition, threshold: priceThreshold })
+                              : t("vault.conditionTriggerNoSupport")}
                         </p>
                       </div>
                     </div>
@@ -717,7 +841,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                     {batchTransactions.length === 0 ? (
                       <div className="flex flex-col items-center justify-center h-32 border border-dashed rounded-lg">
                         <ListChecks className="h-8 w-8 text-muted-foreground mb-2" />
-                        <p className="text-sm text-muted-foreground">No transactions added yet</p>
+                        <p className="text-sm text-muted-foreground">{t("vault.formNoTxAdded")}</p>
                         <Button type="button" variant="link" size="sm" onClick={addBatchTransaction} className="mt-2">
                           Add your first transaction
                         </Button>
@@ -770,18 +894,18 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                             {expandedBatchIndex === index && (
                               <div className="p-3 space-y-3">
                                 <div className="space-y-1">
-                                  <Label className="text-xs font-medium">Transaction Type</Label>
+                                  <Label className="text-xs font-medium">{t("vault.formTxType")}</Label>
                                   <Select
                                     value={transaction.type}
                                     onValueChange={(value) => updateBatchTransaction(index, { type: value })}
                                   >
                                     <SelectTrigger>
-                                      <SelectValue placeholder="Select type" />
+                                      <SelectValue placeholder={t("vault.phSelectType")} />
                                     </SelectTrigger>
                                     <SelectContent>
-                                      <SelectItem value="transfer">Transfer</SelectItem>
-                                      <SelectItem value="contract">Contract Call</SelectItem>
-                                      <SelectItem value="custom">Custom Transaction</SelectItem>
+                                      <SelectItem value="transfer">{t("vault.formTransfer")}</SelectItem>
+                                      <SelectItem value="contract">{t("vault.formContractCall")}</SelectItem>
+                                      <SelectItem value="custom">{t("vault.formCustomTx")}</SelectItem>
                                     </SelectContent>
                                   </Select>
                                 </div>
@@ -789,7 +913,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                 {transaction.type === "transfer" && (
                                   <>
                                     <div className="space-y-1">
-                                      <Label className="text-xs font-medium">Recipient</Label>
+                                      <Label className="text-xs font-medium">{t("vault.formRecipient")}</Label>
                                       <Input
                                         placeholder="0x..."
                                         value={transaction.recipient || ""}
@@ -798,7 +922,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
                                       <div className="space-y-1">
-                                        <Label className="text-xs font-medium">Amount</Label>
+                                        <Label className="text-xs font-medium">{t("vault.formAmount")}</Label>
                                         <Input
                                           type="number"
                                           placeholder="0.00"
@@ -807,13 +931,13 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                         />
                                       </div>
                                       <div className="space-y-1">
-                                        <Label className="text-xs font-medium">Token</Label>
+                                        <Label className="text-xs font-medium">{t("vault.formToken")}</Label>
                                         <Select
                                           value={transaction.token || "SUI"}
                                           onValueChange={(value) => updateBatchTransaction(index, { token: value })}
                                         >
                                           <SelectTrigger>
-                                            <SelectValue placeholder="Select token" />
+                                            <SelectValue placeholder={t("vault.phSelectToken")} />
                                           </SelectTrigger>
                                           <SelectContent>
                                             {tokens.map((token) => (
@@ -831,7 +955,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                 {transaction.type === "contract" && (
                                   <>
                                     <div className="space-y-1">
-                                      <Label className="text-xs font-medium">Contract Address</Label>
+                                      <Label className="text-xs font-medium">{t("vault.formContractAddress")}</Label>
                                       <Input
                                         placeholder="0x..."
                                         value={transaction.contract || ""}
@@ -839,9 +963,9 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                                       />
                                     </div>
                                     <div className="space-y-1">
-                                      <Label className="text-xs font-medium">Function</Label>
+                                      <Label className="text-xs font-medium">{t("vault.formFunction")}</Label>
                                       <Input
-                                        placeholder="transfer, mint, etc."
+                                        placeholder={t("vault.phTags")}
                                         value={transaction.function || ""}
                                         onChange={(e) => updateBatchTransaction(index, { function: e.target.value })}
                                       />
@@ -860,9 +984,9 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
 
                                 {transaction.type === "custom" && (
                                   <div className="space-y-1">
-                                    <Label className="text-xs font-medium">Transaction Payload</Label>
+                                    <Label className="text-xs font-medium">{t("vault.formPayload")}</Label>
                                     <Textarea
-                                      placeholder="Paste your custom transaction payload here..."
+                                      placeholder={t("vault.phPayload")}
                                       className="resize-none h-20 font-mono text-xs"
                                       value={transaction.payload || ""}
                                       onChange={(e) => updateBatchTransaction(index, { payload: e.target.value })}
@@ -878,15 +1002,21 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                   </ScrollArea>
 
                   <div className="space-y-1 pt-2">
-                    <Label htmlFor="deadline" className="text-xs font-medium">
-                      Batch Expiration (Optional)
+                    <Label htmlFor="batch-deadline" className="text-xs font-medium">
+                      {t("vault.batchDeadlineLabel")}
                     </Label>
                     <div className="relative">
-                      <Input id="deadline" type="date" className="pl-9" />
+                      <Input
+                        id="batch-deadline"
+                        type="date"
+                        className="pl-9"
+                        value={executeDate ? format(executeDate, "yyyy-MM-dd") : ""}
+                        onChange={(event) => setExecuteDate(event.target.value ? new Date(event.target.value) : undefined)}
+                      />
                       <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      If not approved by this date, all transactions in the batch will expire
+                      {t("vault.batchDeadlineHint")}
                     </p>
                   </div>
 
@@ -900,10 +1030,10 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
                         )}
                         <p className="text-xs font-medium">
                           {scheduleType === "scheduled"
-                            ? `Batch scheduled to execute on ${executeDate ? format(executeDate, "PPP") : "selected date"}`
+                            ? t("vault.batchScheduledWarning", { date: executeDate ? format(executeDate, "PPP") : t("vault.noDatePicked") })
                             : conditionType === "price"
-                              ? `Batch will execute when ${priceToken} price is ${priceCondition} $${priceThreshold}`
-                              : "Batch will execute when conditions are met"}
+                              ? t("vault.batchPriceConditionNoOracle", { token: priceToken, condition: priceCondition, threshold: priceThreshold })
+                              : t("vault.batchConditionTriggerNoSupport")}
                         </p>
                       </div>
                     </div>
@@ -928,16 +1058,16 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId }: CreateT
               </Button>
               <Button
                 type="button"
-                disabled={isSubmitting}
-                onClick={handleSubmitTransaction}
+                disabled={isSubmitting || recovery.blocked || (!selectedTreasuryId && !legacySource) || !currentGroup.orgObjectId}
+                onClick={recovery.pending ? handleResumeTransaction : handleSubmitTransaction}
                 size="sm"
                 className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
               >
-                {isSubmitting ? "Submitting (PTB)..." : batchMode ? "Create Batch" : "Create Transaction"}
+                {isSubmitting ? t("vault.signingSubmitting") : recovery.pending ? t("vault.recoverOriginalTx") : t("vault.createGroupProposal")}
               </Button>
             </div>
           ) : (
-            <Button type="button" onClick={nextStep} className="w-full">
+            <Button type="button" onClick={nextStep} disabled={!currentGroup.orgObjectId} className="w-full">
               Next
             </Button>
           )}

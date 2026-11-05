@@ -27,84 +27,37 @@ import {
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
+import { getPaymentTemplates, savePaymentTemplates, type TransactionTemplate } from "@/lib/local-records"
+import { useI18n } from "@/components/i18n-provider"
+export type { TransactionTemplate } from "@/lib/local-records"
 
 interface TemplateManagerDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-interface TransactionTemplate {
-  id: string
-  name: string
-  type: string
-  description: string
-  createdAt: string
-  lastUsed?: string
-  recipient?: string
-  amount?: string
-  token?: string
-  contract?: string
-  function?: string
-  args?: string
-  batchItems?: { recipient: string; amount: string; token: string }[]
-}
-
 export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDialogProps) {
-  const DEFAULT_TEMPLATES: TransactionTemplate[] = [
-    {
-      id: "template-1",
-      name: "每月团队津贴发放",
-      type: "transfer",
-      description: "向核心贡献者划拨 50 SUI 津贴",
-      createdAt: "2025-02-15T12:00:00Z",
-      lastUsed: "2025-03-15T12:00:00Z",
-      recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-      amount: "50",
-      token: "SUI",
-    },
-    {
-      id: "template-2",
-      name: "生态流动性金库充值",
-      type: "contract",
-      description: "向流动性池注入做市资金",
-      createdAt: "2025-02-10T12:00:00Z",
-      lastUsed: "2025-03-10T12:00:00Z",
-      contract: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
-      function: "deposit",
-      args: '{"amount": "100"}',
-    },
-    {
-      id: "template-3",
-      name: "SUI/USDC 快捷对冲",
-      type: "contract",
-      description: "在 DeepBook / Cetus 执行稳定币兑换",
-      createdAt: "2025-02-05T12:00:00Z",
-      contract: "0x0000000000000000000000000000000000000000000000000000000000000002",
-      function: "swap",
-      args: '{"tokenIn": "SUI", "tokenOut": "USDC", "amountIn": "10"}',
-    },
-  ]
+  const { t } = useI18n()
+  const typeLabel = (type: string) =>
+    type === "transfer" ? t("vault.typeTransfer") : type === "contract" ? t("vault.typeContract") : t("vault.typeBatch")
+  const DEFAULT_TEMPLATES: TransactionTemplate[] = []
 
   const [templates, setTemplates] = useState<TransactionTemplate[]>(DEFAULT_TEMPLATES)
 
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem("sui_payment_templates")
-      if (stored) {
-        const parsed = JSON.parse(stored)
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setTemplates(parsed)
-        }
-      }
-    } catch {}
-  }, [])
+    const load = () => setTemplates(getPaymentTemplates())
+    load()
+    window.addEventListener("sui-templates-updated", load)
+    window.addEventListener("storage", load)
+    return () => {
+      window.removeEventListener("sui-templates-updated", load)
+      window.removeEventListener("storage", load)
+    }
+  }, [open])
 
-  const persistTemplates = (newTemplates: TransactionTemplate[]) => {
+  const persistTemplates = (newTemplates: TransactionTemplate[], removedId?: string) => {
+    savePaymentTemplates(newTemplates, removedId)
     setTemplates(newTemplates)
-    try {
-      localStorage.setItem("sui_payment_templates", JSON.stringify(newTemplates))
-      window.dispatchEvent(new CustomEvent("sui-templates-updated", { detail: newTemplates }))
-    } catch {}
   }
   const [searchTerm, setSearchTerm] = useState("")
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null)
@@ -116,7 +69,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
     description: "",
     recipient: "",
     amount: "",
-    token: "USDC",
+    token: "SUI",
     contract: "",
     function: "",
     args: "",
@@ -125,8 +78,8 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
 
   const filteredTemplates = templates.filter(
     (template) =>
-      template.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      template.description.toLowerCase().includes(searchTerm.toLowerCase()),
+      (template.name || "").toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (template.description || "").toLowerCase().includes(searchTerm.toLowerCase()),
   )
 
   const getTemplateIcon = (type: string) => {
@@ -149,7 +102,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
 
   const handleDeleteTemplate = (id: string) => {
     const updated = templates.filter((template) => template.id !== id)
-    persistTemplates(updated)
+    persistTemplates(updated, id)
     setDeleteTemplateId(null)
   }
 
@@ -161,7 +114,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
       description: template.description,
       recipient: template.recipient || "",
       amount: template.amount || "",
-      token: template.token || "USDC",
+      token: template.token || "SUI",
       contract: template.contract || "",
       function: template.function || "",
       args: template.args || "",
@@ -178,7 +131,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
       description: "",
       recipient: "",
       amount: "",
-      token: "USDC",
+      token: "SUI",
       contract: "",
       function: "",
       args: "",
@@ -196,6 +149,8 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
     if (!formState.name) return
 
     const newTemplate = {
+      ...editingTemplate,
+      sourceStatus: "local" as const,
       id: editingTemplate?.id || `template-${Date.now()}`,
       name: formState.name,
       type: formState.type,
@@ -226,7 +181,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
   const addBatchItem = () => {
     setFormState({
       ...formState,
-      batchItems: [...formState.batchItems, { recipient: "", amount: "", token: "USDC" }],
+      batchItems: [...formState.batchItems, { recipient: "", amount: "", token: "SUI" }],
     })
   }
 
@@ -253,50 +208,50 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-[600px]">
+        <DialogContent className="sm:max-w-[600px] max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Transaction Templates</DialogTitle>
-            <DialogDescription>Manage your saved transaction templates</DialogDescription>
+            <DialogTitle>{t("vault.tmTitle")}</DialogTitle>
+            <DialogDescription>{t("vault.tmDescription")}</DialogDescription>
           </DialogHeader>
 
           {isEditMode ? (
             <div className="space-y-4">
               <div className="space-y-2">
-                <h3 className="text-sm font-medium">{editingTemplate ? "Edit Template" : "Create Template"}</h3>
+                <h3 className="text-sm font-medium">{editingTemplate ? t("vault.tmEditTemplate") : t("vault.tmNewTemplate")}</h3>
                 <div className="space-y-2">
                   <div className="space-y-1">
-                    <Label htmlFor="template-name">Template Name</Label>
+                    <Label htmlFor="template-name">{t("vault.tmNameLabel")}</Label>
                     <Input
                       id="template-name"
                       value={formState.name}
                       onChange={(e) => setFormState({ ...formState, name: e.target.value })}
-                      placeholder="Monthly Payment, Staking, etc."
+                      placeholder={t("vault.tmNamePlaceholder")}
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <Label htmlFor="template-description">Description</Label>
+                    <Label htmlFor="template-description">{t("vault.tmDescriptionLabel")}</Label>
                     <Input
                       id="template-description"
                       value={formState.description}
                       onChange={(e) => setFormState({ ...formState, description: e.target.value })}
-                      placeholder="Brief description of this template"
+                      placeholder={t("vault.tmDescriptionPlaceholder")}
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <Label>Transaction Type</Label>
+                    <Label>{t("vault.tmTypeLabel")}</Label>
                     <Select
                       value={formState.type}
                       onValueChange={(value) => setFormState({ ...formState, type: value })}
                     >
                       <SelectTrigger>
-                        <SelectValue placeholder="Select type" />
+                        <SelectValue placeholder={t("vault.tmTypePlaceholder")} />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="transfer">Transfer</SelectItem>
-                        <SelectItem value="contract">Contract Call</SelectItem>
-                        <SelectItem value="batch">Batch Transaction</SelectItem>
+                        <SelectItem value="transfer">{typeLabel("transfer")}</SelectItem>
+                        <SelectItem value="contract">{typeLabel("contract")}</SelectItem>
+                        <SelectItem value="batch">{typeLabel("batch")}</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -304,18 +259,18 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                   {formState.type === "transfer" && (
                     <>
                       <div className="space-y-1">
-                        <Label htmlFor="recipient">Recipient Address</Label>
+                        <Label htmlFor="recipient">{t("vault.tmRecipientLabel")}</Label>
                         <Input
                           id="recipient"
                           value={formState.recipient}
                           onChange={(e) => setFormState({ ...formState, recipient: e.target.value })}
-                          placeholder="0x..."
+                          placeholder={t("vault.tmRecipientPlaceholder")}
                         />
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
                         <div className="space-y-1">
-                          <Label htmlFor="amount">Amount</Label>
+                          <Label htmlFor="amount">{t("vault.tmAmountLabel")}</Label>
                           <Input
                             id="amount"
                             value={formState.amount}
@@ -324,13 +279,13 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                           />
                         </div>
                         <div className="space-y-1">
-                          <Label htmlFor="token">Token</Label>
+                          <Label htmlFor="token">{t("vault.tmTokenLabel")}</Label>
                           <Select
                             value={formState.token}
                             onValueChange={(value) => setFormState({ ...formState, token: value })}
                           >
                             <SelectTrigger id="token">
-                              <SelectValue placeholder="Select" />
+                              <SelectValue placeholder={t("vault.tmTokenPlaceholder")} />
                             </SelectTrigger>
                             <SelectContent>
                               {tokens.map((token) => (
@@ -348,7 +303,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                   {formState.type === "contract" && (
                     <>
                       <div className="space-y-1">
-                        <Label htmlFor="contract">Contract Address</Label>
+                        <Label htmlFor="contract">{t("vault.tmContractLabel")}</Label>
                         <Input
                           id="contract"
                           value={formState.contract}
@@ -358,17 +313,17 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                       </div>
 
                       <div className="space-y-1">
-                        <Label htmlFor="function">Function Name</Label>
+                        <Label htmlFor="function">{t("vault.tmFunctionLabel")}</Label>
                         <Input
                           id="function"
                           value={formState.function}
                           onChange={(e) => setFormState({ ...formState, function: e.target.value })}
-                          placeholder="transfer, mint, etc."
+                          placeholder={t("vault.tmFunctionPlaceholder")}
                         />
                       </div>
 
                       <div className="space-y-1">
-                        <Label htmlFor="args">Arguments (JSON)</Label>
+                        <Label htmlFor="args">{t("vault.tmArgsLabel")}</Label>
                         <Textarea
                           id="args"
                           value={formState.args}
@@ -383,7 +338,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                   {formState.type === "batch" && (
                     <div className="space-y-2">
                       <div className="flex items-center justify-between">
-                        <Label>Batch Items</Label>
+                        <Label>{t("vault.tmBatchListLabel")}</Label>
                         <Button
                           type="button"
                           variant="outline"
@@ -391,13 +346,13 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                           onClick={addBatchItem}
                           className="h-7 text-xs"
                         >
-                          <Plus className="h-3 w-3 mr-1" /> Add Item
+                          <Plus className="h-3 w-3 mr-1" /> {t("vault.tmAddRecipient")}
                         </Button>
                       </div>
 
                       {formState.batchItems.length === 0 ? (
                         <div className="text-center py-4 border border-dashed rounded-md">
-                          <p className="text-sm text-muted-foreground">No batch items added</p>
+                          <p className="text-sm text-muted-foreground">{t("vault.tmNoBatchItems")}</p>
                         </div>
                       ) : (
                         <div className="space-y-2 max-h-[200px] overflow-y-auto">
@@ -405,7 +360,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                             <div key={index} className="flex items-center space-x-2 p-2 border rounded-md">
                               <div className="flex-1">
                                 <Input
-                                  placeholder="Recipient (0x...)"
+                                  placeholder={t("vault.tmBatchRecipientPlaceholder")}
                                   value={item.recipient}
                                   onChange={(e) => updateBatchItem(index, "recipient", e.target.value)}
                                   className="text-xs"
@@ -413,7 +368,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                               </div>
                               <div className="w-20">
                                 <Input
-                                  placeholder="Amount"
+                                  placeholder={t("vault.tmBatchAmountPlaceholder")}
                                   value={item.amount}
                                   onChange={(e) => updateBatchItem(index, "amount", e.target.value)}
                                   className="text-xs"
@@ -425,7 +380,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                                   onValueChange={(value) => updateBatchItem(index, "token", value)}
                                 >
                                   <SelectTrigger className="h-8 text-xs">
-                                    <SelectValue placeholder="Token" />
+                                    <SelectValue placeholder={t("vault.tmTokenPlaceholderShort")} />
                                   </SelectTrigger>
                                   <SelectContent>
                                     {tokens.map((token) => (
@@ -455,13 +410,13 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
 
               <DialogFooter>
                 <Button variant="outline" onClick={cancelEditing}>
-                  Cancel
+                  {t("vault.tmCancel")}
                 </Button>
                 <Button
                   onClick={saveTemplate}
                   className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
                 >
-                  Save Template
+                  {t("vault.tmSave")}
                 </Button>
               </DialogFooter>
             </div>
@@ -471,7 +426,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
               <div className="flex items-center justify-between">
                 <div className="relative flex-1">
                   <Input
-                    placeholder="Search templates..."
+                    placeholder={t("vault.tmSearchPlaceholder")}
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pr-10"
@@ -481,14 +436,14 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                   className="ml-2 bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
                   onClick={startCreatingTemplate}
                 >
-                  <Plus className="h-4 w-4 mr-1" /> New Template
+                  <Plus className="h-4 w-4 mr-1" /> {t("vault.tmNewTemplate")}
                 </Button>
               </div>
 
               <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
                 {filteredTemplates.length === 0 ? (
                   <div className="text-center py-8">
-                    <p className="text-muted-foreground">No templates found</p>
+                    <p className="text-muted-foreground">{t("vault.tmNoMatches")}</p>
                   </div>
                 ) : (
                   filteredTemplates.map((template) => (
@@ -502,18 +457,15 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
                             <h3 className="font-medium text-sm flex items-center">
                               {template.name}
                               <Badge variant="outline" className="ml-2 text-xs">
-                                {template.type === "transfer"
-                                  ? "Transfer"
-                                  : template.type === "contract"
-                                    ? "Contract"
-                                    : "Batch"}
+                                {typeLabel(template.type)}
                               </Badge>
                             </h3>
                             <p className="text-xs text-muted-foreground mt-0.5">{template.description}</p>
+                            <p className="text-[10px] text-muted-foreground">{template.sourceStatus === "unverified" ? t("vault.tmHistoryBadge") : t("vault.tmLocalBadge")}</p>
                             <div className="flex items-center text-xs text-muted-foreground mt-1">
-                              <span>Created: {formatDate(template.createdAt)}</span>
+                              <span>{t("vault.tmCreatedAt", { date: formatDate(template.createdAt) })}</span>
                               <span className="mx-2">•</span>
-                              <span>Last used: {formatDate(template.lastUsed)}</span>
+                              <span>{t("vault.tmLastUsed", { date: formatDate(template.lastUsed) })}</span>
                             </div>
                           </div>
                         </div>
@@ -546,7 +498,7 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
           {!isEditMode && (
             <DialogFooter>
               <Button variant="outline" onClick={() => onOpenChange(false)}>
-                Close
+                {t("vault.tmClose")}
               </Button>
             </DialogFooter>
           )}
@@ -556,18 +508,18 @@ export function TemplateManagerDialog({ open, onOpenChange }: TemplateManagerDia
       <AlertDialog open={!!deleteTemplateId} onOpenChange={(open) => !open && setDeleteTemplateId(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>{t("vault.tmDeleteTitle")}</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete this template. This action cannot be undone.
+              {t("vault.tmDeleteDescription")}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel>{t("vault.tmCancel")}</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => deleteTemplateId && handleDeleteTemplate(deleteTemplateId)}
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
             >
-              Delete
+              {t("vault.tmDeleteConfirm")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

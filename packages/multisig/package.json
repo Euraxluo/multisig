@@ -1,0 +1,61 @@
+{
+  "name": "multisig",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./account": {
+      "types": "./src/account/index.ts",
+      "default": "./src/account/index.ts"
+    },
+    "./agent-vault": {
+      "types": "./src/agent-vault/index.ts",
+      "default": "./src/agent-vault/index.ts"
+    },
+    "./agent-vault/org": {
+      "types": "./src/agent-vault/org/index.ts",
+      "default": "./src/agent-vault/org/index.ts"
+    },
+    "./agent-vault/finance": {
+      "types": "./src/agent-vault/finance/index.ts",
+      "default": "./src/agent-vault/finance/index.ts"
+    },
+    "./agent-vault/custody": {
+      "types": "./src/agent-vault/custody/index.ts",
+      "default": "./src/agent-vault/custody/index.ts"
+    },
+    "./agent-vault/committee": {
+      "types": "./src/agent-vault/committee/index.ts",
+      "default": "./src/agent-vault/committee/index.ts"
+    },
+    "./agent-vault/proposal": {
+      "types": "./src/agent-vault/proposal/index.ts",
+      "default": "./src/agent-vault/proposal/index.ts"
+    },
+    "./agent-vault/artifacts": {
+      "types": "./src/agent-vault/artifacts.ts",
+      "default": "./src/agent-vault/artifacts.ts"
+    },
+    "./dkg": {
+      "types": "./src/dkg/index.ts",
+      "default": "./src/dkg/index.ts"
+    },
+    "./namespace": {
+      "types": "./src/namespace/index.ts",
+      "default": "./src/namespace/index.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@mysten/sui": "^2.33.1",
+    "@noble/curves": "^2.4.0",
+    "@noble/hashes": "^2.4.0"
+  }
+}

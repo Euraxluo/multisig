@@ -1,223 +1,126 @@
 "use client"
 
-import { getProposals, saveProposals, ProposalItem, TESTNET_PACKAGE_ID, KNOWN_TESTNET_ORG_ID } from "./onchain-store"
+import { getActiveAccount, getProposals, getUserGroups, saveProposals, refreshProposal, type ProposalItem } from "./onchain-store"
+import { PROPOSAL_TYPE_ORIGIN, proposalClient, readProposalSnapshot } from "./proposal-chain"
+import { bcs } from "@mysten/sui/bcs"
+import { normalizeSuiAddress, normalizeStructTag } from "@mysten/sui/utils"
+import { groupVaults, type TreasuryTransfer } from "./group-vaults"
+import { discoverGroupsCached, mergeDiscoveredGroups, type DiscoveredGroupRow } from "./group-discovery"
+import { t } from "./i18n/t"
 
-const SUI_TESTNET_RPC = "https://fullnode.testnet.sui.io:443"
-
-let indexerRunning = false
-let indexerInterval: any = null
-
-interface EventCursor {
-  txDigest: string
-  eventSeq: string
+const ProposalCreatedEvent = bcs.struct("ProposalCreatedEvent", {
+  proposal_id: bcs.Address, org_id: bcs.Address, epoch: bcs.u64(), proposer: bcs.Address,
+  amount: bcs.u64(), recipient: bcs.Address, deadline_ms: bcs.u64(),
+})
+export function decodeProposalCreatedEvent(event: { eventType: string; bcs: Uint8Array }) {
+  if (normalizeStructTag(event.eventType) !== `${PROPOSAL_TYPE_ORIGIN}::asynchronous_proposal::ProposalCreatedEvent`) throw new Error(t("misc.indexer.eventTypeMismatch"))
+  return ProposalCreatedEvent.parse(event.bcs)
 }
 
-function getStoredCursor(eventType: string): EventCursor | undefined {
-  if (typeof window === "undefined") return undefined
-  try {
-    const raw = localStorage.getItem(`cursor_${eventType}`)
-    if (raw) return JSON.parse(raw)
-  } catch {}
-  return undefined
-}
-
-function saveStoredCursor(eventType: string, cursor: EventCursor): void {
-  if (typeof window === "undefined") return
-  try {
-    localStorage.setItem(`cursor_${eventType}`, JSON.stringify(cursor))
-  } catch {}
-}
+let indexerInterval: ReturnType<typeof setInterval> | undefined
+let syncing: Promise<number> | undefined
 
 /**
- * 纯前端在线事件索引器 (Online Client-side Event Indexer)
- * 无需任何集中式后端服务或 xindex，直接通过 Sui 全节点 JSON-RPC 增量拉取提案、投票与红包事件
+ * Organizations whose proposals this account should see.
+ *
+ * Local records alone are not enough: an on-chain organization the user joined
+ * on another device has no local record, and its proposals would never appear.
+ * Discovery supplies those, but only for organizations where the current
+ * account is a confirmed member.
  */
-export async function runIncrementalSync(): Promise<number> {
+async function visibleGroups(): Promise<DiscoveredGroupRow[]> {
+  const local = getUserGroups().filter(group => group.orgObjectId)
+  const account = getActiveAccount()?.address
+  if (!account) return mergeDiscoveredGroups(local, null)
+  try {
+    return mergeDiscoveredGroups(local, await discoverGroupsCached(account))
+  } catch (error) {
+    // A discovery outage must not prevent saved proposals from refreshing.
+    console.debug("[online-indexer:discovery]", error)
+    return mergeDiscoveredGroups(local, null)
+  }
+}
+
+async function syncProposals(): Promise<number> {
   if (typeof window === "undefined") return 0
-
-  let client: any
+  let changed = 0
+  const groups = await visibleGroups()
+  const known = groups.filter(group => group.orgObjectId)
   try {
-    const { SuiClient, getFullnodeUrl } = await import("@mysten/sui/client")
-    client = new SuiClient({ url: getFullnodeUrl("testnet") })
-  } catch {
-    const { SuiJsonRpcClient } = await import("@mysten/sui/jsonRpc") as any
-    client = new SuiJsonRpcClient({ url: SUI_TESTNET_RPC, network: "testnet" })
+    if (known.length) await discoverProposals(known, () => { changed++ })
+  } catch (error) {
+    console.debug("[online-indexer:discovery]", error)
   }
-  let newEventsCount = 0
-
-  try {
-    // 1. 同步提案创建事件 (ProposalCreatedEvent)
-    const proposalCreatedType = `${TESTNET_PACKAGE_ID}::asynchronous_proposal::ProposalCreatedEvent`
-    const lastCreatedCursor = getStoredCursor("prop_created")
-
-    const createdPage = await client.queryEvents({
-      query: { MoveEventType: proposalCreatedType },
-      cursor: lastCreatedCursor,
-      limit: 20,
-      order: "ascending",
-    })
-
-    if (createdPage.data.length > 0) {
-      const currentProposals = getProposals()
-      const proposalsMap = new Map(currentProposals.map((p) => [p.onChainId || p.id, p]))
-
-      for (const ev of createdPage.data) {
-        const raw = ev.parsedJson as any
-        if (!raw) continue
-
-        const onChainId = raw.proposal_id || raw.id
-        const titleStr = typeof raw.title === "string" ? raw.title : new TextDecoder().decode(new Uint8Array(raw.title || []))
-        const amountMist = BigInt(raw.amount || "0")
-        const amountSui = Number(amountMist) / 1e9
-
-        if (!proposalsMap.has(onChainId)) {
-          const newProp: ProposalItem = {
-            id: `chain_${onChainId.slice(0, 10)}`,
-            onChainId,
-            orgId: raw.org_id || KNOWN_TESTNET_ORG_ID,
-            title: titleStr || "Sui On-Chain MultiSig Proposal",
-            description: `On-chain transfer proposal to ${raw.recipient?.slice(0, 10)}...`,
-            amount: amountSui,
-            amountMist: amountMist.toString(),
-            token: "SUI",
-            groupId: "group-1",
-            groupName: "Team Treasury (Sui MultiSig)",
-            recipient: raw.recipient,
-            status: "pending",
-            approvals: 1,
-            requiredApprovals: Number(raw.required_weight || 2),
-            createdAt: new Date(Number(ev.timestampMs || Date.now())).toISOString(),
-            expiresAt: new Date(Number(raw.deadline_ms || Date.now() + 86400000 * 7)).toISOString(),
-            deadlineMs: Number(raw.deadline_ms || Date.now() + 86400000 * 7),
-            type: "transfer",
-            color: "from-primary to-purple-500",
-            voters: [raw.creator],
-            txDigest: ev.id.txDigest,
-          }
-          proposalsMap.set(onChainId, newProp)
-          newEventsCount++
-        }
-      }
-
-      saveProposals(Array.from(proposalsMap.values()))
-      if (createdPage.nextCursor) {
-        saveStoredCursor("prop_created", createdPage.nextCursor)
-      }
+  for (const proposal of getProposals()) {
+    if (!proposal.onChainId) continue
+    try { await refreshProposal(proposal.id); changed++ }
+    catch (error) {
+      const message = error instanceof Error ? error.message : t("misc.indexer.syncFailed")
+      saveProposals(getProposals().map(current => current.id === proposal.id ? { ...current, syncError: message } : current))
     }
-
-    // 2. 同步提案投票事件 (VoteSubmittedEvent)
-    const voteSubmittedType = `${TESTNET_PACKAGE_ID}::asynchronous_proposal::VoteSubmittedEvent`
-    const lastVoteCursor = getStoredCursor("vote_submitted")
-
-    const votePage = await client.queryEvents({
-      query: { MoveEventType: voteSubmittedType },
-      cursor: lastVoteCursor,
-      limit: 30,
-      order: "ascending",
-    })
-
-    if (votePage.data.length > 0) {
-      const currentProposals = getProposals()
-      let modified = false
-
-      for (const ev of votePage.data) {
-        const raw = ev.parsedJson as any
-        if (!raw) continue
-
-        const proposalId = raw.proposal_id
-        const voter = raw.voter
-        const totalWeight = Number(raw.total_weight || 0)
-
-        const idx = currentProposals.findIndex((p) => p.onChainId === proposalId || p.id === proposalId)
-        if (idx !== -1) {
-          const target = currentProposals[idx]
-          if (voter && !target.voters.includes(voter)) {
-            target.voters.push(voter)
-            target.approvals = totalWeight > 0 ? totalWeight : target.approvals + 1
-            if (target.approvals >= target.requiredApprovals) {
-              target.status = "approved"
-            }
-            modified = true
-            newEventsCount++
-          }
-        }
-      }
-
-      if (modified) {
-        saveProposals(currentProposals)
-      }
-      if (votePage.nextCursor) {
-        saveStoredCursor("vote_submitted", votePage.nextCursor)
-      }
-    }
-
-    // 3. 同步提案执行事件 (ProposalExecutedEvent)
-    const executedType = `${TESTNET_PACKAGE_ID}::asynchronous_proposal::ProposalExecutedEvent`
-    const lastExecCursor = getStoredCursor("prop_executed")
-
-    const execPage = await client.queryEvents({
-      query: { MoveEventType: executedType },
-      cursor: lastExecCursor,
-      limit: 20,
-      order: "ascending",
-    })
-
-    if (execPage.data.length > 0) {
-      const currentProposals = getProposals()
-      let modified = false
-
-      for (const ev of execPage.data) {
-        const raw = ev.parsedJson as any
-        if (!raw) continue
-
-        const proposalId = raw.proposal_id
-        const idx = currentProposals.findIndex((p) => p.onChainId === proposalId || p.id === proposalId)
-        if (idx !== -1) {
-          currentProposals[idx].status = "executed"
-          currentProposals[idx].executionDigest = ev.id.txDigest
-          currentProposals[idx].executedAt = new Date(Number(ev.timestampMs || Date.now())).toISOString()
-          modified = true
-          newEventsCount++
-        }
-      }
-
-      if (modified) {
-        saveProposals(currentProposals)
-      }
-      if (execPage.nextCursor) {
-        saveStoredCursor("prop_executed", execPage.nextCursor)
-      }
-    }
-  } catch (err) {
-    // 增量同步异常时保持静默重试，不影响主应用
-    console.debug("[online-indexer] Incremental sync tick notice:", err)
   }
-
-  return newEventsCount
+  return changed
 }
 
-/**
- * 启动前端后台在线增量同步引擎 (默认每 4 秒轮询一次)
- */
-export function startOnlineIndexer(intervalMs: number = 4000): void {
-  if (indexerRunning || typeof window === "undefined") return
-  indexerRunning = true
-
-  // 立即触发首次同步
-  runIncrementalSync()
-
-  indexerInterval = setInterval(() => {
-    runIncrementalSync()
-  }, intervalMs)
+async function discoverProposals(groups: DiscoveredGroupRow[], added: () => void) {
+  // Descending discovery is bounded; saved proposals refresh independently.
+  const page = await proposalClient.listEvents({
+    filter: { eventType: `${PROPOSAL_TYPE_ORIGIN}::asynchronous_proposal::ProposalCreatedEvent` },
+    order: "descending", limit: 50, signal: AbortSignal.timeout(20_000),
+  })
+  for (const event of page.events) {
+    try {
+    const fields = decodeProposalCreatedEvent(event)
+    const group = groups.find(group => normalizeSuiAddress(group.orgObjectId) === fields.org_id)
+    if (!group || getProposals().some(proposal => proposal.onChainId === fields.proposal_id)) continue
+    const snapshot = await readProposalSnapshot(fields.proposal_id, group.orgObjectId)
+    let treasury: TreasuryTransfer | null = null
+    try { treasury = await groupVaults.discoverTreasuryTransfer(snapshot.id, group.orgObjectId) }
+    catch (error) {
+      const message = error instanceof Error ? error.message : ""
+      if (!message.includes("尚无 organization_treasury 模块")) throw error
+    }
+    const transaction = await proposalClient.getTransaction({ digest: event.transactionDigest, signal: AbortSignal.timeout(20_000) })
+    if (transaction.$kind === "FailedTransaction" || !transaction.Transaction.status.success) continue
+    const proposal: ProposalItem = {
+      id: `chain_${snapshot.id}`, onChainId: snapshot.id, orgId: snapshot.orgId,
+      vaultId: treasury?.vaultId || group.vaultId,
+      ...(treasury ? { treasuryId: treasury.treasuryId, treasuryBindingId: treasury.bindingId } : { masterCapId: group.masterCapId }),
+      title: snapshot.title, description: t("misc.indexer.fundingDescription"), amount: Number(snapshot.amountMist) / 1e9,
+      amountMist: snapshot.amountMist, token: "SUI", groupId: group.id, groupName: group.name,
+      recipient: snapshot.recipient, status: snapshot.status, approvals: snapshot.approvedWeight,
+      requiredApprovals: snapshot.threshold, createdAt: transaction.Transaction.timestampMs ? new Date(transaction.Transaction.timestampMs).toISOString() : "",
+      expiresAt: new Date(snapshot.deadlineMs).toISOString(), deadlineMs: snapshot.deadlineMs,
+      type: "transfer", color: "from-primary to-purple-500", voters: Object.keys(snapshot.votes).filter(voter => !snapshot.rejectingVoters.includes(voter)), txDigest: event.transactionDigest,
+      memberWeights: snapshot.members, voteWeights: snapshot.votes, rejectingVoters: snapshot.rejectingVoters,
+      rejectedWeight: snapshot.rejectionWeight, rejectionSupported: snapshot.rejectionSupported,
+      chainEpoch: snapshot.epoch, organizationEpoch: snapshot.organizationEpoch,
+      chainSyncedAt: new Date().toISOString(), sourceStatus: "chain-confirmed", proposer: snapshot.proposer,
+    }
+    saveProposals([proposal, ...getProposals()])
+    added()
+    } catch (error) {
+      console.debug("[online-indexer:event]", error)
+    }
+  }
 }
 
-/**
- * 停止在线索引引擎
- */
+/** Discovery uses events; voting state always comes from the shared Proposal and member tables. */
+export function runIncrementalSync(): Promise<number> {
+  if (!syncing) syncing = syncProposals().catch(error => {
+    console.debug("[online-indexer]", error)
+    return 0
+  }).finally(() => { syncing = undefined })
+  return syncing
+}
+
+export function startOnlineIndexer(intervalMs = 4000): void {
+  if (indexerInterval || typeof window === "undefined") return
+  void runIncrementalSync()
+  indexerInterval = setInterval(() => { void runIncrementalSync() }, intervalMs)
+}
+
 export function stopOnlineIndexer(): void {
-  if (indexerInterval) {
-    clearInterval(indexerInterval)
-    indexerInterval = null
-  }
-  indexerRunning = false
+  if (indexerInterval) clearInterval(indexerInterval)
+  indexerInterval = undefined
 }

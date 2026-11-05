@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { translate } from '@/lib/i18n/translate';
+import type { Locale } from '@/lib/i18n/locale-store';
 
 /**
  * 已废弃的服务端代签路由。
@@ -10,12 +13,19 @@ import { NextResponse } from 'next/server';
  * 已移除该能力（私钥永不应驻留服务端进程内存）。请使用前端钱包签名。
  */
 
+/** The user-facing error follows the visitor's `sui_locale` cookie; default en. */
+async function localeFromCookies(): Promise<Locale> {
+  const store = await cookies();
+  const saved = store.get('sui_locale')?.value;
+  return saved === 'zh' ? 'zh' : 'en';
+}
+
 export async function POST() {
+  const locale = await localeFromCookies();
   return NextResponse.json(
     {
       success: false,
-      error:
-        'DEPRECATED: 服务端代签已移除（全链无后端架构）。请在前端使用 Sui Wallet Standard 签名。',
+      error: translate(locale, 'voting.deprecatedSigning'),
     },
     { status: 410 }
   )

@@ -1,6 +1,6 @@
-"use client";
+"use client"
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react"
 import {
   Dialog,
   DialogContent,
@@ -8,239 +8,202 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Badge } from "@/components/ui/badge";
-import { ShieldCheck, Bot, Key, Sparkles, Check } from "lucide-react";
-import { AgentVirtualCard } from "@/types/agent";
-import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+} from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Bot, ShieldCheck, Sparkles } from "lucide-react"
+import { normalizeSuiAddress, isValidSuiAddress } from "@mysten/sui/utils"
+import { agentSuiUnits, agentVaultReader, createAgentVaultWriters, findCreatedAgentCap, SUI_TYPE, type AgentVaultLabel } from "@/lib/agent-vault-chain"
+import { acknowledgeAgentTransaction, submitAgentTransaction } from "@/lib/agent-vault-transactions"
+import { rememberAgentCap, saveAgentLabel } from "@/lib/use-agent-vault"
+import { useI18n } from "@/components/i18n-provider"
+import type { AgentVaultView } from "@/types/agent"
+
+/** Category `label` values are i18n keys — render with `t(item.label)`. */
+export const AGENT_CATEGORIES = [
+  { key: "LLM_INFERENCE", label: "agents.create.catLLM", color: "border-blue-500/40 text-blue-600" },
+  { key: "DATA_SCRAPING", label: "agents.create.catScraping", color: "border-amber-500/40 text-amber-600" },
+  { key: "STORAGE", label: "agents.create.catStorage", color: "border-emerald-500/40 text-emerald-600" },
+  { key: "DEFI_EXECUTION", label: "agents.create.catDeFi", color: "border-purple-500/40 text-purple-600" },
+] as const
 
 interface CreateAgentDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onCreateCard: (card: AgentVirtualCard) => void;
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  vaults: AgentVaultView[]
+  account: string | null
+  onCreated: () => void
 }
 
-export function CreateAgentDialog({
-  open,
-  onOpenChange,
-  onCreateCard,
-}: CreateAgentDialogProps) {
-  const [name, setName] = useState("");
-  const [purpose, setPurpose] = useState("");
-  const [category, setCategory] = useState<AgentVirtualCard["category"]>("LLM_INFERENCE");
-  const [dailyBudget, setDailyBudget] = useState("5.0");
-  const [allowedServicesInput, setAllowedServicesInput] = useState(
-    "api.deepseek.sui, api.siliconflow.sui, x402-gateway.sui"
-  );
-  const [generatedKey, setGeneratedKey] = useState<string | null>(null);
+export function CreateAgentDialog({ open, onOpenChange, vaults, account, onCreated }: CreateAgentDialogProps) {
+  const { t } = useI18n()
+  const [name, setName] = useState("")
+  const [purpose, setPurpose] = useState("")
+  const [category, setCategory] = useState<AgentVaultLabel["category"]>("LLM_INFERENCE")
+  const [dailyBudget, setDailyBudget] = useState("5")
+  const [agentInput, setAgentInput] = useState("")
+  const [serviceInput, setServiceInput] = useState("")
+  const [vaultId, setVaultId] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  const [notice, setNotice] = useState("")
+  const generation = useRef(0)
 
-  const handleCreate = () => {
-    if (!name.trim()) return;
+  const operators = vaults.flatMap(vault => vault.operatorCaps
+    .filter(cap => cap.vaultVersion === vault.vaultVersion)
+    .map(cap => ({ ...cap, vault })))
+  const selectedVault = vaults.find(vault => vault.vaultId === vaultId) ?? operators[0]?.vault
+  const operator = operators.find(cap => cap.vault.vaultId === selectedVault?.vaultId)
 
-    // 使用 Ed25519 生成真实的 Sui 链上密钥对与地址
-    const keypair = new Ed25519Keypair();
-    const realAddress = keypair.toSuiAddress();
-    const realPrivateKey = keypair.getSecretKey();
-    const derivedCapId = `0xcap_${realAddress.slice(2, 18)}`;
+  useEffect(() => {
+    if (!open) return
+    generation.current++
+    setError(""); setNotice(""); setBusy(false)
+    setVaultId(current => operators.some(cap => cap.vault.vaultId === current) ? current : operators[0]?.vault.vaultId ?? "")
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, vaults])
 
-    const services = allowedServicesInput
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
+  const reset = () => { setName(""); setPurpose(""); setDailyBudget("5"); setAgentInput(""); setServiceInput(""); setError(""); setNotice("") }
+  const close = () => { if (busy) return; reset(); onOpenChange(false) }
 
-    const newCard: AgentVirtualCard = {
-      id: `card-${Date.now()}`,
-      name,
-      purpose: purpose || "AI Autonomous Task Execution",
-      category,
-      address: realAddress,
-      capId: derivedCapId,
-      agentCapId: derivedCapId,
-      dailyBudget: parseFloat(dailyBudget) || 5.0,
-      spentToday: 0,
-      totalSpent: 0,
-      requestCount: 0,
-      status: "ACTIVE",
-      allowedServices: services,
-      lastActive: "刚刚创建",
-      color:
-        category === "LLM_INFERENCE"
-          ? "from-blue-600 to-indigo-600"
-          : category === "DATA_SCRAPING"
-          ? "from-amber-500 to-orange-600"
-          : category === "STORAGE"
-          ? "from-emerald-500 to-teal-600"
-          : "from-purple-600 to-pink-600",
-      privateKeyExported: realPrivateKey,
-    };
+  const create = async () => {
+    if (busy) return
+    setError(""); setNotice("")
+    if (!operator) { setError(t("agents.create.noOperatorCap")); return }
+    if (!name.trim()) { setError(t("agents.create.nameRequired")); return }
+    let budgetUnits: bigint
+    try { budgetUnits = agentSuiUnits(dailyBudget) } catch (cause) { setError(cause instanceof Error ? cause.message : t("agents.invalidBudget")); return }
+    if (budgetUnits === 0n) { setError(t("agents.create.budgetPositive")); return }
+    const target = agentInput.trim() ? agentInput.trim() : account ?? ""
+    if (!target || !isValidSuiAddress(target)) { setError(t("agents.create.agentAddressRequired")); return }
+    const serviceHash = new TextEncoder().encode(serviceInput.trim())
+    if (serviceHash.length > 256) { setError(t("agents.create.serviceHashTooLong")); return }
 
-    onCreateCard(newCard);
-    setGeneratedKey(realPrivateKey);
-  };
-
-  const handleClose = () => {
-    setName("");
-    setPurpose("");
-    setGeneratedKey(null);
-    onOpenChange(false);
-  };
+    const run = generation.current
+    setBusy(true)
+    try {
+      const writers = createAgentVaultWriters(undefined, SUI_TYPE)
+      const tx = writers.spawnAgent(operator.capId, operator.vault.vaultId, normalizeSuiAddress(target), budgetUnits, serviceHash)
+      const result = await submitAgentTransaction(tx, {
+        action: "agent-cap-spawn",
+        scope: `${operator.vault.vaultId}:${normalizeSuiAddress(target)}:${budgetUnits}`,
+        metadata: {
+          vaultId: operator.vault.vaultId, operatorCapId: operator.capId, agent: normalizeSuiAddress(target),
+          budgetUnits: budgetUnits.toString(), serviceHash: serviceInput.trim(), name: name.trim(),
+        },
+        // Keep the pending lock until the cap is resolved and proven to belong
+        // to the intended agent; a verification failure then leaves the
+        // recovery entry holding the confirmed digest instead of a bare error.
+        deferAcknowledgement: true,
+      })
+      // Verify the confirmed object before recording it; the label is local-only.
+      const cap = await findCreatedAgentCap(agentVaultReader.client, result.createdObjects, { expectedOwner: normalizeSuiAddress(target) })
+      if (cap.vaultId !== operator.vault.vaultId || cap.agentId !== normalizeSuiAddress(target)) throw new Error(t("agents.create.capMismatch", { digest: result.digest }))
+      acknowledgeAgentTransaction(result)
+      if (run !== generation.current) return
+      rememberAgentCap(cap.capId)
+      saveAgentLabel({ capId: cap.capId, name: name.trim(), purpose: purpose.trim(), category })
+      setNotice(t("agents.create.capConfirmed", { capId: cap.capId, digest: result.digest }))
+      onCreated()
+    } catch (cause) {
+      if (run === generation.current) setError(cause instanceof Error ? cause.message : t("agents.create.txFailed"))
+    } finally {
+      if (run === generation.current) setBusy(false)
+    }
+  }
 
   return (
-    <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="w-[92vw] max-w-[420px] rounded-2xl">
+    <Dialog open={open} onOpenChange={next => { if (!next) close() }}>
+      <DialogContent className="w-[92vw] max-w-[440px] rounded-2xl max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white">
               <Bot className="w-4 h-4" />
             </div>
-            <span>添加 AI 助手</span>
+            <span>{t("agents.create.title")}</span>
           </DialogTitle>
           <DialogDescription>
-            设置助手用途与单日支出限额。
+            {t("agents.create.descPrefix")}<span className="font-mono">spawn_agent_card</span>{t("agents.create.descSuffix")}
           </DialogDescription>
         </DialogHeader>
 
-        {!generatedKey ? (
-          <div className="space-y-4 py-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="agent-name">助手名称</Label>
-              <Input
-                id="agent-name"
-                placeholder="例如: Qwen-2.5-Coder"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-              />
-            </div>
+        <div className="space-y-4 py-2" data-testid="create-agent-form">
+          {!account && <p role="alert" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">{t("agents.create.connectFirst")}</p>}
+          {account && operators.length === 0 && (
+            <p role="status" className="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+              {t("agents.create.noOperatorStatus")}
+            </p>
+          )}
 
+          {operators.length > 0 && (
             <div className="space-y-1.5">
-              <Label htmlFor="agent-purpose">用途说明</Label>
-              <Input
-                id="agent-purpose"
-                placeholder="例如: 自动化数据统计与提醒"
-                value={purpose}
-                onChange={(e) => setPurpose(e.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label>类型</Label>
-              <div className="grid grid-cols-2 gap-2">
-                {[
-                  { key: "LLM_INFERENCE", label: "LLM 推理", color: "border-blue-500/40 text-blue-600" },
-                  { key: "DATA_SCRAPING", label: "数据抓取", color: "border-amber-500/40 text-amber-600" },
-                  { key: "STORAGE", label: "数据存储", color: "border-emerald-500/40 text-emerald-600" },
-                  { key: "DEFI_EXECUTION", label: "交易执行", color: "border-purple-500/40 text-purple-600" },
-                ].map((item) => (
-                  <Button
-                    key={item.key}
-                    type="button"
-                    variant={category === item.key ? "default" : "outline"}
-                    size="sm"
-                    className={`justify-start text-xs ${
-                      category === item.key
-                        ? "bg-gradient-to-r from-primary to-purple-600 text-white"
-                        : item.color
-                    }`}
-                    onClick={() => setCategory(item.key as AgentVirtualCard["category"])}
-                  >
-                    <Sparkles className="w-3.5 h-3.5 mr-1" />
-                    {item.label}
-                  </Button>
+              <Label htmlFor="agent-vault" className="text-xs">{t("agents.create.vaultLabel")}</Label>
+              <select id="agent-vault" value={selectedVault?.vaultId ?? ""} onChange={event => setVaultId(event.target.value)} disabled={busy}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 font-mono text-xs">
+                {operators.map(cap => (
+                  <option key={cap.capId} value={cap.vault.vaultId}>{t("agents.create.vaultOption", { vault: cap.vault.vaultId.slice(0, 12), version: cap.vault.vaultVersion.toString(), operator: cap.capId.slice(0, 10) })}</option>
                 ))}
-              </div>
+              </select>
             </div>
+          )}
 
-            <div className="space-y-1.5">
-              <Label htmlFor="daily-budget">单日支出上限 (SUI)</Label>
-              <div className="relative">
-                <Input
-                  id="daily-budget"
-                  type="number"
-                  step="0.5"
-                  value={dailyBudget}
-                  onChange={(e) => setDailyBudget(e.target.value)}
-                  className="pr-14"
-                />
-                <span className="absolute right-3 top-2.5 text-xs text-muted-foreground font-semibold">
-                  SUI / 天
-                </span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                超出限额将自动停止划扣，保护金库安全。
-              </p>
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-name">{t("agents.create.nameLabel")}</Label>
+            <Input id="agent-name" placeholder={t("agents.create.namePlaceholder")} value={name} onChange={event => setName(event.target.value)} disabled={busy} maxLength={60} />
+          </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="allowed-services">授权服务地址 (可选)</Label>
-              <Input
-                id="allowed-services"
-                value={allowedServicesInput}
-                onChange={(e) => setAllowedServicesInput(e.target.value)}
-                placeholder="逗号分隔"
-                className="text-xs font-mono"
-              />
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-purpose">{t("agents.create.purposeLabel")}</Label>
+            <Input id="agent-purpose" placeholder={t("agents.create.purposePlaceholder")} value={purpose} onChange={event => setPurpose(event.target.value)} disabled={busy} maxLength={200} />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>{t("agents.create.categoryLabel")}</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {AGENT_CATEGORIES.map(item => (
+                <Button key={item.key} type="button" variant={category === item.key ? "default" : "outline"} size="sm"
+                  className={`justify-start text-xs ${category === item.key ? "bg-gradient-to-r from-primary to-purple-600 text-white" : item.color}`}
+                  onClick={() => setCategory(item.key)} disabled={busy}>
+                  <Sparkles className="mr-1 w-3.5 h-3.5" />{t(item.label)}
+                </Button>
+              ))}
             </div>
           </div>
-        ) : (
-          <div className="space-y-4 py-3">
-            <div className="p-3 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
-              <div className="flex items-center gap-2 text-emerald-700 dark:text-emerald-400 font-semibold text-sm">
-                <Check className="w-4 h-4" />
-                <span>副卡已在 Sui 上成功签发！</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                已生成受限 Agent 独立私钥，请将环境变量提供给 Agent 运行容器。
-              </p>
-            </div>
 
-            <div className="space-y-2">
-              <Label className="text-xs font-semibold">Agent 专属私钥 (请妥善保存)</Label>
-              <div className="p-2.5 bg-muted rounded-md font-mono text-xs break-all select-all border border-border">
-                {generatedKey}
-              </div>
-            </div>
-
-            <div className="p-2.5 bg-primary/5 rounded-md border border-primary/20 text-xs text-primary space-y-1">
-              <div className="font-semibold flex items-center gap-1">
-                <Key className="w-3.5 h-3.5" />
-                <span>Agent .env 快速配置</span>
-              </div>
-              <div className="font-mono text-[11px] text-muted-foreground">
-                SUI_AGENT_PRIVKEY={generatedKey}<br />
-                SUI_AGENT_CAP={name}
-              </div>
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="daily-budget">{t("agents.create.budgetLabel")}</Label>
+            <Input id="daily-budget" inputMode="decimal" value={dailyBudget} onChange={event => setDailyBudget(event.target.value)} disabled={busy} className="font-mono" />
+            <p className="text-[11px] text-muted-foreground">{t("agents.create.budgetHint")}</p>
           </div>
-        )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="agent-address">{t("agents.create.agentAddressLabel")}</Label>
+            <Input id="agent-address" value={agentInput} onChange={event => setAgentInput(event.target.value)} disabled={busy}
+              placeholder={account ? t("agents.create.agentAddressPlaceholder", { account: account.slice(0, 12) }) : "0x…"} className="font-mono text-xs" />
+            <p className="text-[11px] text-muted-foreground">
+              {t("agents.create.agentAddressHint")}
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="service-hash">{t("agents.create.serviceLabel")}</Label>
+            <Input id="service-hash" value={serviceInput} onChange={event => setServiceInput(event.target.value)} disabled={busy} placeholder={t("agents.create.servicePlaceholder")} className="font-mono text-xs" />
+            <p className="text-[11px] text-muted-foreground">{t("agents.create.serviceHint")}</p>
+          </div>
+
+          {error && <p role="alert" className="break-all text-xs text-destructive">{error}</p>}
+          {notice && <p role="status" className="break-all text-xs text-emerald-600">{notice}</p>}
+        </div>
 
         <DialogFooter>
-          {!generatedKey ? (
-            <>
-              <Button variant="outline" onClick={handleClose}>
-                取消
-              </Button>
-              <Button
-                onClick={handleCreate}
-                disabled={!name.trim()}
-                className="bg-gradient-to-r from-primary to-purple-600 hover:from-primary/90 hover:to-purple-600/90 text-white"
-              >
-                <ShieldCheck className="w-4 h-4 mr-1.5" />
-                立即铸造副卡
-              </Button>
-            </>
-          ) : (
-            <Button
-              onClick={handleClose}
-              className="w-full bg-gradient-to-r from-primary to-purple-600 text-white"
-            >
-              完成并关闭
-            </Button>
-          )}
+          <Button variant="outline" onClick={close} disabled={busy}>{t("agents.close")}</Button>
+          <Button onClick={() => void create()} disabled={busy || !account || operators.length === 0}
+            className="bg-gradient-to-r from-primary to-purple-600 text-white">
+            <ShieldCheck className="mr-1.5 w-4 h-4" />{busy ? t("agents.awaitWalletSigning") : t("agents.create.submit")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

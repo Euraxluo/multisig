@@ -1,5 +1,5 @@
-import { ed25519 } from '@noble/curves/ed25519.js';
 import { mod } from './math';
+import { bytesToHex } from './bytes';
 import {
   Point,
   generatePolynomial,
@@ -142,7 +142,10 @@ export class DKGParticipant {
     }
 
     const groupPublicKey = groupPublicKeyPoint.toBytes();
-    const groupPublicKeyHex = `0x${Buffer.from(groupPublicKey).toString('hex')}`;
+    // `Buffer` does not exist in the browser bundle (Next.js does not polyfill
+    // it), and this path runs from the DKG dialog before creating the
+    // organization, so a Node-only hex helper would throw a ReferenceError here.
+    const groupPublicKeyHex = `0x${bytesToHex(groupPublicKey)}`;
 
     return {
       participantId: this.id,

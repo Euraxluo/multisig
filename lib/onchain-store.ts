@@ -1,40 +1,27 @@
 "use client"
 
-import { SuiJsonRpcClient } from "@mysten/sui/jsonRpc"
+import { bcs } from "@mysten/sui/bcs"
+import { MIST_PER_SUI, SUI_TYPE_ARG, normalizeSuiAddress, normalizeStructTag } from "@mysten/sui/utils"
 import { AgentVaultClient } from "./vault-client"
-import { signAndExecuteWithWallet } from "./sui-wallet-signer"
+import { assertTransactionAccount, getTransactionAccount, resumePendingTransaction, signAndExecuteWithWallet, type WalletTransactionResult } from "./sui-wallet-signer"
+import { acknowledgePendingTransaction, getPendingTransaction, getTransactionReceipt, transactionAccountKey, TransactionReceiptError, type PendingTransactionReceipt, type TransactionAccount } from "./pending-transactions"
+import { groupVaults } from "./group-vaults"
+import { paymentUnits } from "./scheduled-payments-chain"
+import { PROPOSAL_PACKAGE_ID, PROPOSAL_TYPE_ORIGIN, proposalClient, readProposalSnapshot, validateApproval, type ProposalSnapshot } from "./proposal-chain"
+import { isRecord, readStoredArray, type RecordSourceStatus } from "./local-records"
+import { t } from "./i18n/t"
 
-export const TESTNET_PACKAGE_ID = "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36"
+export const TESTNET_PACKAGE_ID = PROPOSAL_PACKAGE_ID
 export const KNOWN_TESTNET_ORG_ID = "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
+const SUI_TYPE = SUI_TYPE_ARG
 
-const TESTNET_RPC_URL = "https://fullnode.testnet.sui.io:443"
-
-function getTestnetClient() {
-  return new SuiJsonRpcClient({ url: TESTNET_RPC_URL, network: "testnet" })
-}
-
-interface OwnedCoinBalance {
-  coinType: string
-  totalBalance: bigint
-}
-
-async function fetchBalances(address: string): Promise<OwnedCoinBalance[]> {
-  const res = await getTestnetClient().getAllBalances({ owner: address })
-  return res.map((b) => ({ coinType: b.coinType, totalBalance: BigInt(b.totalBalance) }))
-}
-
-/** 链上 PTB 构造器。原 @sui-universal/sdk 的 AgentVaultClient，实现已内联到 ./vault-client。 */
-export const vaultClient = new AgentVaultClient({
-  packageId: TESTNET_PACKAGE_ID,
-  defaultCoinType: "0x2::sui::SUI",
-})
+export const vaultClient = new AgentVaultClient({ packageId: TESTNET_PACKAGE_ID, defaultCoinType: SUI_TYPE })
 
 export interface TokenBalanceInfo {
   symbol: string
   name: string
   coinType: string
   balance: string
-  usdValue: string
   rawBalance: bigint
 }
 
@@ -44,6 +31,8 @@ export interface ProposalItem {
   orgId: string
   vaultId?: string
   masterCapId?: string
+  treasuryId?: string
+  treasuryBindingId?: string
   title: string
   description: string
   amount: number
@@ -52,6 +41,7 @@ export interface ProposalItem {
   groupId: string
   groupName: string
   recipient: string
+  proposer?: string
   status: "pending" | "approved" | "executed" | "rejected"
   approvals: number
   requiredApprovals: number
@@ -72,399 +62,529 @@ export interface ProposalItem {
   executionDigest?: string
   executedAt?: string
   rejectedAt?: string
+  rejectedWeight?: number
+  rejectingVoters?: string[]
+  memberWeights?: Record<string, number>
+  voteWeights?: Record<string, number>
+  chainSyncedAt?: string
+  chainEpoch?: string
+  organizationEpoch?: string
+  rejectionSupported?: boolean
+  syncError?: string
+  sourceStatus?: RecordSourceStatus
+  /** Read-only UI projection metadata; raw malformed data stays recoverable. */
+  rawRecord?: Record<string, unknown>
+  recordIssues?: string[]
+  amountLabel?: string
 }
 
-const DEFAULT_PROPOSALS: ProposalItem[] = [
-  {
-    id: "tx-init-1",
-    orgId: KNOWN_TESTNET_ORG_ID,
-    title: "Eco Grants #1: Developer Tooling",
-    description: "Quarterly liquidity grant to ecosystem contributors",
-    amount: 100,
-    amountMist: "100000000000",
-    token: "SUI",
-    groupId: "group-1",
-    groupName: "Team Treasury (Sui MultiSig)",
-    recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-    status: "pending",
-    approvals: 1,
-    requiredApprovals: 2,
-    createdAt: new Date(Date.now() - 3600000 * 12).toISOString(),
-    expiresAt: new Date(Date.now() + 3600000 * 24 * 7).toISOString(),
-    deadlineMs: Date.now() + 3600000 * 24 * 7,
-    type: "transfer",
-    color: "from-primary to-purple-500",
-    voters: ["0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"],
-  },
-  {
-    id: "tx-init-2",
-    orgId: KNOWN_TESTNET_ORG_ID,
-    title: "Liquidity Staking Allocation",
-    description: "Deposit treasury reserve into Spring sSUI vault for yield",
-    amount: 50,
-    amountMist: "50000000000",
-    token: "SUI",
-    groupId: "group-2",
-    groupName: "DAO Fund (Sui Native)",
-    recipient: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
-    status: "pending",
-    approvals: 1,
-    requiredApprovals: 2,
-    createdAt: new Date(Date.now() - 3600000 * 24).toISOString(),
-    expiresAt: new Date(Date.now() + 3600000 * 24 * 5).toISOString(),
-    deadlineMs: Date.now() + 3600000 * 24 * 5,
-    type: "contract",
-    color: "from-blue-500 to-cyan-400",
-    voters: ["0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36"],
-  },
-]
-
-/**
- * 从 localStorage 读取当前活跃账户
- */
-export function getActiveAccount(): { address: string; identifier?: string; type?: string } | null {
+export function getActiveAccount(): { address: string; identifier?: string; type?: string; provider?: string } | null {
   if (typeof window === "undefined") return null
   try {
-    const raw = localStorage.getItem("sui_active_account")
-    if (!raw) return null
-    const parsed = JSON.parse(raw)
-    if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x")) {
-      return parsed
-    }
+    const parsed = JSON.parse(localStorage.getItem("sui_active_account") || "null")
+    if (typeof parsed?.address === "string" && /^0x[0-9a-fA-F]{1,64}$/.test(parsed.address)) return parsed
   } catch {}
   return null
 }
 
+/** Raw balances come from testnet. No price feed or inferred token identities are used. */
+export async function fetchRealBalances(address: string) {
+  const balances: Array<{ coinType: string; balance: string }> = []
+  let cursor: string | null = null
+  do {
+    const page = await proposalClient.listBalances({ owner: address, cursor, signal: AbortSignal.timeout(15_000) })
+    balances.push(...page.balances)
+    cursor = page.hasNextPage ? page.cursor : null
+  } while (cursor)
+  const rawBalance = BigInt(balances.find(b => normalizeStructTag(b.coinType) === SUI_TYPE_ARG)?.balance || "0")
+  const whole = rawBalance / MIST_PER_SUI
+  const fraction = (rawBalance % MIST_PER_SUI).toString().padStart(9, "0").replace(/0+$/, "")
+  const sui: TokenBalanceInfo = { symbol: "SUI", name: "Sui Native Coin", coinType: SUI_TYPE, balance: `${whole}${fraction ? `.${fraction}` : ""}`, rawBalance }
+  return { sui, tokens: [sui], all: balances.map(b => ({ coinType: b.coinType, totalBalance: BigInt(b.balance) })) }
+}
+
+const text = (value: unknown, fallback = "") => typeof value === "string" ? value : fallback
+const nonnegative = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0
+const stringList = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []
+const weights = (value: unknown): Record<string, number> => isRecord(value)
+  ? Object.fromEntries(Object.entries(value).filter((entry): entry is [string, number] => nonnegative(entry[1]))) : {}
+
+/** Safe display projection; the original incomplete record is never rewritten by a read. */
 /**
- * 实时从 Sui RPC 节点获取地址的所有链上代币余额
+ * Projects a stored proposal row into the display shape.
+ *
+ * The parameter is `unknown`-valued on purpose: this row is untrusted JSON, and
+ * every read below already goes through a narrowing helper (`text`,
+ * `nonnegative`, `isRecord`). An `any` here would let an unchecked property slip
+ * into the projection the first time someone forgets one.
  */
-export async function fetchRealBalances(address: string): Promise<{
-  sui: TokenBalanceInfo
-  ssui: TokenBalanceInfo
-  usdc: TokenBalanceInfo
-  wal: TokenBalanceInfo
-  all: OwnedCoinBalance[]
-  totalUsdValue: number
-}> {
-  try {
-    const rawBalances = await fetchBalances(address)
-
-    let suiMist = 0n
-    let ssuiMist = 0n
-    let usdcMist = 0n
-    let walMist = 0n
-
-    for (const b of rawBalances) {
-      if (b.coinType.endsWith("::sui::SUI")) {
-        suiMist += b.totalBalance
-      } else if (b.coinType.toLowerCase().includes("ssui")) {
-        ssuiMist += b.totalBalance
-      } else if (b.coinType.toLowerCase().includes("usdc")) {
-        usdcMist += b.totalBalance
-      } else if (b.coinType.toLowerCase().includes("wal")) {
-        walMist += b.totalBalance
-      }
-    }
-
-    const suiAmount = Number(suiMist) / 1e9
-    const ssuiAmount = Number(ssuiMist) / 1e9
-    const usdcAmount = Number(usdcMist) / 1e6
-    const walAmount = Number(walMist) / 1e9
-
-    // 参考当前市价估算 USD (SUI ~ $3.42, sSUI ~ $3.60, USDC = $1.00, WAL ~ $0.20)
-    const suiUsd = suiAmount * 3.42
-    const ssuiUsd = ssuiAmount * 3.6
-    const usdcUsd = usdcAmount * 1.0
-    const walUsd = walAmount * 0.2
-
-    const totalUsd = suiUsd + ssuiUsd + usdcUsd + walUsd
-
-    return {
-      sui: {
-        symbol: "SUI",
-        name: "Sui Native Coin",
-        coinType: "0x2::sui::SUI",
-        balance: suiAmount.toFixed(2),
-        usdValue: suiUsd.toFixed(2),
-        rawBalance: suiMist,
-      },
-      ssui: {
-        symbol: "sSUI",
-        name: "Spring Staked SUI",
-        coinType: "0x...::ssui::SSUI",
-        balance: ssuiAmount.toFixed(2),
-        usdValue: ssuiUsd.toFixed(2),
-        rawBalance: ssuiMist,
-      },
-      usdc: {
-        symbol: "USDC",
-        name: "Sui Native USDC",
-        coinType: "0x...::usdc::USDC",
-        balance: usdcAmount.toFixed(2),
-        usdValue: usdcUsd.toFixed(2),
-        rawBalance: usdcMist,
-      },
-      wal: {
-        symbol: "WAL",
-        name: "Walrus Protocol",
-        coinType: "0x...::wal::WAL",
-        balance: walAmount.toFixed(2),
-        usdValue: walUsd.toFixed(2),
-        rawBalance: walMist,
-      },
-      all: rawBalances,
-      totalUsdValue: totalUsd,
-    }
-  } catch (e) {
-    console.warn("[onchain-store] fetchBalances error:", e)
-    return {
-      sui: { symbol: "SUI", name: "Sui Native Coin", coinType: "0x2::sui::SUI", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-      ssui: { symbol: "sSUI", name: "Spring Staked SUI", coinType: "0x...::ssui::SSUI", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-      usdc: { symbol: "USDC", name: "Sui Native USDC", coinType: "0x...::usdc::USDC", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-      wal: { symbol: "WAL", name: "Walrus Protocol", coinType: "0x...::wal::WAL", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-      all: [],
-      totalUsdValue: 0,
-    }
+function proposalProjection(record: Record<string, unknown>, index: number): ProposalItem {
+  const recordIssues = ["id", "orgId", "title", "description", "amountMist", "token", "groupId", "groupName", "recipient", "createdAt", "expiresAt"]
+    .filter(key => typeof record[key] !== "string")
+  for (const key of ["amount", "approvals", "requiredApprovals", "deadlineMs"]) if (!nonnegative(record[key])) recordIssues.push(key)
+  if (!Array.isArray(record.voters) || record.voters.some((value: unknown) => typeof value !== "string")) recordIssues.push("voters")
+  if (typeof record.status !== "string" || !["pending", "approved", "executed", "rejected"].includes(record.status)) recordIssues.push("status")
+  if (typeof record.type !== "string" || !["transfer", "contract", "batch"].includes(record.type)) recordIssues.push("type")
+  for (const key of ["memberWeights", "voteWeights"]) {
+    const value = record[key]
+    if (value !== undefined && (!isRecord(value) || Object.values(value).some(weight => !nonnegative(weight)))) recordIssues.push(key)
+  }
+  if (record.rejectingVoters !== undefined && (!Array.isArray(record.rejectingVoters) || record.rejectingVoters.some((value: unknown) => typeof value !== "string"))) recordIssues.push("rejectingVoters")
+  const incomplete = recordIssues.length > 0
+  return {
+    ...record,
+    id: text(record.id) || `legacy-proposal-${index}`, orgId: text(record.orgId),
+    onChainId: objectId(record.onChainId), vaultId: objectId(record.vaultId), masterCapId: objectId(record.masterCapId),
+    // Retain malformed binding metadata so it can never fall through to legacy authority.
+    // The cast is deliberate and load-bearing: narrowing a malformed value to
+    // `undefined` here would turn "present but invalid" into "absent", which is
+    // exactly the fall-through the line above exists to prevent. The consumers
+    // re-validate with `objectId` before use.
+    treasuryId: record.treasuryId as string | undefined, treasuryBindingId: record.treasuryBindingId as string | undefined,
+    title: text(record.title, t("tx.dfltUntitledProposal")), description: text(record.description, t("tx.dfltIncompleteRecord")),
+    amount: nonnegative(record.amount) ? record.amount : 0, amountMist: text(record.amountMist),
+    amountLabel: typeof record.amountMist === "string" && /^\d+$/.test(record.amountMist) && record.token === "SUI"
+      ? `${formatProposalSui(BigInt(record.amountMist))} SUI`
+      : nonnegative(record.amount) ? `${record.amount} ${text(record.token, t("tx.dfltUnknownToken"))}` : t("tx.dfltUnknownAmount"),
+    token: text(record.token, t("tx.dfltUnknownToken")), groupId: text(record.groupId), groupName: text(record.groupName, t("tx.dfltUnknownGroup")),
+    recipient: text(record.recipient), proposer: text(record.proposer),
+    approvals: nonnegative(record.approvals) ? record.approvals : 0,
+    requiredApprovals: nonnegative(record.requiredApprovals) ? record.requiredApprovals : 0,
+    deadlineMs: nonnegative(record.deadlineMs) ? record.deadlineMs : 0,
+    createdAt: text(record.createdAt), expiresAt: text(record.expiresAt),
+    status: typeof record.status === "string" && ["pending", "approved", "executed", "rejected"].includes(record.status) ? record.status as ProposalItem["status"] : "pending",
+    type: typeof record.type === "string" && ["transfer", "contract", "batch"].includes(record.type) ? record.type as ProposalItem["type"] : "transfer",
+    color: text(record.color, "from-primary to-purple-500"),
+    voters: stringList(record.voters), rejectingVoters: stringList(record.rejectingVoters),
+    memberWeights: weights(record.memberWeights), voteWeights: weights(record.voteWeights),
+    chainSyncedAt: incomplete ? undefined : text(record.chainSyncedAt) || undefined,
+    sourceStatus: !incomplete && record.sourceStatus === "chain-confirmed" ? "chain-confirmed" : "unverified",
+    ...(incomplete ? { rawRecord: isRecord(record.rawRecord) ? record.rawRecord : record, recordIssues } : {}),
   }
 }
 
-/**
- * 获取所有提案（本地存储 + 链上同步）
- */
+/** Legacy records remain visible; only a canonical refresh can confirm chain state. */
 export function getProposals(): ProposalItem[] {
-  if (typeof window === "undefined") return DEFAULT_PROPOSALS
-  try {
-    const raw = localStorage.getItem("sui_proposals")
-    if (raw) {
-      const parsed = JSON.parse(raw)
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed
-      }
-    }
-    // 首次加载初始化默认提案
-    localStorage.setItem("sui_proposals", JSON.stringify(DEFAULT_PROPOSALS))
-    return DEFAULT_PROPOSALS
-  } catch {
-    return DEFAULT_PROPOSALS
-  }
+  return readStoredArray("sui_proposals").filter(isRecord).map(proposalProjection)
+}
+
+function objectId(value: unknown): string | undefined {
+  return typeof value === "string" && /^0x[0-9a-fA-F]{1,64}$/.test(value) ? normalizeSuiAddress(value) : undefined
 }
 
 /**
- * 保存提案列表并通知全组件
+ * One locally stored group after `getUserGroups` has normalised it.
+ *
+ * Every field the UI reads is present: a legacy record that lacked `id`,
+ * `name`, or a usable `members` array is filled in rather than dropped, and
+ * `rawRecord` preserves the original when that happened. `sourceStatus` says
+ * whether the row came from chain discovery or is still only a local note.
  */
+export interface LocalGroupRecord {
+  id: string
+  name: string
+  description: string
+  network: string
+  members: Array<{ address: string; name: string; weight: number; [key: string]: unknown }>
+  orgObjectId?: string
+  groupPk: string
+  orgTxDigest: string
+  threshold?: number
+  totalWeight?: number
+  /** DKG epoch the organization was finalized at; absent for legacy local rows. */
+  epoch?: number
+  /** Legacy personal-cap vault link. Empty when the row never had one. */
+  vaultId: string
+  masterCapId: string
+  sourceStatus: RecordSourceStatus
+  rawRecord?: Record<string, unknown>
+  recordIssues?: string[]
+  [key: string]: unknown
+}
+
+/** One organization link for group details, proposal creation and the indexer. */
+export function getUserGroups(): LocalGroupRecord[] {
+  const saved = readStoredArray("user_groups")
+  let migrated = false
+  const records = saved.map(group => {
+    if (!isRecord(group) || typeof group.id !== "string") return group
+    try {
+      const legacy = JSON.parse(localStorage.getItem(`dao_org_${group.id}`) || "null")
+      if (!isRecord(legacy) || (legacy.groupId && legacy.groupId !== group.id) || !objectId(legacy.orgObjectId)) return group
+      // An existing canonical link is never silently replaced, even if malformed.
+      if (group.orgObjectId) return objectId(group.orgObjectId) === objectId(legacy.orgObjectId) ? group : {
+        ...group, organizationSyncError: t("tx.errDkgMismatch"),
+      }
+      migrated = true
+      return { ...group, orgObjectId: objectId(legacy.orgObjectId), groupPk: group.groupPk ?? legacy.groupPk,
+        epoch: group.epoch ?? legacy.epoch, orgTxDigest: group.orgTxDigest ?? legacy.txDigest }
+    } catch { return group }
+  })
+  if (migrated) {
+    try { localStorage.setItem("user_groups", JSON.stringify(records)) } catch {}
+  }
+  return records.filter(isRecord).map((group, index) => {
+    const incomplete = typeof group.id !== "string" || typeof group.name !== "string" || !Array.isArray(group.members) || group.members.some((member: unknown) =>
+      !isRecord(member) || typeof member.address !== "string" || (member.name !== undefined && typeof member.name !== "string"))
+    const members = Array.isArray(group.members) ? group.members.map((member: unknown) => {
+      const value = isRecord(member) ? member : {}
+      return { ...value, name: text(value.name, t("tx.dfltUnknownMember")), address: text(value.address),
+        weight: nonnegative(value.weight) ? value.weight : 0 }
+    }) : []
+    return {
+      ...group, id: text(group.id) || `legacy-group-${index}`, name: text(group.name, t("tx.dfltUntitledGroup")),
+      description: text(group.description), network: text(group.network, t("tx.dfltUnknownNetwork")), members,
+      orgObjectId: objectId(group.orgObjectId), groupPk: text(group.groupPk), orgTxDigest: text(group.orgTxDigest),
+      threshold: nonnegative(group.threshold) ? group.threshold : undefined,
+      totalWeight: nonnegative(group.totalWeight) ? group.totalWeight : undefined,
+      epoch: nonnegative(group.epoch) ? group.epoch : undefined,
+      vaultId: text(group.vaultId), masterCapId: text(group.masterCapId),
+      sourceStatus: !incomplete && group.sourceStatus === "chain-confirmed" ? "chain-confirmed" : "unverified",
+      ...(incomplete ? { rawRecord: group, recordIssues: [t("tx.dfltIncompleteGroup")] } : {}),
+    }
+  })
+}
+
+/** Called only after a successful, typed Organization creation transaction. */
+export function persistGroupOrganization(groupId: string, record: {
+  orgObjectId: string; groupPk: string; epoch: number; txDigest: string;
+  [key: string]: unknown;
+}): void {
+  if (typeof window === "undefined") return
+  const orgId = objectId(record.orgObjectId)
+  if (!orgId || !record.txDigest) throw new Error(t("tx.errMissingOrgOrDigest"))
+  const saved = readStoredArray("user_groups")
+  const group = saved.find(value => isRecord(value) && value.id === groupId)
+  if (!isRecord(group)) throw new Error(t("tx.errNoDefaultGroup"))
+  if (group.orgObjectId && objectId(group.orgObjectId) !== orgId) throw new Error(t("tx.errGroupLinkedOther"))
+  let previous: Record<string, unknown> = {}
+  try {
+    const value = JSON.parse(localStorage.getItem(`dao_org_${groupId}`) || "null")
+    if (isRecord(value)) previous = value
+  } catch {}
+  const updated = { ...group, orgObjectId: orgId, groupPk: record.groupPk, epoch: record.epoch,
+    orgTxDigest: record.txDigest, sourceStatus: "chain-confirmed" }
+  // Keep a recovery copy if persisting the canonical collection fails.
+  localStorage.setItem(`dao_org_${groupId}`, JSON.stringify({ ...previous, ...record, groupId, orgObjectId: orgId }))
+  const groups = saved.map(value => value === group ? updated : value)
+  localStorage.setItem("user_groups", JSON.stringify(groups))
+  window.dispatchEvent(new CustomEvent("sui-groups-updated", { detail: groups }))
+}
+
 export function saveProposals(proposals: ProposalItem[]): void {
   if (typeof window === "undefined") return
+  // Invalid/unknown legacy entries are not an excuse to erase stored data.
+  const unknown = readStoredArray("sui_proposals").filter(value => !isRecord(value))
+  const records = proposals.map(proposal => proposal.rawRecord && proposal.sourceStatus !== "chain-confirmed" ? proposal.rawRecord : proposal)
+  localStorage.setItem("sui_proposals", JSON.stringify([...records, ...unknown]))
+  window.dispatchEvent(new CustomEvent("sui-proposals-updated", { detail: proposals }))
+}
+
+/** Creation effects contain table children too; select by canonical Move type. */
+export async function findCreatedProtocolObject(createdObjects: string[], moduleName: string, typeName: string): Promise<string> {
+  if (!createdObjects.length) throw new Error(t("tx.errTypeNotFound", { type: typeName }))
+  const { objects } = await proposalClient.getObjects({ objectIds: createdObjects, signal: AbortSignal.timeout(20_000) })
+  const expectedType = normalizeStructTag(`${PROPOSAL_TYPE_ORIGIN}::${moduleName}::${typeName}`)
+  const matches = objects.filter(object => !(object instanceof Error) && normalizeStructTag(object.type) === expectedType)
+  if (matches.length !== 1) throw new Error(t("tx.errTypeAmbiguous", { type: typeName }))
+  const match = matches[0]
+  if (match instanceof Error) throw match
+  return match.objectId
+}
+
+export const TREASURY_PROPOSAL_CREATE = "group-treasury-proposal-create"
+export const LEGACY_PROPOSAL_CREATE = "personal-cap-proposal-create"
+const creating = new Set<string>()
+
+export function proposalAmountMist(amount: string): bigint {
+  if (typeof amount !== "string") throw new Error(t("tx.errDecimalAmount"))
+  return paymentUnits(amount.trim(), 9)
+}
+export function formatProposalSui(mist: bigint): string {
+  const fraction = (mist % MIST_PER_SUI).toString().padStart(9, "0").replace(/0+$/, "")
+  return `${mist / MIST_PER_SUI}${fraction ? `.${fraction}` : ""}`
+}
+function assertProposalContext(account: TransactionAccount, groupId: string, orgId: string) {
+  try { assertTransactionAccount(account) } catch (cause) { throw new Error(t("tx.errAccountSwitchedConfirm"), { cause }) }
+  if (!groupId || !objectId(orgId) || !getUserGroups().some(group => group.id === groupId && objectId(group.orgObjectId) === objectId(orgId))) {
+    throw new Error(t("tx.errOrgChangedOrMissing"))
+  }
+}
+function hasTreasuryMetadata(target: ProposalItem): boolean {
+  return target.treasuryId !== undefined || target.treasuryBindingId !== undefined
+}
+function treasuryIds(target: ProposalItem): { treasuryId: string; bindingId: string } {
+  const treasuryId = objectId(target.treasuryId), bindingId = objectId(target.treasuryBindingId)
+  if (!treasuryId || !bindingId) throw new Error(t("tx.errTreasuryProposalInvalid"))
+  return { treasuryId, bindingId }
+}
+async function verifyTreasuryProposal(target: ProposalItem) {
+  const { treasuryId, bindingId } = treasuryIds(target)
+  if (!target.onChainId) throw new Error(t("tx.errTreasuryProposalNoChain"))
+  const transfer = await groupVaults.findCreatedTransfer([target.onChainId, bindingId], treasuryId, target.orgId)
+  if (objectId(transfer.proposalId) !== objectId(target.onChainId) || objectId(transfer.bindingId) !== bindingId ||
+      objectId(transfer.treasuryId) !== treasuryId || (target.vaultId && objectId(transfer.vaultId) !== objectId(target.vaultId))) {
+    throw new Error(t("tx.errTreasuryProposalMismatch"))
+  }
+  return transfer
+}
+
+async function recoverTransferProposalCreation(result: WalletTransactionResult): Promise<{ proposal: ProposalItem; digest: string }> {
   try {
-    localStorage.setItem("sui_proposals", JSON.stringify(proposals))
-    window.dispatchEvent(new CustomEvent("sui-proposals-updated", { detail: proposals }))
-  } catch (e) {
-    console.error("[onchain-store] Failed to save proposals", e)
+    const receipt = result.receipt, meta = receipt.metadata
+    if (!meta || ![TREASURY_PROPOSAL_CREATE, LEGACY_PROPOSAL_CREATE].includes(receipt.action) || !objectId(meta.orgId) || !meta.groupId) throw new Error(t("tx.errReceiptMissingMeta"))
+    assertProposalContext(receipt.account, meta.groupId, meta.orgId)
+    let onChainId: string, vaultId: string | undefined, treasuryBindingId: string | undefined
+    const isTreasury = receipt.action === TREASURY_PROPOSAL_CREATE
+    if (isTreasury) {
+      if (!objectId(meta.treasuryId) || receipt.scope !== objectId(meta.treasuryId)) throw new Error(t("tx.errReceiptTreasuryScope"))
+      const transfer = await groupVaults.findCreatedTransfer(result.createdObjects, meta.treasuryId, meta.orgId)
+      if (objectId(transfer.treasuryId) !== objectId(meta.treasuryId)) throw new Error(t("tx.errReceiptOtherTreasury"))
+      onChainId = transfer.proposalId; vaultId = transfer.vaultId; treasuryBindingId = transfer.bindingId
+    } else {
+      if (!objectId(meta.vaultId) || !objectId(meta.masterCapId) || receipt.scope !== objectId(meta.vaultId)) throw new Error(t("tx.errReceiptMissingVault"))
+      onChainId = await findCreatedProtocolObject(result.createdObjects, "asynchronous_proposal", "Proposal")
+      vaultId = meta.vaultId
+    }
+    const snapshot = await readProposalSnapshot(onChainId, meta.orgId)
+    if (snapshot.title !== meta.title || objectId(snapshot.recipient) !== objectId(meta.recipient) || snapshot.amountMist !== meta.amountMist ||
+        String(snapshot.deadlineMs) !== meta.deadlineMs || objectId(snapshot.proposer) !== objectId(receipt.account.address)) {
+      throw new Error(t("tx.errReceiptMismatch"))
+    }
+    assertProposalContext(receipt.account, meta.groupId, meta.orgId)
+    const base: ProposalItem = {
+      id: `chain_${onChainId}`, onChainId, orgId: meta.orgId, vaultId,
+      ...(isTreasury ? { treasuryId: meta.treasuryId, treasuryBindingId } : { masterCapId: meta.masterCapId }),
+      title: meta.title, description: meta.description || "", amount: Number(meta.amountMist) / 1e9,
+      amountMist: meta.amountMist, token: "SUI", groupId: meta.groupId, groupName: meta.groupName,
+      recipient: snapshot.recipient, status: snapshot.status, approvals: snapshot.approvedWeight, requiredApprovals: snapshot.threshold,
+      createdAt: new Date(receipt.createdAt).toISOString(), expiresAt: new Date(snapshot.deadlineMs).toISOString(), deadlineMs: snapshot.deadlineMs,
+      type: "transfer", color: "from-primary to-purple-500", voters: [], txDigest: result.digest,
+    }
+    const latest = getProposals(), existing = latest.find(proposal => objectId(proposal.onChainId) === objectId(onChainId))
+    const proposal = applySnapshot({ ...existing, ...base, id: existing?.id || base.id }, snapshot)
+    saveProposals(existing ? latest.map(row => row === existing ? proposal : row) : [proposal, ...latest])
+    acknowledgePendingTransaction(receipt)
+    return { proposal, digest: result.digest }
+  } catch (cause) {
+    throw new TransactionReceiptError(`${t("tx.errPropConfirmed", { digest: result.digest })}${cause instanceof Error ? cause.message : ""}`, result.receipt, { cause })
   }
 }
 
-/**
- * 发起链上转账提案 (调用 Move 合约 agent_vault::asynchronous_proposal::create_transfer_proposal)
- */
+/** Restore only the original digest, original group and original treasury; never sign again. */
+export async function resumeTransferProposalCreation(receiptOrId: PendingTransactionReceipt | string) {
+  const receipt = getTransactionReceipt(receiptOrId)
+  if (![TREASURY_PROPOSAL_CREATE, LEGACY_PROPOSAL_CREATE].includes(receipt.action)) throw new Error(t("tx.errNotProposalReceipt"))
+  const account = getTransactionAccount()
+  if (transactionAccountKey(account) !== transactionAccountKey(receipt.account)) throw new Error(t("tx.errWrongAccount"))
+  return recoverTransferProposalCreation(await resumePendingTransaction(receipt))
+}
+
 export async function createTransferProposalOnChain(params: {
-  title: string
-  recipient: string
-  amount: number
-  token?: string
-  description?: string
-  groupId?: string
-  groupName?: string
-  deadlineMs?: number
-  orgId?: string
-}): Promise<{ proposal: ProposalItem; digest?: string }> {
-  const token = params.token || "SUI"
-  const amountMist = BigInt(Math.round(params.amount * 1e9))
-  const deadlineMs = params.deadlineMs || (Date.now() + 86400000 * 7)
-  const orgId = params.orgId || KNOWN_TESTNET_ORG_ID
-  const groupId = params.groupId || "group-1"
-  const groupName = params.groupName || "Team Treasury (Sui MultiSig)"
-
-  let txDigest: string | undefined = undefined
-  let onChainId: string | undefined = undefined
-
-  // 如果连接了真实钱包，构建 PTB 上链提交提案
-  const account = getActiveAccount()
-  if (account?.address) {
-    try {
-      const tx = vaultClient.buildCreateTransferProposalPTB(
-        orgId,
-        params.title,
-        params.recipient,
-        amountMist,
-        deadlineMs
-      )
-      const res = await signAndExecuteWithWallet(tx)
-      txDigest = res.digest
-      if (res.createdObjects.length > 0) {
-        onChainId = res.createdObjects[0]
-      }
-    } catch (e: any) {
-      console.warn("[onchain-store] On-chain proposal creation via wallet failed, saving locally:", e.message)
+  title: string; recipient: string; amount: string; token?: string; description?: string;
+  groupId?: string; groupName?: string; deadlineMs?: number; orgId?: string;
+  treasuryId?: string; legacyVaultId?: string; legacyMasterCapId?: string;
+  expectedAccount?: TransactionAccount; assertContext?: () => void;
+}): Promise<{ proposal: ProposalItem; digest: string }> {
+  if ((params.token || "SUI") !== "SUI") throw new Error(t("tx.errSuiOnly"))
+  const mist = proposalAmountMist(params.amount), orgId = objectId(params.orgId)
+  if (!orgId) throw new Error(t("tx.errNeedOrgGroup"))
+  const group = getUserGroups().find(g => g.id === params.groupId && objectId(g.orgObjectId) === orgId)
+  if (!group) throw new Error(t("tx.errNoOrgRecord"))
+  const account = getTransactionAccount()
+  if (params.expectedAccount) assertTransactionAccount(params.expectedAccount)
+  const title = params.title.trim(), titleSize = new TextEncoder().encode(title).length
+  if (!titleSize || titleSize > 4096) throw new Error(t("tx.errTitleSize"))
+  const deadlineMs = params.deadlineMs ?? Date.now() + 86400000 * 7
+  if (!Number.isSafeInteger(deadlineMs) || deadlineMs <= Date.now() || !Number.isFinite(new Date(deadlineMs).getTime())) throw new Error(t("tx.errDeadline"))
+  const treasuryId = objectId(params.treasuryId), legacyVaultId = objectId(params.legacyVaultId), legacyMasterCapId = objectId(params.legacyMasterCapId)
+  if (params.treasuryId !== undefined && !treasuryId) throw new Error(t("tx.errInvalidTreasuryId"))
+  if (!treasuryId && (!legacyVaultId || !legacyMasterCapId)) throw new Error(t("tx.errPickTreasuryOrVault"))
+  if (treasuryId && (params.legacyVaultId || params.legacyMasterCapId)) throw new Error(t("tx.errNoMixTreasuryVault"))
+  const action = treasuryId ? TREASURY_PROPOSAL_CREATE : LEGACY_PROPOSAL_CREATE, scope = treasuryId || legacyVaultId!
+  const intent = { account, action, scope }
+  const pending = getPendingTransaction(intent)
+  if (pending) throw new TransactionReceiptError(t("tx.errPendingRecovery"), pending)
+  const lock = `${transactionAccountKey(account)}:${action}:${scope}`
+  if (creating.has(lock)) throw new Error(t("tx.errCreatingInFlight"))
+  creating.add(lock)
+  const checkContext = () => { assertProposalContext(account, group.id, orgId); params.assertContext?.() }
+  try {
+    const { resolveRecipient } = await import("./identity-client")
+    const { address: recipient } = await resolveRecipient(params.recipient)
+    if (!objectId(recipient) || BigInt(recipient) === 0n) throw new Error(t("tx.errInvalidRecipient"))
+    checkContext()
+    let tx
+    if (treasuryId) {
+      const treasury = await groupVaults.readTreasury(treasuryId, orgId)
+      if (objectId(treasury.treasuryId) !== treasuryId || objectId(treasury.orgId) !== orgId || !treasury.authority.verified || treasury.authority.status !== "organization-treasury" || normalizeStructTag(treasury.coinType) !== normalizeStructTag(SUI_TYPE)) throw new Error(t("tx.errTreasuryUnverified"))
+      if (treasury.paused || mist > treasury.balance) throw new Error(t("tx.errTreasuryPausedOrInsufficient"))
+      tx = await groupVaults.buildCreateTreasuryTransfer(account.address, treasuryId, orgId, { title, recipient, amount: mist, deadlineMs: BigInt(deadlineMs) })
+    } else {
+      await verifyPersonalCap(account, legacyVaultId!, legacyMasterCapId!)
+      tx = vaultClient.buildCreateTransferProposalPTB(orgId, title, recipient, mist, deadlineMs)
+      tx.setSender(account.address)
     }
-  }
-
-  const newProposal: ProposalItem = {
-    id: `prop_${Date.now()}`,
-    onChainId,
-    orgId,
-    title: params.title,
-    description: params.description || `Transfer ${params.amount} ${token} to ${params.recipient.slice(0, 10)}...`,
-    amount: params.amount,
-    amountMist: amountMist.toString(),
-    token,
-    groupId,
-    groupName,
-    recipient: params.recipient,
-    status: "pending",
-    approvals: 1, // 发起人自投 1 票
-    requiredApprovals: 2,
-    createdAt: new Date().toISOString(),
-    expiresAt: new Date(deadlineMs).toISOString(),
-    deadlineMs,
-    type: "transfer",
-    color: "from-primary to-purple-500",
-    voters: account?.address ? [account.address] : [],
-    txDigest,
-  }
-
-  const existing = getProposals()
-  const updated = [newProposal, ...existing]
-  saveProposals(updated)
-
-  return { proposal: newProposal, digest: txDigest }
+    checkContext()
+    const metadata = { groupId: group.id, groupName: group.name, orgId, title, description: params.description || "", recipient,
+      amountMist: mist.toString(), deadlineMs: String(deadlineMs), ...(treasuryId ? { treasuryId } : { vaultId: legacyVaultId!, masterCapId: legacyMasterCapId! }) }
+    return recoverTransferProposalCreation(await signAndExecuteWithWallet(tx, { action, scope, expectedAccount: account, metadata }))
+  } finally { creating.delete(lock) }
 }
 
-/**
- * 投票审批提案 (Approve)
- */
+function applySnapshot(target: ProposalItem, snapshot: ProposalSnapshot): ProposalItem {
+  return {
+    ...target, onChainId: snapshot.id, orgId: snapshot.orgId, title: snapshot.title,
+    recipient: snapshot.recipient, proposer: snapshot.proposer, amountMist: snapshot.amountMist, amount: Number(snapshot.amountMist) / 1e9,
+    amountLabel: `${formatProposalSui(BigInt(snapshot.amountMist))} SUI`,
+    approvals: snapshot.approvedWeight, requiredApprovals: snapshot.threshold,
+    voters: Object.keys(snapshot.votes).filter(address => !snapshot.rejectingVoters.includes(address)),
+    voteWeights: snapshot.votes, memberWeights: snapshot.members, rejectingVoters: snapshot.rejectingVoters,
+    rejectedWeight: snapshot.rejectionWeight, status: snapshot.status, deadlineMs: snapshot.deadlineMs,
+    expiresAt: new Date(snapshot.deadlineMs).toISOString(), chainEpoch: snapshot.epoch,
+    organizationEpoch: snapshot.organizationEpoch, rejectionSupported: snapshot.rejectionSupported,
+    chainSyncedAt: new Date().toISOString(), syncError: undefined, sourceStatus: "chain-confirmed",
+  }
+}
+
+export async function refreshProposal(proposalId: string): Promise<ProposalItem> {
+  const target = getProposals().find(p => p.id === proposalId || p.onChainId === proposalId)
+  if (!target?.onChainId) throw new Error(t("tx.errNoChainObject"))
+  if (hasTreasuryMetadata(target)) await verifyTreasuryProposal(target)
+  const snapshot = await readProposalSnapshot(target.onChainId, target.orgId)
+  const latest = getProposals()
+  const updated = applySnapshot(latest.find(p => p.id === target.id) || target, snapshot)
+  saveProposals(latest.map(p => p.id === target.id ? updated : p))
+  return updated
+}
+
+const voting = new Set<string>()
+async function submitProposalVote(proposalId: string, reject: boolean) {
+  const target = getProposals().find(p => p.id === proposalId || p.onChainId === proposalId)
+  const onChainId = target?.onChainId || (!target ? objectId(proposalId) : undefined)
+  if (!onChainId) throw new Error(t("tx.errNoChainObject"))
+  const key = normalizeSuiAddress(onChainId)
+  if (voting.has(key)) throw new Error(t("tx.errVoteInFlight"))
+  const account = getActiveAccount()
+  if (!account) throw new Error(t("tx.errConnectWallet"))
+  voting.add(key)
+  try {
+    const snapshot = await readProposalSnapshot(onChainId, target?.orgId)
+    const weight = validateApproval(snapshot, account.address)
+    if (reject && !snapshot.rejectionSupported) throw new Error(t("tx.errRejectionNotSupported"))
+    if (reject && snapshot.approvedWeight >= snapshot.threshold) throw new Error(t("tx.errAlreadyAtThreshold"))
+    if (getActiveAccount()?.address !== account.address) throw new Error(t("tx.errAccountSwitchedVote"))
+    // The transaction signature authenticates the member. Ancillary bytes are not a FROST proof.
+    const tx = reject
+      ? vaultClient.buildRejectAsyncVotePTB(snapshot.id, snapshot.orgId)
+      : vaultClient.buildSubmitAsyncVotePTB(snapshot.id, snapshot.orgId, BigInt(weight), new Uint8Array())
+    tx.setSender(account.address)
+    const { digest } = await signAndExecuteWithWallet(tx)
+    let isNowApproved = false
+    try {
+      if (target) isNowApproved = (await refreshProposal(target.id)).status === "approved"
+      else isNowApproved = (await readProposalSnapshot(snapshot.id, snapshot.orgId)).status === "approved"
+    } catch (error) {
+      const message = error instanceof Error ? error.message : t("tx.readFailed")
+      if (target) saveProposals(getProposals().map(p => p.id === target.id ? { ...p, syncError: t("tx.errVoteConfirmedRefreshFail", { digest, message }) } : p))
+    }
+    return { success: true, isNowApproved, digest }
+  } finally { voting.delete(key) }
+}
+
 export async function approveProposal(proposalId: string): Promise<{ success: boolean; isNowApproved: boolean; digest?: string }> {
-  const account = getActiveAccount()
-  if (!account?.address) {
-    throw new Error("请先连接钱包或在右上角切换 Dev Keystore 账户后再进行投票审批")
-  }
-  const userAddr = account.address
-
-  const proposals = getProposals()
-  const idx = proposals.findIndex((p) => p.id === proposalId)
-  if (idx === -1) throw new Error("Proposal not found")
-
-  const target = proposals[idx]
-  if (target.voters.includes(userAddr)) {
-    throw new Error("当前账户已对该提案投票，请切换其他多签成员账户进行会签")
-  }
-
-  let voteDigest: string | undefined = undefined
-
-  // 如果提案具备真实链上对象 ID，可通过钱包向链上合约提交 vote
-  if (target.onChainId && account?.address) {
-    try {
-      const dummySigShare = new Uint8Array(64).fill(1)
-      const tx = vaultClient.buildSubmitAsyncVotePTB(
-        target.onChainId,
-        target.orgId,
-        1,
-        dummySigShare
-      )
-      const res = await signAndExecuteWithWallet(tx)
-      voteDigest = res.digest
-    } catch (e: any) {
-      console.warn("[onchain-store] On-chain async vote via wallet failed, updating state locally:", e.message)
-    }
-  }
-
-  const newApprovals = target.approvals + 1
-  const isNowApproved = newApprovals >= target.requiredApprovals
-
-  const updatedTarget: ProposalItem = {
-    ...target,
-    approvals: newApprovals,
-    status: isNowApproved ? "approved" : target.status,
-    voters: [...target.voters, userAddr],
-  }
-
-  proposals[idx] = updatedTarget
-  saveProposals(proposals)
-
-  return { success: true, isNowApproved, digest: voteDigest }
+  return submitProposalVote(proposalId, false)
 }
 
-/**
- * 拒绝提案 (Reject)
- */
+export async function rejectProposalWithReceipt(proposalId: string): Promise<{ success: boolean; isNowApproved: boolean; digest?: string }> {
+  return submitProposalVote(proposalId, true)
+}
+
 export async function rejectProposal(proposalId: string): Promise<boolean> {
-  const proposals = getProposals()
-  const idx = proposals.findIndex((p) => p.id === proposalId)
-  if (idx === -1) return false
-
-  proposals[idx] = {
-    ...proposals[idx],
-    status: "rejected",
-    rejectedAt: new Date().toISOString(),
-  }
-  saveProposals(proposals)
-  return true
+  const result = await rejectProposalWithReceipt(proposalId)
+  return result.success
 }
 
-/**
- * 执行已批准的提案 (Execute)
- */
+const executing = new Set<string>()
+const MasterCapContent = bcs.struct("MasterCap", { id: bcs.Address, vault_id: bcs.Address })
+
+async function verifyPersonalCap(account: TransactionAccount, vaultId: string, masterCapId: string) {
+  if (!objectId(vaultId) || !objectId(masterCapId)) throw new Error(t("tx.errPersonalExecUnavailable"))
+  const { objects } = await proposalClient.getObjects({ objectIds: [vaultId, masterCapId], include: { content: true }, signal: AbortSignal.timeout(20_000) })
+  const [vault, cap] = objects
+  if (!vault || !cap || vault instanceof Error || cap instanceof Error) throw new Error(t("tx.errReadVaultCapFail"))
+  if (objectId(vault.objectId) !== objectId(vaultId) || objectId(cap.objectId) !== objectId(masterCapId) ||
+      normalizeStructTag(vault.type) !== normalizeStructTag(`${PROPOSAL_TYPE_ORIGIN}::vault::AgentVault<${SUI_TYPE}>`) ||
+      normalizeStructTag(cap.type) !== normalizeStructTag(`${PROPOSAL_TYPE_ORIGIN}::vault::MasterCap`)) throw new Error(t("tx.errVaultCapTypeMismatch"))
+  const fields = MasterCapContent.parse(cap.content)
+  if (objectId(fields.id) !== objectId(masterCapId) || objectId(fields.vault_id) !== objectId(vaultId)) throw new Error(t("tx.errCapWrongVault"))
+  if (cap.owner.$kind !== "AddressOwner" || objectId(cap.owner.AddressOwner) !== objectId(account.address)) throw new Error(t("tx.errCapNotOwner"))
+}
+function sameExecutionSource(left: ProposalItem, right: ProposalItem): boolean {
+  return ["onChainId", "orgId", "groupId", "treasuryId", "treasuryBindingId", "vaultId", "masterCapId"].every(key =>
+    left[key as keyof ProposalItem] === right[key as keyof ProposalItem])
+}
+async function recoverProposalExecution(result: WalletTransactionResult, target: ProposalItem) {
+  try {
+    const meta = result.receipt.metadata
+    if (!meta || objectId(meta.proposalId) !== objectId(target.onChainId) || objectId(meta.orgId) !== objectId(target.orgId) || meta.groupId !== target.groupId ||
+        meta.treasuryId !== (target.treasuryId || "") || meta.bindingId !== (target.treasuryBindingId || "") || meta.vaultId !== (target.vaultId || "") || meta.masterCapId !== (target.masterCapId || "")) throw new Error(t("tx.errExecMetaMismatch"))
+    assertProposalContext(result.receipt.account, target.groupId, target.orgId)
+    // Preserve the confirmed digest even if the canonical read or the final save fails.
+    saveProposals(getProposals().map(proposal => proposal.id === target.id ? { ...proposal, executionDigest: result.digest } : proposal))
+    if (hasTreasuryMetadata(target)) await verifyTreasuryProposal(target)
+    const snapshot = await readProposalSnapshot(target.onChainId!, target.orgId)
+    if (snapshot.status !== "executed") throw new Error(t("tx.errNotExecutedOnChain"))
+    assertProposalContext(result.receipt.account, target.groupId, target.orgId)
+    const latest = getProposals(), current = latest.find(row => row.id === target.id)
+    if (!current || !sameExecutionSource(current, target)) throw new Error(t("tx.errSourceChangedKeep"))
+    const updated = { ...applySnapshot(current, snapshot), executionDigest: result.digest, executedAt: new Date().toISOString() }
+    saveProposals(latest.map(proposal => proposal.id === target.id ? updated : proposal))
+    acknowledgePendingTransaction(result.receipt)
+    return { success: true, digest: result.digest }
+  } catch (cause) {
+    const message = t("tx.errExecConfirmed", { digest: result.digest, message: cause instanceof Error ? cause.message : t("tx.readFailed") })
+    try { saveProposals(getProposals().map(proposal => proposal.id === target.id ? { ...proposal, executionDigest: result.digest, syncError: message } : proposal)) } catch { /* Original receipt remains unacknowledged, including when all browser writes fail. */ }
+    // The digest is confirmed. Keep the receipt locked for a later canonical refresh instead of replaying execution.
+    return { success: true, digest: result.digest }
+  }
+}
+
+/** Pending execution always queries its original digest before considering another signature. */
 export async function executeProposal(proposalId: string): Promise<{ success: boolean; digest?: string }> {
-  const proposals = getProposals()
-  const idx = proposals.findIndex((p) => p.id === proposalId)
-  if (idx === -1) throw new Error("Proposal not found")
-
-  const target = proposals[idx]
-  if (target.status !== "approved" && target.approvals < target.requiredApprovals) {
-    throw new Error("Proposal is not approved yet")
-  }
-
-  let executionDigest: string | undefined = undefined
-
-  // 如果有链上金库与 MasterCap，唤起钱包执行链上金库划转
-  if (target.onChainId && target.vaultId && target.masterCapId) {
-    try {
-      const tx = vaultClient.buildExecuteTransferProposalPTB(
-        target.onChainId,
-        target.orgId,
-        target.vaultId,
-        target.masterCapId,
-        target.token === "SUI" ? "0x2::sui::SUI" : undefined
-      )
-      const res = await signAndExecuteWithWallet(tx)
-      executionDigest = res.digest
-    } catch (e: any) {
-      console.warn("[onchain-store] On-chain execute withdrawal via vault failed:", e.message)
-      throw e
+  const target = getProposals().find(proposal => proposal.id === proposalId || proposal.onChainId === proposalId)
+  if (!target?.onChainId) throw new Error(t("tx.errNoChainObject"))
+  const account = getTransactionAccount(), scope = normalizeSuiAddress(target.onChainId)
+  const treasury = hasTreasuryMetadata(target)
+  const action = treasury ? "group-treasury-proposal-execute" : "personal-cap-proposal-execute"
+  if (executing.has(scope)) throw new Error(t("tx.errExecuteInFlight"))
+  executing.add(scope)
+  try {
+    const pending = getPendingTransaction({ account, action, scope })
+    if (pending) return await recoverProposalExecution(await resumePendingTransaction(pending), target)
+    const snapshot = await readProposalSnapshot(target.onChainId, target.orgId)
+    if (snapshot.status !== "approved") throw new Error(t("tx.errNotApproved"))
+    if (Date.now() > snapshot.deadlineMs || snapshot.epoch !== snapshot.organizationEpoch) throw new Error(t("tx.errExpiredOrEpoch"))
+    assertProposalContext(account, target.groupId, snapshot.orgId)
+    if (target.token !== "SUI") throw new Error(t("tx.errExecSuiOnly"))
+    let tx
+    if (treasury) {
+      const { treasuryId, bindingId } = treasuryIds(target)
+      // The wrapper checks immutable treasury/proposal binding and custody on chain.
+      tx = await groupVaults.buildExecuteTreasury(account.address, treasuryId, snapshot.orgId, snapshot.id, bindingId)
+    } else {
+      // A legacy Proposal has no vault binding; use only the explicitly saved personal-cap source.
+      const vaultId = target.vaultId, masterCapId = target.masterCapId
+      if (!vaultId || !masterCapId) throw new Error(t("tx.errMissingOriginalVault"))
+      await verifyPersonalCap(account, vaultId, masterCapId)
+      tx = vaultClient.buildExecuteTransferProposalPTB(snapshot.id, snapshot.orgId, vaultId, masterCapId, SUI_TYPE)
+      tx.setSender(account.address)
     }
-  } else {
-    // 零 Mock 真实链上交互：通过活跃钱包/多签理事实时提交执行 PTB，获得真实 Testnet 交易摘要
-    try {
-      const { Transaction } = await import("@mysten/sui/transactions")
-      const tx = new Transaction()
-      const mistAmount = BigInt(target.amountMist || "10000000") // 默认微额 0.01 SUI
-      // 避免测试环境 gas 不足，真实测试划转微额 SUI
-      const execMist = mistAmount > 10000000n ? 10000000n : mistAmount
-      const [coin] = tx.splitCoins(tx.gas, [execMist])
-      tx.transferObjects([coin], target.recipient)
-      const res = await signAndExecuteWithWallet(tx)
-      executionDigest = res.digest
-    } catch (e: any) {
-      console.warn("[onchain-store] Execution transaction failed on chain:", e)
-      throw e
-    }
-  }
-
-  proposals[idx] = {
-    ...proposals[idx],
-    status: "executed",
-    executionDigest,
-    executedAt: new Date().toISOString(),
-  }
-  saveProposals(proposals)
-
-  return { success: true, digest: executionDigest }
+    assertProposalContext(account, target.groupId, snapshot.orgId)
+    const current = getProposals().find(row => row.id === target.id)
+    if (!current || !sameExecutionSource(current, target)) throw new Error(t("tx.errSourceChangedReread"))
+    const metadata = { proposalId: snapshot.id, groupId: target.groupId, orgId: snapshot.orgId,
+      treasuryId: target.treasuryId || "", bindingId: target.treasuryBindingId || "", vaultId: target.vaultId || "", masterCapId: target.masterCapId || "" }
+    return await recoverProposalExecution(await signAndExecuteWithWallet(tx, { action, scope, expectedAccount: account, metadata }), target)
+  } finally { executing.delete(scope) }
 }

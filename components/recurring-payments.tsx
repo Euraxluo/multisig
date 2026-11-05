@@ -1,267 +1,216 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
-import { CalendarClock, Waves, MoreHorizontal, Pause, Play, X } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { CalendarClock, Waves, MoreHorizontal, Pause, Play, X, RefreshCw } from "lucide-react"
 import { motion } from "framer-motion"
-import { format, addDays } from "date-fns"
-import { Progress } from "@/components/ui/progress"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog"
+import { getActiveAccount, getUserGroups } from "@/lib/onchain-store"
+import { buildPaymentAction, claimableUnits, paymentUnits, scheduledPaymentsReader, ZERO_SCOPE, type PaymentSnapshot, type PaymentAction } from "@/lib/scheduled-payments-chain"
+import { formatCoinBalance } from "@/lib/wallet-data"
+import { proposalClient } from "@/lib/proposal-chain"
+import { assertTransactionAccount, getTransactionAccount, signAndExecuteWithWallet } from "@/lib/sui-wallet-signer"
+import { transactionAccountKey } from "@/lib/pending-transactions"
+import { createSubmissionGuard } from "@/lib/wallet-creation-state"
+import { isValidSuiObjectId, normalizeSuiAddress } from "@mysten/sui/utils"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog"
+import { useI18n } from "@/components/i18n-provider"
 
-interface RecurringPaymentsProps {
-  groupId?: string
+interface RecurringPaymentsProps { groupId?: string }
+interface DisplayPayment extends PaymentSnapshot { symbol: string; decimals: number | null }
+interface LegacyPlan { id: string; name: string; groupId?: string; ownerAddress?: string }
+
+function dateLabel(ms: bigint) {
+  if (ms > BigInt(8_640_000_000_000_000) || ms < 0n) return `${ms} ms`
+  return new Date(Number(ms)).toLocaleString()
 }
-
-interface PaymentRecord {
-  id: string
-  type: "recurring" | "stream"
-  name: string
-  recipient: string
-  amount: string
-  token: string
-  frequency?: string
-  nextPayment?: any
-  startDate?: any
-  endDate?: any
-  progress?: number
-  status: "active" | "paused"
-}
-
-const DEFAULT_PAYMENTS: PaymentRecord[] = [
-  {
-    id: "payment-1",
-    type: "recurring",
-    name: "Team Salaries (核心开发者津贴)",
-    recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-    amount: "100",
-    token: "SUI",
-    frequency: "Monthly",
-    nextPayment: addDays(new Date(), 15),
-    status: "active",
-  },
-  {
-    id: "payment-2",
-    type: "stream",
-    name: "Audit Stream (Move 安全审计流支付)",
-    recipient: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36",
-    amount: "50",
-    token: "USDC",
-    startDate: addDays(new Date(), -5),
-    endDate: addDays(new Date(), 25),
-    progress: 20,
-    status: "active",
-  },
-]
 
 export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
-  const [payments, setPayments] = useState<PaymentRecord[]>(DEFAULT_PAYMENTS)
+  const { t } = useI18n()
+  const [payments, setPayments] = useState<DisplayPayment[]>([])
+  const [legacy, setLegacy] = useState<LegacyPlan[]>([])
   const [cancelPaymentId, setCancelPaymentId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [connected, setConnected] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [lookup, setLookup] = useState("")
+  const [topup, setTopup] = useState<Record<string, string>>({})
+  const [now, setNow] = useState(Date.now())
+  const [accountKey, setAccountKey] = useState("")
+  const reloadVersion = useRef(0)
+  const actionGuard = useRef(createSubmissionGuard())
 
   useEffect(() => {
-    const load = () => {
-      try {
-        const stored = localStorage.getItem("sui_recurring_payments")
-        if (stored) {
-          const parsed = JSON.parse(stored)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setPayments(parsed)
-            return
-          }
-        }
-        localStorage.setItem("sui_recurring_payments", JSON.stringify(DEFAULT_PAYMENTS))
-      } catch {}
+    const syncAccount = () => {
+      const account = getActiveAccount()
+      setAccountKey(account ? transactionAccountKey(account) : "")
     }
-    load()
-    window.addEventListener("sui-recurring-updated", load)
-    window.addEventListener("storage", load)
-    return () => {
-      window.removeEventListener("sui-recurring-updated", load)
-      window.removeEventListener("storage", load)
-    }
+    syncAccount()
+    const timer = setInterval(() => { setNow(Date.now()); syncAccount() }, 3_000)
+    return () => clearInterval(timer)
   }, [])
 
-  const saveList = (updated: PaymentRecord[]) => {
-    setPayments(updated)
+  const scope = useCallback(() => {
+    if (!groupId) return ZERO_SCOPE
+    const group = getUserGroups().find(group => group.id === groupId)
+    if (!group?.orgObjectId) throw new Error(t("payments.recErrNoOrg"))
+    return normalizeSuiAddress(group.orgObjectId)
+  }, [groupId])
+
+  const decorate = async (payment: PaymentSnapshot): Promise<DisplayPayment> => {
+    if (payment.coinType === normalizeSuiAddress("0x2") + "::sui::SUI") return { ...payment, symbol: "SUI", decimals: 9 }
     try {
-      localStorage.setItem("sui_recurring_payments", JSON.stringify(updated))
-      window.dispatchEvent(new CustomEvent("sui-recurring-updated", { detail: updated }))
-    } catch {}
+      const { coinMetadata } = await proposalClient.getCoinMetadata({ coinType: payment.coinType, signal: AbortSignal.timeout(15_000) })
+      return { ...payment, symbol: coinMetadata?.symbol || payment.coinType, decimals: coinMetadata?.decimals ?? null }
+    } catch { return { ...payment, symbol: payment.coinType, decimals: null } }
   }
 
-  const togglePaymentStatus = (paymentId: string) => {
-    const updated = payments.map((p) => {
-      if (p.id === paymentId) {
-        return {
-          ...p,
-          status: (p.status === "active" ? "paused" : "active") as "active" | "paused",
-        }
+  const reload = useCallback(async () => {
+    const version = ++reloadVersion.current
+    let expected = ""
+    const current = () => {
+      if (version !== reloadVersion.current) return false
+      try {
+        const active = getActiveAccount()
+        return (active ? transactionAccountKey(active) : "") === expected
+      } catch { return false }
+    }
+    setLoading(true)
+    setError(null)
+    setPayments([])
+    setNotice(null)
+    try {
+      const active = getActiveAccount()
+      expected = active ? transactionAccountKey(active) : ""
+      setConnected(!!active)
+      if (!active) {
+        setPayments([])
+        setNotice(t("payments.recNoticeConnect"))
+        return
       }
-      return p
-    })
-    saveList(updated)
-  }
+      const account = getTransactionAccount()
+      try {
+        const parsed: unknown = JSON.parse(localStorage.getItem("sui_recurring_payments") || "[]")
+        setLegacy(Array.isArray(parsed) ? parsed.filter((value): value is LegacyPlan => value && typeof value === "object" && typeof value.name === "string" && typeof value.id === "string" && (groupId ? value.groupId === groupId : !value.groupId) && (!value.ownerAddress || normalizeSuiAddress(value.ownerAddress) === normalizeSuiAddress(account.address))) : [])
+      } catch { setLegacy([]) }
+      const result = await scheduledPaymentsReader.listPayments(account.address, scope())
+      const display = await Promise.all(result.payments.map(decorate))
+      if (!current()) return
+      setPayments(display)
+      setNotice(result.truncated ? t("payments.recNoticeTruncated") : null)
+      if (result.errors.length) setError(result.errors.join("；"))
+    } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : t("payments.recErrReadFailed")) }
+    finally { if (version === reloadVersion.current) setLoading(false) }
+  }, [groupId, scope])
 
-  const cancelPayment = (paymentId: string) => {
-    const updated = payments.filter((p) => p.id !== paymentId)
-    saveList(updated)
+  useEffect(() => {
     setCancelPaymentId(null)
+    setLegacy([])
+    void reload()
+    const refresh = () => { void reload() }
+    window.addEventListener("sui-recurring-updated", refresh)
+    window.addEventListener("storage", refresh)
+    window.addEventListener("sui-account-switched", refresh)
+    window.addEventListener("sui-account-changed", refresh)
+    const invalidate = () => { reloadVersion.current++ }
+    return () => { invalidate(); window.removeEventListener("sui-recurring-updated", refresh); window.removeEventListener("storage", refresh); window.removeEventListener("sui-account-switched", refresh); window.removeEventListener("sui-account-changed", refresh) }
+  }, [reload, accountKey])
+
+  const runAction = async (payment: DisplayPayment, action: PaymentAction) => {
+    if (!actionGuard.current.enter()) return
+    setBusy(payment.id)
+    setError(null)
+    setNotice(null)
+    try {
+      const account = getTransactionAccount()
+      assertTransactionAccount(account)
+      await scheduledPaymentsReader.requireDeployment()
+      const current = await scheduledPaymentsReader.readPayment(payment.id)
+      if (current.scope !== scope()) throw new Error(t("payments.recErrWrongScope"))
+      const fresh = { ...current, capId: payment.capId }
+      let amount: bigint | undefined
+      if (action === "fund") {
+        if (payment.decimals === null) throw new Error(t("payments.recErrDecimalsUnavailable"))
+        amount = paymentUnits(topup[payment.id] || "", payment.decimals)
+      }
+      const tx = buildPaymentAction(fresh, action, amount)
+      tx.setSender(account.address)
+      assertTransactionAccount(account)
+      const result = await signAndExecuteWithWallet(tx)
+      setNotice(t("payments.recNoticeConfirmed", { digest: result.digest }))
+      await reload()
+    } catch (cause) { setError(cause instanceof Error ? cause.message : t("payments.recErrActionFailed")) }
+    finally { actionGuard.current.leave(); setBusy(null); setCancelPaymentId(null) }
   }
 
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.05,
-      },
-    },
+  const findPayment = async () => {
+    setError(null)
+    try {
+      if (!isValidSuiObjectId(lookup)) throw new Error(t("payments.recErrNeedObjectId"))
+      const payment = await scheduledPaymentsReader.readPayment(lookup)
+      if (payment.scope !== scope()) throw new Error(t("payments.recErrObjectWrongScope"))
+      const row = await decorate(payment)
+      setPayments(current => current.some(value => value.id === row.id) ? current : [row, ...current])
+    } catch (cause) { setError(cause instanceof Error ? cause.message : t("payments.recErrObjectReadFailed")) }
   }
 
-  const item = {
-    hidden: { opacity: 0, y: 10 },
-    show: { opacity: 1, y: 0 },
-  }
+  const selected = payments.find(payment => payment.id === cancelPaymentId)
+  const amountLabel = (payment: DisplayPayment, units: bigint) => payment.decimals === null ? t("payments.recSmallestUnits", { units: units.toString() }) : `${formatCoinBalance(units, payment.decimals)} ${payment.symbol}`
 
-  return (
-    <>
-      <div className="mb-4">
-        <h3 className="text-lg font-semibold mb-3">周期与流支付</h3>
-
-        {payments.length === 0 ? (
-          <Card className="border-dashed">
-            <CardContent className="p-6 flex flex-col items-center justify-center">
-              <p className="text-muted-foreground text-sm">暂无活跃的周期计划或流支付</p>
-            </CardContent>
-          </Card>
-        ) : (
-          <motion.div className="grid gap-2" variants={container} initial="hidden" animate="show">
-            {payments.map((payment) => (
-              <motion.div key={payment.id} variants={item}>
-                <Card className="overflow-hidden border-none shadow-sm">
-                  <div
-                    className={`h-1 bg-gradient-to-r ${payment.type === "recurring" ? "from-orange-500 to-amber-400" : "from-purple-500 to-violet-400"}`}
-                  ></div>
-                  <CardContent className="p-3">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center">
-                        <div className="h-8 w-8 rounded-full bg-primary/10 flex items-center justify-center mr-3">
-                          {payment.type === "recurring" ? (
-                            <CalendarClock className="h-4 w-4 text-orange-500" />
-                          ) : (
-                            <Waves className="h-4 w-4 text-purple-500" />
-                          )}
-                        </div>
-                        <div>
-                          <div className="flex items-center">
-                            <h4 className="text-sm font-medium">{payment.name}</h4>
-                            <Badge
-                              variant={payment.status === "active" ? "default" : "outline"}
-                              className={`ml-2 text-xs ${payment.status === "active" ? "bg-green-500/20 text-green-700 dark:text-green-400 border-green-500/30" : "text-muted-foreground"}`}
-                            >
-                              {payment.status === "active" ? "生效中" : "已暂停"}
-                            </Badge>
-                          </div>
-                          <p className="text-xs text-muted-foreground font-mono">
-                            {payment.amount} {payment.token} → {payment.recipient.length > 14 ? `${payment.recipient.slice(0, 8)}...${payment.recipient.slice(-4)}` : payment.recipient}
-                          </p>
-                        </div>
-                      </div>
-
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="icon" className="h-8 w-8">
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>操作菜单</DropdownMenuLabel>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => togglePaymentStatus(payment.id)}>
-                            {payment.status === "active" ? (
-                              <>
-                                <Pause className="h-4 w-4 mr-2" />
-                                暂停计划
-                              </>
-                            ) : (
-                              <>
-                                <Play className="h-4 w-4 mr-2" />
-                                恢复计划
-                              </>
-                            )}
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => setCancelPaymentId(payment.id)}
-                            className="text-destructive focus:text-destructive"
-                          >
-                            <X className="h-4 w-4 mr-2" />
-                            终止计划
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                    </div>
-
-                    {payment.type === "recurring" && payment.nextPayment && (
-                      <div className="mt-2 pt-2 border-t flex justify-between text-xs text-muted-foreground">
-                        <span>周期: {payment.frequency}</span>
-                        <span>下期划款: {format(new Date(payment.nextPayment), "yyyy-MM-dd")}</span>
-                      </div>
-                    )}
-
-                    {payment.type === "stream" && (
-                      <div className="mt-2 pt-2 border-t space-y-1">
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>流式释放进度</span>
-                          <span>{payment.progress || 0}%</span>
-                        </div>
-                        <Progress value={payment.progress || 0} className="h-1.5" />
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              </motion.div>
-            ))}
-          </motion.div>
-        )}
+  return <>
+    <div className="mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <h3 className="text-lg font-semibold">{t("payments.recTitle")}</h3>
+        <Button size="sm" variant="ghost" disabled={loading || !!busy} onClick={() => void reload()}><RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />{t("payments.recRefresh")}</Button>
       </div>
-
-      <AlertDialog open={!!cancelPaymentId} onOpenChange={() => setCancelPaymentId(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>确认终止该划款计划？</AlertDialogTitle>
-            <AlertDialogDescription>
-              终止后将停止后续所有自动化周期划转或流支付释放。此操作不可逆。
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>取消</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => cancelPaymentId && cancelPayment(cancelPaymentId)}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              确认终止
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
-  )
+      <p className="mb-3 text-xs text-muted-foreground">{t("payments.recIntroNote")}</p>
+      {connected && <div className="flex gap-2 mb-3"><Input aria-label={t("payments.recLookupLabel")} placeholder={t("payments.recLookupPlaceholder")} value={lookup} onChange={event => setLookup(event.target.value)} /><Button variant="outline" onClick={() => void findPayment()}>{t("payments.recLookupButton")}</Button></div>}
+      {error && <p role="alert" className="mb-3 text-xs text-destructive break-all">{error}</p>}
+      {notice && <p role="status" className="mb-3 text-xs text-muted-foreground break-all">{notice}</p>}
+      {payments.length === 0 ? <Card className="border-dashed"><CardContent className="p-6 text-sm text-muted-foreground">{loading ? t("payments.recLoading") : t("payments.recEmpty")}</CardContent></Card> : <motion.div className="grid gap-2" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
+        {payments.map(payment => {
+          const recurring = payment.schedule.$kind === "Recurring" ? payment.schedule.Recurring : null
+          const stream = payment.schedule.$kind === "Stream" ? payment.schedule.Stream : null
+          const status = payment.status.$kind
+          const claimable = claimableUnits(payment, BigInt(now))
+          const approval = recurring?.requires_approval === true
+          const canClaim = claimable > 0n && (!approval || !!payment.capId)
+          const paused = BigInt(payment.paused_ms)
+          return <motion.div key={payment.id} initial={{ y: 10 }} animate={{ y: 0 }}><Card className="overflow-hidden border-none shadow-sm">
+            <div className={`h-1 ${recurring ? "bg-amber-500" : "bg-primary"}`} />
+            <CardContent className="p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-start min-w-0">
+                  <div className="h-8 w-8 shrink-0 rounded-full bg-primary/10 flex items-center justify-center mr-3">{recurring ? <CalendarClock className="h-4 w-4 text-orange-500" /> : <Waves className="h-4 w-4 text-purple-500" />}</div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2"><h4 className="text-sm font-medium truncate">{new TextDecoder().decode(Uint8Array.from(payment.name))}</h4><Badge variant="outline">{t("payments.recBadgeEscrowed")}</Badge><Badge variant={status === "Active" ? "default" : "outline"}>{status === "Active" ? t("payments.recStatusActive") : status === "Paused" ? t("payments.recStatusPaused") : t("payments.recStatusTerminated")}</Badge>{payment.capId && <Badge variant="outline">{t("payments.recBadgeCap")}</Badge>}</div>
+                    <p className="text-xs text-muted-foreground font-mono break-all">{recurring ? t("payments.recPerInstallment") : t("payments.recTotalAmount")}{amountLabel(payment, BigInt(recurring?.amount || payment.funded))} → {payment.recipient}</p>
+                  </div>
+                </div>
+                {payment.capId && status !== "Terminated" && <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" disabled={!!busy} className="h-8 w-8 shrink-0" aria-label={t("payments.recManageLabel")}><MoreHorizontal className="h-4 w-4" /></Button></DropdownMenuTrigger><DropdownMenuContent align="end"><DropdownMenuLabel>{t("payments.recManageMenuLabel")}</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuItem onClick={() => void runAction(payment, status === "Paused" ? "resume" : "pause")}>{status === "Paused" ? <><Play className="h-4 w-4 mr-2" />{t("payments.recResume")}</> : <><Pause className="h-4 w-4 mr-2" />{t("payments.recPause")}</>}</DropdownMenuItem><DropdownMenuItem className="text-destructive" onClick={() => setCancelPaymentId(payment.id)}><X className="h-4 w-4 mr-2" />{t("payments.recTerminate")}</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
+              </div>
+              <div className="mt-2 pt-2 border-t space-y-1 text-xs text-muted-foreground">
+                <p>{t("payments.recFundedPrefix")} {amountLabel(payment, BigInt(payment.funded))} · {t("payments.recPaidPrefix")} {amountLabel(payment, BigInt(payment.paid))} · {t("payments.recEscrowPrefix")} {amountLabel(payment, BigInt(payment.balance))} · {t("payments.recRefundedPrefix")} {amountLabel(payment, BigInt(payment.refunded))}</p>
+                <p>{t("payments.recStartPrefix")}{dateLabel(BigInt(payment.start_ms) + paused)}{stream ? t("payments.recEndPrefix", { date: dateLabel(BigInt(payment.start_ms) + BigInt(stream.duration_ms) + paused) }) : ""}{status === "Paused" ? t("payments.recFrozenNote") : ""}</p>
+                {recurring && <><p>{t("payments.recIntervalDays", { days: Number(BigInt(recurring.interval_ms) / 86_400_000n) })} · {t("payments.recExecutedCount", { count: payment.installments_paid })} · {recurring.max_count !== "0" ? t("payments.recMaxCount", { count: recurring.max_count }) : t("payments.recNoMaxCount")} · {recurring.end_ms !== "0" ? t("payments.recEndBy", { date: dateLabel(BigInt(recurring.end_ms) + paused) }) : t("payments.recNoEndDate")}</p><p>{approval ? t("payments.recApprovalMode") : t("payments.recOpenMode")}</p></>}
+                {stream && <p>{t("payments.recStreamCurve", { early: 100 - stream.curve, late: stream.curve })}</p>}
+                <p>{t("payments.recClaimableNow")}{approval ? t("payments.recClaimableApprove") : t("payments.recClaimableClaim")}{t("payments.recClaimableEstimate")}{amountLabel(payment, claimable)}</p>
+                <p className="font-mono break-all">{t("payments.recObjectIdPrefix")} {payment.id}</p><p className="font-mono break-all">{t("payments.recCoinTypePrefix")} {payment.coinType}</p>
+              </div>
+              {status !== "Terminated" && <div className="mt-3 flex flex-wrap gap-2"><Button size="sm" disabled={!canClaim || !!busy} onClick={() => void runAction(payment, approval ? "execute_installment" : "claim")}>{busy === payment.id ? t("payments.recBusy") : approval ? t("payments.recApproveOne") : recurring ? t("payments.recTriggerInstallment") : t("payments.recClaimVested")}</Button>
+                {recurring && payment.capId && <><Input className="w-32 h-8" aria-label={t("payments.recTopupLabel")} placeholder={t("payments.recTopupLabel")} value={topup[payment.id] || ""} onChange={event => setTopup(current => ({ ...current, [payment.id]: event.target.value }))} /><Button size="sm" variant="outline" disabled={!!busy || !topup[payment.id]} onClick={() => void runAction(payment, "fund")}>{t("payments.recFundButton")}</Button></>}
+              </div>}
+            </CardContent>
+          </Card></motion.div>
+        })}
+      </motion.div>}
+      {legacy.length > 0 && <div className="mt-4 text-xs text-muted-foreground"><p>{t("payments.recLegacyNote")}</p>{legacy.map(plan => <p key={plan.id}>{plan.name}</p>)}</div>}
+    </div>
+    <AlertDialog open={!!cancelPaymentId} onOpenChange={open => { if (!open) setCancelPaymentId(null) }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{t("payments.recTerminateTitle")}</AlertDialogTitle><AlertDialogDescription>{t("payments.recTerminateDescription")}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{t("payments.recKeepButton")}</AlertDialogCancel><AlertDialogAction disabled={!!busy} className="bg-destructive text-destructive-foreground" onClick={() => selected && void runAction(selected, "terminate")}>{t("payments.recTerminateConfirm")}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+  </>
 }

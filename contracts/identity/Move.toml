@@ -1,0 +1,10 @@
+[package]
+name = "identity"
+edition = "2024"
+license = "Apache-2.0"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "ceaaff1cc84c1ba2f12c4e7928914ece81fbdd0f" }
+
+[addresses]
+identity = "0x0"

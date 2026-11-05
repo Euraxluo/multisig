@@ -9,13 +9,16 @@ import { InvoiceGeneratorDialog } from "./invoice-generator-dialog"
 import { PaymentRequestDialog } from "./payment-request-dialog"
 import { TemplateManagerDialog } from "./template-manager-dialog"
 import { CreateTransactionDialog } from "./create-transaction-dialog"
+import { PaymentDialog } from "./payment-dialog"
 import { motion } from "framer-motion"
+import { useI18n } from "@/components/i18n-provider"
 
 interface QuickActionsProps {
   groupId?: string
 }
 
 export function QuickActions({ groupId }: QuickActionsProps) {
+  const { t } = useI18n()
   const [isPaymentSchedulerOpen, setIsPaymentSchedulerOpen] = useState(false)
   const [isStreamPaymentOpen, setIsStreamPaymentOpen] = useState(false)
   const [isInvoiceGeneratorOpen, setIsInvoiceGeneratorOpen] = useState(false)
@@ -25,39 +28,39 @@ export function QuickActions({ groupId }: QuickActionsProps) {
 
   const quickActions = [
     {
-      title: "Send",
+      title: groupId ? t("dash.qaNewProposal") : t("dash.qaTransfer"),
       icon: <Send className="h-4 w-4" />,
-      color: "from-blue-500 to-cyan-400",
+      color: "bg-blue-500",
       onClick: () => setIsCreateTransactionOpen(true),
     },
     {
-      title: "Request",
+      title: t("dash.qaRequest"),
       icon: <ArrowUpRight className="h-4 w-4" />,
-      color: "from-green-500 to-emerald-400",
+      color: "bg-emerald-500",
       onClick: () => setIsPaymentRequestOpen(true),
     },
     {
-      title: "Schedule",
+      title: t("dash.qaScheduled"),
       icon: <CalendarClock className="h-4 w-4" />,
-      color: "from-orange-500 to-amber-400",
+      color: "bg-amber-500",
       onClick: () => setIsPaymentSchedulerOpen(true),
     },
     {
-      title: "Stream",
+      title: t("dash.qaStream"),
       icon: <Waves className="h-4 w-4" />,
-      color: "from-purple-500 to-violet-400",
+      color: "bg-violet-500",
       onClick: () => setIsStreamPaymentOpen(true),
     },
     {
-      title: "Invoice",
+      title: t("dash.qaInvoice"),
       icon: <Receipt className="h-4 w-4" />,
-      color: "from-pink-500 to-rose-400",
+      color: "bg-rose-500",
       onClick: () => setIsInvoiceGeneratorOpen(true),
     },
     {
-      title: "Templates",
+      title: t("dash.qaTemplates"),
       icon: <FileText className="h-4 w-4" />,
-      color: "from-primary to-purple-500",
+      color: "bg-primary",
       onClick: () => setIsTemplateManagerOpen(true),
     },
   ]
@@ -80,7 +83,7 @@ export function QuickActions({ groupId }: QuickActionsProps) {
   return (
     <>
       <div className="mb-4">
-        <h3 className="text-lg font-semibold mb-3">Quick Actions</h3>
+        <h3 className="text-lg font-semibold mb-3">{groupId ? t("dash.qaGroupTools") : t("dash.qaPaymentTools")}</h3>
         <motion.div className="grid grid-cols-3 gap-2" variants={container} initial="hidden" animate="show">
           {quickActions.map((action, index) => (
             <motion.div key={index} variants={item}>
@@ -120,11 +123,15 @@ export function QuickActions({ groupId }: QuickActionsProps) {
 
       <TemplateManagerDialog open={isTemplateManagerOpen} onOpenChange={setIsTemplateManagerOpen} />
 
-      <CreateTransactionDialog
-        open={isCreateTransactionOpen}
-        onOpenChange={setIsCreateTransactionOpen}
-        groupId={groupId}
-      />
+      {groupId ? (
+        <CreateTransactionDialog
+          open={isCreateTransactionOpen}
+          onOpenChange={setIsCreateTransactionOpen}
+          groupId={groupId}
+        />
+      ) : (
+        <PaymentDialog open={isCreateTransactionOpen} onOpenChange={setIsCreateTransactionOpen} title={t("shell.menuPersonalTransfer")} />
+      )}
     </>
   )
 }

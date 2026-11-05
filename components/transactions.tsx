@@ -1,6 +1,7 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
+import { normalizeSuiAddress } from "@mysten/sui/utils"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -11,67 +12,70 @@ import { TransactionDetailsDialog } from "@/components/transaction-details-dialo
 import {
   getProposals,
   approveProposal,
-  rejectProposal,
+  rejectProposalWithReceipt,
   executeProposal,
+  getActiveAccount,
   type ProposalItem,
 } from "@/lib/onchain-store"
+import { useI18n } from "@/components/i18n-provider"
 
 export default function Transactions() {
+  const { t } = useI18n()
   const [selectedTx, setSelectedTx] = useState<{ id: string; groupId: string } | null>(null)
   const [activeTab, setActiveTab] = useState("pending")
   const [proposals, setProposals] = useState<ProposalItem[]>([])
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
+  const [actionError, setActionError] = useState("")
+  const [actionDigest, setActionDigest] = useState("")
+  const [address, setAddress] = useState("")
+  const actionPending = useRef(false)
 
   useEffect(() => {
     const load = () => {
       setProposals(getProposals())
+      const account = getActiveAccount()
+      setAddress(account ? normalizeSuiAddress(account.address) : "")
     }
     load()
     window.addEventListener("sui-proposals-updated", load)
     window.addEventListener("storage", load)
+    window.addEventListener("sui-account-switched", load)
     const id = window.setInterval(load, 3000)
     return () => {
       window.removeEventListener("sui-proposals-updated", load)
       window.removeEventListener("storage", load)
+      window.removeEventListener("sui-account-switched", load)
       window.clearInterval(id)
     }
   }, [])
 
-  const handleApprove = async (id: string, e?: React.MouseEvent) => {
-    e?.stopPropagation()
+  const handleVote = async (id: string, reject: boolean, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (actionPending.current) return
+    actionPending.current = true
     setActionLoadingId(id)
+    setActionError(""); setActionDigest("")
     try {
-      await approveProposal(id)
-    } catch (err: any) {
-      alert(err.message || "Approve failed")
-    } finally {
-      setActionLoadingId(null)
-    }
-  }
-
-  const handleReject = async (id: string, e?: React.MouseEvent) => {
-    e?.stopPropagation()
-    setActionLoadingId(id)
-    try {
-      await rejectProposal(id)
-    } catch (err: any) {
-      alert(err.message || "Reject failed")
-    } finally {
-      setActionLoadingId(null)
-    }
+      const result = reject ? await rejectProposalWithReceipt(id) : await approveProposal(id)
+      setActionDigest(result.digest || "")
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : t("tx.voteFailed"))
+    } finally { actionPending.current = false; setActionLoadingId(null) }
   }
 
   const handleExecute = async (id: string, e?: React.MouseEvent) => {
     e?.stopPropagation()
+    if (actionPending.current) return
+    actionPending.current = true
     setActionLoadingId(id)
+    setActionError(""); setActionDigest("")
     try {
       const res = await executeProposal(id)
-      if (res.digest) {
-        alert(`提案已成功在链上金库执行！交易凭证: ${res.digest}`)
-      }
-    } catch (err: any) {
-      alert(err.message || "Execute failed")
+      setActionDigest(res.digest || "")
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : t("tx.executeFailed"))
     } finally {
+      actionPending.current = false
       setActionLoadingId(null)
     }
   }
@@ -99,39 +103,39 @@ export default function Transactions() {
     show: { opacity: 1, y: 0 },
   }
 
-  const getTransactionIcon = (tx: any) => {
+  const getTransactionIcon = (tx: ProposalItem) => {
     if (tx.isBatch) return <ListChecks className="h-3 w-3 mr-1" />
     if (tx.type === "transfer") return <Send className="h-3 w-3 mr-1" />
     if (tx.type === "contract") return <Code className="h-3 w-3 mr-1" />
     return <Send className="h-3 w-3 mr-1" />
   }
 
-  const getTransactionTypeText = (tx: any) => {
-    if (tx.isBatch) return "Batch Transaction"
-    if (tx.type === "transfer") return "Transfer"
-    if (tx.type === "contract") return "Contract Call"
-    return "Transaction"
+  const getTransactionTypeText = (tx: ProposalItem) => {
+    if (tx.isBatch) return t("tx.typeBatch")
+    if (tx.type === "transfer") return t("tx.typeTransfer")
+    if (tx.type === "contract") return t("tx.typeContract")
+    return t("tx.typeDefault")
   }
 
-  const getSpecialBadge = (tx: any) => {
+  const getSpecialBadge = (tx: ProposalItem) => {
     if (tx.isScheduled) {
       return (
         <Badge variant="outline" className="text-xs flex items-center">
-          <Calendar className="h-3 w-3 mr-1" /> Scheduled
+          <Calendar className="h-3 w-3 mr-1" /> {t("tx.badgeScheduled")}
         </Badge>
       )
     }
     if (tx.isConditional) {
       return (
         <Badge variant="outline" className="text-xs flex items-center">
-          <Zap className="h-3 w-3 mr-1" /> Conditional
+          <Zap className="h-3 w-3 mr-1" /> {t("tx.badgeConditional")}
         </Badge>
       )
     }
     if (tx.isBatch) {
       return (
         <Badge variant="outline" className="text-xs flex items-center">
-          <ListChecks className="h-3 w-3 mr-1" /> {tx.batchCount} Txs
+          <ListChecks className="h-3 w-3 mr-1" /> {t("tx.badgeBatchCount", { count: tx.batchCount ?? 0 })}
         </Badge>
       )
     }
@@ -140,6 +144,8 @@ export default function Transactions() {
 
   return (
     <div className="space-y-4">
+      {actionError && <p role="alert" className="text-xs text-destructive">{actionError}</p>}
+      {actionDigest && <a role="status" className="block break-all text-xs text-primary" href={`https://suiscan.xyz/testnet/tx/${actionDigest}`} target="_blank" rel="noreferrer">{t("tx.confirmed")} {actionDigest}</a>}
       <Tabs defaultValue="pending" value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full grid-cols-2 p-1 bg-muted/50 rounded-xl">
           <TabsTrigger
@@ -147,14 +153,14 @@ export default function Transactions() {
             className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
           >
             <Clock className="h-4 w-4 mr-1.5" />
-            Pending
+            {t("tx.tabPending")}
           </TabsTrigger>
           <TabsTrigger
             value="completed"
             className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
           >
             <Check className="h-4 w-4 mr-1.5" />
-            Completed
+            {t("tx.tabCompleted")}
           </TabsTrigger>
         </TabsList>
 
@@ -166,14 +172,23 @@ export default function Transactions() {
                   pendingTransactions.map((tx) => (
                     <motion.div key={tx.id} variants={item}>
                       <Card
-                        className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
+                        className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm cursor-pointer"
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setSelectedTx({ id: tx.id, groupId: tx.groupId })}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            setSelectedTx({ id: tx.id, groupId: tx.groupId })
+                          }
+                        }}
                       >
                         <div className={`h-1 bg-gradient-to-r ${tx.color}`}></div>
                         <CardHeader className="p-3 pb-0">
                           <div className="flex items-start justify-between">
                             <div>
                               <h3 className="font-medium text-sm">{tx.title}</h3>
+                              {tx.sourceStatus === "unverified" && <Badge variant="outline" className="my-1 text-[10px]">{t("tx.badgeLegacyUnverified")}</Badge>}
                               <p className="text-xs text-muted-foreground">{tx.groupName}</p>
                             </div>
                             <div className="flex space-x-2">
@@ -182,7 +197,7 @@ export default function Transactions() {
                                 variant={tx.status === "approved" ? "secondary" : "default"}
                                 className={`text-xs ${tx.status === "approved" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : ""}`}
                               >
-                                {tx.status === "approved" ? "Ready to Execute" : "Pending"}
+                                {tx.status === "approved" ? t("tx.readyToExecute") : t("tx.awaitingApproval")}
                               </Badge>
                             </div>
                           </div>
@@ -195,57 +210,58 @@ export default function Transactions() {
                             </div>
                             {!tx.isBatch && (
                               <div className="font-medium text-sm">
-                                {tx.amount} {tx.token}
+                                {tx.amountLabel || `${tx.amount} ${tx.token}`}
                               </div>
                             )}
                           </div>
 
                           <div className="flex items-center justify-between mt-2">
                             <div className="text-xs text-muted-foreground">
-                              Approvals: {tx.approvals}/{tx.requiredApprovals}
+                              {tx.chainSyncedAt ? t("tx.approvedCount", { approved: tx.approvals, total: tx.requiredApprovals }) : tx.onChainId ? t("tx.readingApprovals") : t("tx.localUnverified")}
                             </div>
-                            <div className="flex space-x-2">
-                              {tx.status === "approved" || tx.approvals >= tx.requiredApprovals ? (
+                            <div className="flex gap-3">
+                              {tx.chainSyncedAt && tx.status === "approved" ? (
                                 <Button
                                   size="sm"
                                   disabled={actionLoadingId === tx.id}
                                   onClick={(e) => handleExecute(tx.id, e)}
-                                  className="h-7 text-xs bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+                                  className="h-11 px-4 text-sm bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
                                 >
-                                  <Play className="h-3 w-3 mr-1" />
-                                  {actionLoadingId === tx.id ? "Executing..." : "Execute (PTB)"}
+                                  <Play className="h-4 w-4 mr-1" />
+                                  {actionLoadingId === tx.id ? t("tx.executing") : t("tx.executeOnChain")}
                                 </Button>
                               ) : (
                                 <>
                                   <Button
                                     size="sm"
                                     variant="outline"
-                                    disabled={actionLoadingId === tx.id}
-                                    onClick={(e) => handleReject(tx.id, e)}
-                                    className="h-7 text-xs border-red-200 text-red-500 hover:bg-red-50"
+                                    disabled={!!actionLoadingId || !address || !!tx.voteWeights?.[address] || tx.deadlineMs < Date.now()}
+                                    onClick={(event) => void handleVote(tx.id, true, event)}
+                                    className="h-11 px-4 text-sm border-red-200 text-red-500 hover:bg-red-50"
                                   >
-                                    <X className="h-3 w-3 mr-1" /> Reject
+                                    <X className="h-4 w-4 mr-1" /> {t("tx.reject")}
                                   </Button>
                                   <Button
                                     size="sm"
-                                    disabled={actionLoadingId === tx.id}
-                                    onClick={(e) => handleApprove(tx.id, e)}
-                                    className="h-7 text-xs bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 text-white"
+                                    disabled={!!actionLoadingId || !address || !!tx.voteWeights?.[address] || tx.deadlineMs < Date.now()}
+                                    onClick={(event) => void handleVote(tx.id, false, event)}
+                                    className="h-11 px-4 text-sm bg-primary text-primary-foreground"
                                   >
-                                    <Check className="h-3 w-3 mr-1" />
-                                    {actionLoadingId === tx.id ? "Signing..." : "Approve"}
+                                    <Check className="h-4 w-4 mr-1" /> {actionLoadingId === tx.id ? t("tx.signing") : t("tx.approve")}
                                   </Button>
                                 </>
                               )}
                             </div>
                           </div>
+                          {tx.syncError && <p role="alert" className="mt-2 text-xs text-destructive">{tx.syncError}</p>}
+                          {tx.rejectionSupported === false && <p className="mt-2 text-[11px] text-muted-foreground">{t("tx.rejectionUnsupported")}</p>}
                         </CardContent>
                       </Card>
                     </motion.div>
                   ))
                 ) : (
                   <div className="text-center py-8">
-                    <p className="text-muted-foreground">No pending transactions</p>
+                    <p className="text-muted-foreground">{t("tx.noPending")}</p>
                   </div>
                 )}
               </motion.div>
@@ -258,8 +274,16 @@ export default function Transactions() {
                 {completedTransactions.map((tx) => (
                   <motion.div key={tx.id} variants={item}>
                     <Card
-                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
+                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm cursor-pointer"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setSelectedTx({ id: tx.id, groupId: tx.groupId })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault()
+                          setSelectedTx({ id: tx.id, groupId: tx.groupId })
+                        }
+                      }}
                     >
                       <div className={`h-1 bg-gradient-to-r ${tx.color}`}></div>
                       <CardHeader className="p-3 pb-0">
@@ -270,9 +294,16 @@ export default function Transactions() {
                           </div>
                           <div className="flex space-x-2">
                             {getSpecialBadge(tx)}
-                            <Badge variant={tx.status === "executed" ? "outline" : "destructive"} className="text-xs">
-                              {tx.status === "executed" ? "Executed" : "Rejected"}
-                            </Badge>
+                            {/* `status` is persisted local state. Only a chain-synced
+                                row may claim the settlement outcome; otherwise the
+                                row says the outcome is unverified. */}
+                            {tx.chainSyncedAt ? (
+                              <Badge variant={tx.status === "executed" ? "outline" : "destructive"} className="text-xs">
+                                {tx.status === "executed" ? t("tx.executed") : t("tx.rejected")}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs text-amber-700 dark:text-amber-300">{t("tx.localOutcomeUnverified")}</Badge>
+                            )}
                           </div>
                         </div>
                       </CardHeader>
@@ -284,23 +315,25 @@ export default function Transactions() {
                           </div>
                           {!tx.isBatch && (
                             <div className="font-medium text-sm">
-                              {tx.amount} {tx.token}
+                              {tx.chainSyncedAt ? (tx.amountLabel || `${tx.amount} ${tx.token}`) : <span className="text-xs text-muted-foreground">{t("tx.amountUnverified")}</span>}
                             </div>
                           )}
                         </div>
 
                         <div className="flex items-center justify-between mt-2">
                           <div className="text-xs text-muted-foreground">
-                            {tx.status === "executed"
-                              ? `Executed: ${tx.executedAt ? new Date(tx.executedAt).toLocaleDateString() : "—"}`
-                              : `Rejected: ${tx.rejectedAt ? new Date(tx.rejectedAt).toLocaleDateString() : "—"}`}
+                            {!tx.chainSyncedAt
+                              ? t("tx.localUnverifiedFull")
+                              : tx.status === "executed"
+                                ? t("tx.executedAt", { date: tx.executedAt ? new Date(tx.executedAt).toLocaleDateString() : "—" })
+                                : t("tx.rejectedAt", { date: tx.rejectedAt ? new Date(tx.rejectedAt).toLocaleDateString() : "—" })}
                           </div>
                           <Button
                             size="sm"
                             variant="ghost"
-                            className="h-7 text-xs text-primary flex items-center gap-1"
+                            className="h-9 px-3 text-sm text-primary flex items-center gap-1"
                           >
-                            Details <ArrowRight className="h-3 w-3" />
+                            {t("tx.details")} <ArrowRight className="h-4 w-4" />
                           </Button>
                         </div>
                       </CardContent>

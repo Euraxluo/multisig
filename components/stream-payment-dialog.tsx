@@ -1,6 +1,14 @@
 "use client"
 
-import { useState } from "react"
+import { isValidSuiAddress, normalizeSuiAddress } from "@mysten/sui/utils"
+import { getUserGroups } from "@/lib/onchain-store"
+import { buildCreatePayment, PAYMENTS_PACKAGE_ID, paymentUnits, scheduledPaymentsReader, ZERO_SCOPE } from "@/lib/scheduled-payments-chain"
+import { assertTransactionAccount, getTransactionAccount, signAndExecuteWithWallet, type WalletTransactionResult } from "@/lib/sui-wallet-signer"
+import { acknowledgePendingTransaction, TransactionReceiptError } from "@/lib/pending-transactions"
+import { assertAssetOwner, createSubmissionGuard } from "@/lib/wallet-creation-state"
+import { usePaymentAssets } from "@/lib/use-payment-assets"
+import { usePendingCreation } from "@/lib/use-pending-creation"
+import { useState, useRef } from "react"
 import {
   Dialog,
   DialogContent,
@@ -15,11 +23,12 @@ import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { format, addDays, differenceInDays } from "date-fns"
+import { format, addDays, differenceInCalendarDays } from "date-fns"
 import { cn } from "@/lib/utils"
 import { CalendarIcon, Waves, ArrowRight } from "lucide-react"
 import { Slider } from "@/components/ui/slider"
 import { Textarea } from "@/components/ui/textarea"
+import { useI18n } from "@/components/i18n-provider"
 
 interface StreamPaymentDialogProps {
   open: boolean
@@ -28,48 +37,79 @@ interface StreamPaymentDialogProps {
 }
 
 export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPaymentDialogProps) {
+  const { t } = useI18n()
   const [recipient, setRecipient] = useState("")
   const [totalAmount, setTotalAmount] = useState("")
-  const [token, setToken] = useState("USDC")
-  const [startDate, setStartDate] = useState<Date | undefined>(new Date())
+  const [token, setToken] = useState(normalizeSuiAddress("0x2") + "::sui::SUI")
+  const [startDate, setStartDate] = useState<Date | undefined>(addDays(new Date(), 1))
   const [endDate, setEndDate] = useState<Date | undefined>(addDays(new Date(), 30))
   const [description, setDescription] = useState("")
   const [isProcessing, setIsProcessing] = useState(false)
-  const [flowRate, setFlowRate] = useState(50) // 0-100 percentage of linear flow
+  const [flowRate, setFlowRate] = useState(50) // Percentage vested during the second half.
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const { assets, assetOwnerKey, deploymentError } = usePaymentAssets(open)
+  const scope = groupId ? getUserGroups().find(group => group.id === groupId)?.orgObjectId : ZERO_SCOPE
+  const receiptScope = `${scope ? normalizeSuiAddress(scope) : groupId}:${PAYMENTS_PACKAGE_ID}`
+  const recovery = usePendingCreation(open, "create-stream", receiptScope)
+  const submitting = useRef(createSubmissionGuard())
+  const selectedAsset = assets.find(asset => asset.coinType === token)
+  const canSave = Boolean(selectedAsset && selectedAsset.decimals !== null && !deploymentError && isValidSuiAddress(recipient.trim()) && Number.isFinite(Number(totalAmount)) && Number(totalAmount) > 0 && startDate && endDate && differenceInCalendarDays(endDate, startDate) > 0)
 
-  const tokens = ["SUI", "USDC", "USDT"]
 
-  const handleSubmit = () => {
-    if (!recipient.trim() || !totalAmount.trim()) return
+  const finishCreation = async (result: WalletTransactionResult) => {
+    recovery.setPending(result.receipt)
+    let found = false
+    for (const id of result.createdObjects) {
+      try {
+        const payment = await scheduledPaymentsReader.readPayment(id)
+        if (payment.scope === normalizeSuiAddress(scope || ZERO_SCOPE) && payment.schedule.$kind === "Stream") { found = true; break }
+      } catch { /* PaymentCap and other created objects are not streams. */ }
+    }
+    if (!found) throw new TransactionReceiptError(t("payments.streamErrNotRead"), result.receipt)
+    acknowledgePendingTransaction(result.receipt)
+    recovery.setPending(undefined)
+    window.dispatchEvent(new CustomEvent("sui-recurring-updated", { detail: { digest: result.digest } }))
+    onOpenChange(false)
+  }
+  const handleResume = async () => {
+    if (!submitting.current.enter()) return
+    setIsProcessing(true); setSaveError(null)
+    try { await finishCreation(await recovery.resume(getTransactionAccount())) }
+    catch (error) {
+      if (error instanceof TransactionReceiptError) recovery.setPending(error.status === "failed" ? undefined : error.receipt)
+      setSaveError(error instanceof Error ? error.message : t("payments.schedErrResumeUnconfirmed"))
+    } finally { submitting.current.leave(); setIsProcessing(false) }
+  }
+  const handleSubmit = async () => {
+    if (!canSave || recovery.blocked || !startDate || !endDate || selectedAsset?.decimals == null || !submitting.current.enter()) return
+    setSaveError(null)
     setIsProcessing(true)
     try {
-      const stored = JSON.parse(localStorage.getItem("sui_recurring_payments") || "[]")
-      const newStream = {
-        id: `stream-${Date.now()}`,
-        type: "stream",
-        name: description.trim() || `Stream payment to ${recipient.slice(0, 8)}...`,
-        recipient: recipient.trim(),
-        amount: totalAmount.trim(),
-        token,
-        startDate: startDate || new Date(),
-        endDate: endDate || addDays(new Date(), 30),
-        progress: 0,
-        status: "active",
-      }
-      localStorage.setItem("sui_recurring_payments", JSON.stringify([newStream, ...stored]))
-      window.dispatchEvent(new CustomEvent("sui-recurring-updated", { detail: newStream }))
-      window.dispatchEvent(new Event("storage"))
-    } catch (e) {
-      console.warn("Failed to save stream payment", e)
+      const account = getTransactionAccount()
+      assertAssetOwner(assetOwnerKey, account)
+      if (!scope) throw new Error(t("payments.schedErrNoOrg"))
+      await scheduledPaymentsReader.requireDeployment()
+      assertTransactionAccount(account)
+      assertAssetOwner(assetOwnerKey, getTransactionAccount())
+      if (startDate.getTime() <= Date.now()) throw new Error(t("payments.schedErrStartInFuture"))
+      const funding = paymentUnits(totalAmount, selectedAsset.decimals)
+      if (funding > selectedAsset.rawBalance) throw new Error(t("payments.streamErrInsufficient"))
+      const tx = buildCreatePayment({ recipient: normalizeSuiAddress(recipient.trim()), scope, name: description.trim() || "Stream payment", coinType: token, funding, startMs: BigInt(startDate.getTime()), endMs: BigInt(endDate.getTime()), curve: flowRate })
+      tx.setSender(account.address)
+      const result = await signAndExecuteWithWallet(tx, { action: "create-stream", scope: receiptScope, expectedAccount: account, metadata: { name: description.trim() || "Stream payment", coinType: token, funding: funding.toString(), recipient: normalizeSuiAddress(recipient.trim()) } })
+      await finishCreation(result)
+    } catch (error) {
+      if (error instanceof TransactionReceiptError) recovery.setPending(error.status === "failed" ? undefined : error.receipt)
+      setSaveError(error instanceof Error ? error.message : t("payments.streamErrCreateFailed"))
     } finally {
+      submitting.current.leave()
       setIsProcessing(false)
-      onOpenChange(false)
     }
   }
 
   const getDurationInDays = () => {
     if (!startDate || !endDate) return 0
-    return differenceInDays(endDate, startDate)
+    return Math.max(0, differenceInCalendarDays(endDate, startDate))
   }
 
   const getFlowRatePerDay = () => {
@@ -79,23 +119,21 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
   }
 
   const getFlowCurveDescription = () => {
-    if (flowRate < 30) return "Front-loaded (higher amounts released earlier)"
-    if (flowRate > 70) return "Back-loaded (higher amounts released later)"
-    return "Linear (equal amounts released over time)"
+    return t("payments.streamCurveDesc", { early: 100 - flowRate, late: flowRate })
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[500px] max-h-[90dvh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Stream Payment</DialogTitle>
-          <DialogDescription>Set up a continuous stream of payments over time</DialogDescription>
+          <DialogTitle>Create Funded Stream Payment</DialogTitle>
+          <DialogDescription>{t("payments.streamDescription")}{groupId ? ` ${t("payments.schedDescriptionGroup")}` : ""}</DialogDescription>
         </DialogHeader>
 
         {isProcessing ? (
           <div className="py-8 flex flex-col items-center justify-center">
             <div className="h-12 w-12 rounded-full border-4 border-primary border-t-transparent animate-spin mb-4"></div>
-            <p className="font-medium">Creating stream payment...</p>
+            <p className="font-medium">Awaiting wallet and chain confirmation...</p>
           </div>
         ) : (
           <div className="space-y-4 py-4">
@@ -107,6 +145,7 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
                 value={recipient}
                 onChange={(e) => setRecipient(e.target.value)}
               />
+              <p className="text-xs text-muted-foreground">Recipient is immutable once funded. Cancellation settles vested funds before refunding the remainder.</p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -115,6 +154,8 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
                 <Input
                   id="amount"
                   type="number"
+                  min="0"
+                  step="any"
                   placeholder="0.00"
                   value={totalAmount}
                   onChange={(e) => setTotalAmount(e.target.value)}
@@ -127,9 +168,9 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
                     <SelectValue placeholder="Select token" />
                   </SelectTrigger>
                   <SelectContent>
-                    {tokens.map((t) => (
-                      <SelectItem key={t} value={t}>
-                        {t}
+                    {assets.map((asset) => (
+                      <SelectItem key={asset.coinType} value={asset.coinType}>
+                        {asset.symbol} · {asset.balance} · {asset.coinType.slice(0, 8)}…{asset.coinType.split("::").at(-1)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -139,7 +180,7 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
 
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Start Date</Label>
+                <Label>Planned Start Date</Label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
@@ -169,7 +210,7 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
               </div>
 
               <div className="space-y-2">
-                <Label>End Date</Label>
+                <Label>Planned End Date</Label>
                 <Popover>
                   <PopoverTrigger asChild>
                     <Button
@@ -197,7 +238,7 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
 
             <div className="space-y-2">
               <div className="flex items-center justify-between">
-                <Label>Flow Rate Curve</Label>
+                <Label>Flow Curve</Label>
                 <span className="text-xs text-muted-foreground">{getFlowCurveDescription()}</span>
               </div>
               <Slider
@@ -229,14 +270,15 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
             <div className="bg-muted/50 p-3 rounded-lg space-y-2">
               <h4 className="text-sm font-medium flex items-center">
                 <Waves className="h-4 w-4 mr-2" />
-                Stream Summary
+                Funded Stream Summary
               </h4>
               <div className="text-sm space-y-1">
-                <p>Total amount: {totalAmount ? `${totalAmount} ${token}` : "Not specified"}</p>
-                <p>Duration: {getDurationInDays()} days</p>
+                <p>Planned amount: {totalAmount ? `${totalAmount} ${selectedAsset?.symbol || ""}` : "Not specified"}</p>
+                <p>Planned duration: {getDurationInDays()} days</p>
                 <p>
-                  Average flow rate: {getFlowRatePerDay()} {token}/day
+                  Estimated daily average: {getFlowRatePerDay()} {selectedAsset?.symbol}/day
                 </p>
+                <p className="text-xs text-muted-foreground">{t("payments.streamFundingNote")}</p>
                 <div className="flex items-center mt-2">
                   <div className="text-xs text-muted-foreground">
                     {startDate ? format(startDate, "MMM d") : "Start"}
@@ -259,6 +301,10 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
           </div>
         )}
 
+        {recovery.pending && <div role="status" className="text-xs space-y-2 break-all"><p>{t("payments.schedPendingPrefix")}{recovery.pending.digest || t("payments.schedPendingNoDigest")}{t("payments.schedPendingSuffix")}</p>{!recovery.pending.persistent && <p>{t("payments.schedStorageWarning")}</p>}<Button variant="outline" disabled={isProcessing || !recovery.pending.digest} onClick={() => void handleResume()}>{t("payments.schedResumeButton")}</Button></div>}
+        {recovery.receiptError && <p role="alert" className="text-sm text-destructive">{recovery.receiptError}</p>}
+        {deploymentError && <p role="alert" className="text-sm text-destructive">{deploymentError}</p>}
+        {saveError && <p role="alert" className="text-sm text-destructive">{saveError}</p>}
         <DialogFooter>
           {!isProcessing && (
             <>
@@ -267,11 +313,11 @@ export function StreamPaymentDialog({ open, onOpenChange, groupId }: StreamPayme
               </Button>
               <Button
                 onClick={handleSubmit}
-                disabled={!recipient || !totalAmount || !startDate || !endDate}
+                disabled={!canSave || recovery.blocked}
                 className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
               >
                 <ArrowRight className="h-4 w-4 mr-2" />
-                Create Stream
+                Fund and Create Stream
               </Button>
             </>
           )}

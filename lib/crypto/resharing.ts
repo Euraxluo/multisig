@@ -15,6 +15,7 @@ import {
   createCommitments,
   verifyShareCommitment,
 } from './vss';
+import { bytesEqual, bytesToHex } from './bytes';
 
 export interface ReshareRound1Output {
   senderId: string;
@@ -152,9 +153,9 @@ export function verifyDealerHonestyProof(
       return false;
     }
 
-    const c0Point = ed25519.Point.fromHex(Buffer.from(proof.constantCommitment).toString('hex'));
-    const yiPoint = ed25519.Point.fromHex(Buffer.from(proof.verificationShareY).toString('hex'));
-    const rPoint = ed25519.Point.fromHex(Buffer.from(proof.noncePointR).toString('hex'));
+    const c0Point = ed25519.Point.fromHex(bytesToHex(proof.constantCommitment));
+    const yiPoint = ed25519.Point.fromHex(bytesToHex(proof.verificationShareY));
+    const rPoint = ed25519.Point.fromHex(bytesToHex(proof.noncePointR));
 
     if (
       c0Point.equals(ed25519.Point.ZERO) ||
@@ -166,7 +167,7 @@ export function verifyDealerHonestyProof(
 
     // 检查历史验证份额是否与预期一致 (防止虚构身份)
     if (expectedVerificationShareY && expectedVerificationShareY.length === 32) {
-      if (!Buffer.from(proof.verificationShareY).equals(Buffer.from(expectedVerificationShareY))) {
+      if (!bytesEqual(proof.verificationShareY, expectedVerificationShareY)) {
         return false;
       }
     }
@@ -340,7 +341,7 @@ export class ResharingNode {
     }
 
     if (originalGroupPublicKey && newCommitteeShares && newCommitteeShares.length >= this.newThreshold) {
-      if (!Buffer.from(computedGroupPublicKey).equals(Buffer.from(originalGroupPublicKey))) {
+      if (!bytesEqual(computedGroupPublicKey, originalGroupPublicKey)) {
         throw new Error(
           `[Resharing-${this.id}] Recomputed group public key does not match expected group public key`
         );
@@ -352,7 +353,7 @@ export class ResharingNode {
       participantIndex: this.index,
       newPrivateShare: updatedShare,
       groupPublicKey: computedGroupPublicKey,
-      groupPublicKeyHex: `0x${Buffer.from(computedGroupPublicKey).toString('hex')}`,
+      groupPublicKeyHex: `0x${bytesToHex(computedGroupPublicKey)}`,
     };
   }
 
@@ -541,7 +542,7 @@ export class GennaroResharingParticipant {
     }
 
     if (originalGroupPublicKey && originalGroupPublicKey.length === 32) {
-      if (!Buffer.from(computedGroupPublicKey).equals(Buffer.from(originalGroupPublicKey))) {
+      if (!bytesEqual(computedGroupPublicKey, originalGroupPublicKey)) {
         throw new Error(
           `[Gennaro-${this.id}] Recomputed group public key does not match original group public key`
         );
@@ -553,7 +554,7 @@ export class GennaroResharingParticipant {
       participantIndex: this.index,
       newPrivateShare: accumulatedShare,
       groupPublicKey: computedGroupPublicKey,
-      groupPublicKeyHex: `0x${Buffer.from(computedGroupPublicKey).toString('hex')}`,
+      groupPublicKeyHex: `0x${bytesToHex(computedGroupPublicKey)}`,
     };
   }
 }

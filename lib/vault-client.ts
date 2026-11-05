@@ -1,917 +1,366 @@
-import { Transaction } from '@mysten/sui/transactions';
+/**
+ * AgentVaultClient 的前端薄适配层。
+ *
+ * PTB 构造与域摘要全部委托给 link 的 `multisig` SDK（单一事实源）；本文件只
+ * 保留跨 @mysten/sui 版本边界（SDK 2.33 / 本仓 2.36，Transaction 私有字段
+ * 互不兼容）所需的一次性转换：SDK 自建 PTB，返回值 `as unknown as Transaction`
+ * 断言为本地类型。把本地 Transaction 传进 SDK 永远不可行。
+ *
+ * 前端独有的 UX 校验（trim 非空、严格 10000 bps、未来到期）保留在此层，
+ * 在委托前先行拒绝，错误文案与既有测试逐字一致。
+ */
+import type { Transaction, TransactionObjectArgument } from '@mysten/sui/transactions';
+import { t } from './i18n/t';
+import {
+  AgentVaultClient as SdkAgentVaultClient,
+  CHAIN_IDS,
+  DEFAULT_AGENT_VAULT_PACKAGE_ID,
+  buildCreateCreatorMonetizedChannel,
+  buildCreateChannelWithStake,
+  buildCreateSharedSubagentMessagingCap,
+  buildJoinChannel,
+  buildMemberUnstakeAndLeave,
+  buildPostMessageBatch,
+  buildPostMessagesSequential,
+  buildRevokeSubagentMessagingCap,
+  computeKeyRotationDigest as sdkKeyRotationDigest,
+  computeProposalDigest as sdkProposalDigest,
+  computeRosterUpdateDigest as sdkRosterDigest,
+  computeThresholdApprovalDigest as sdkApprovalDigest,
+  type VaultClientConfig,
+} from 'multisig/agent-vault';
 
-export const DEFAULT_AGENT_VAULT_PACKAGE_ID = '0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36';
+export { DEFAULT_AGENT_VAULT_PACKAGE_ID };
+export type { VaultClientConfig };
 
-export interface VaultClientConfig {
-  packageId?: string;
-  defaultCoinType?: string;
-}
+/** Either an object id or an argument already produced by this transaction. */
+type CoinInput = string | TransactionObjectArgument;
+
+/** SDK(2.33) Transaction → 本地(2.36) Transaction 的边界断言。 */
+const ptb = (sdkTx: unknown): Transaction => sdkTx as Transaction;
 
 export class AgentVaultClient {
+  public static readonly CLOCK_OBJECT_ID = SdkAgentVaultClient.CLOCK_OBJECT_ID;
+
   public readonly packageId: string;
   public readonly defaultCoinType: string;
+  private readonly sdk: SdkAgentVaultClient;
 
   constructor(config?: VaultClientConfig) {
     this.packageId = config?.packageId ?? DEFAULT_AGENT_VAULT_PACKAGE_ID;
     this.defaultCoinType = config?.defaultCoinType ?? '0x2::sui::SUI';
-  }
-
-  /**
-   * 1. 部署/初始化金库，产出 MasterCap
-   */
-  public buildInitializeVaultPTB(coinType?: string): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::initialize_vault`,
-      typeArguments: [typeArg],
-      arguments: [],
-    });
-    return tx;
-  }
-
-  /**
-   * 存入资金到金库
-   */
-  public buildDepositPTB(vaultId: string, coinInput: any, coinType?: string): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::deposit`,
-      typeArguments: [typeArg],
-      arguments: [tx.object(vaultId), typeof coinInput === 'string' ? tx.object(coinInput) : coinInput],
-    });
-    return tx;
-  }
-
-  /**
-   * Master 提现本金
-   */
-  public buildWithdrawPTB(
-    masterCapId: string,
-    vaultId: string,
-    amount: bigint | number,
-    recipient: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::withdraw`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(masterCapId),
-        tx.object(vaultId),
-        tx.pure.u64(BigInt(amount)),
-        tx.pure.address(recipient),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 2. Master 颁发 OperatorCap 给运维经理
-   */
-  public buildIssueOperatorCapPTB(
-    masterCapId: string,
-    vaultId: string,
-    operatorAddress: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::issue_operator_cap`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(masterCapId),
-        tx.object(vaultId),
-        tx.pure.address(operatorAddress),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 3. Operator 孵化 AI Agent 虚拟打工卡
-   */
-  public buildSpawnAgentCardPTB(
-    opCapId: string,
-    vaultId: string,
-    agentAddress: string,
-    dailyBudget: bigint | number,
-    serviceHash: Uint8Array | string = new Uint8Array(0),
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    const hashBytes = typeof serviceHash === 'string' ? new TextEncoder().encode(serviceHash) : serviceHash;
-
-    tx.moveCall({
-      target: `${this.packageId}::vault::spawn_agent_card`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(opCapId),
-        tx.object(vaultId),
-        tx.pure.address(agentAddress),
-        tx.pure.u64(BigInt(dailyBudget)),
-        tx.pure.vector('u8', Array.from(hashBytes)),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * Operator 调整 Agent 每日额度
-   */
-  public buildSetAgentBudgetPTB(
-    opCapId: string,
-    vaultId: string,
-    agentCapId: string,
-    newDailyBudget: bigint | number,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::set_agent_budget`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(opCapId),
-        tx.object(vaultId),
-        tx.object(agentCapId),
-        tx.pure.u64(BigInt(newDailyBudget)),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * Operator 暂停 Agent
-   */
-  public buildPauseAgentPTB(
-    opCapId: string,
-    vaultId: string,
-    agentCapId: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::pause_agent`,
-      typeArguments: [typeArg],
-      arguments: [tx.object(opCapId), tx.object(vaultId), tx.object(agentCapId)],
-    });
-    return tx;
-  }
-
-  /**
-   * Operator 恢复 Agent
-   */
-  public buildResumeAgentPTB(
-    opCapId: string,
-    vaultId: string,
-    agentCapId: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::resume_agent`,
-      typeArguments: [typeArg],
-      arguments: [tx.object(opCapId), tx.object(vaultId), tx.object(agentCapId)],
-    });
-    return tx;
-  }
-
-  /**
-   * 4. Agent 执行微支付 (核心沙盒防爆与 Epoch 限额扣减)
-   */
-  public buildSpendX402BudgetPTB(
-    agentCapId: string,
-    vaultId: string,
-    amount: bigint | number,
-    recipient: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::spend_x402_budget`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(agentCapId),
-        tx.object(vaultId),
-        tx.pure.u64(BigInt(amount)),
-        tx.pure.address(recipient),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 5. Master 一键单向紧急熔断并扫走金库余额 (Purge)
-   */
-  public buildEmergencyPurgePTB(
-    masterCapId: string,
-    vaultId: string,
-    sweepRecipient: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::vault::emergency_unilateral_purge`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(masterCapId),
-        tx.object(vaultId),
-        tx.pure.address(sweepRecipient),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 6. 创建密码学组织共享对象
-   */
-  public buildCreateOrganizationPTB(
-    groupPk: Uint8Array,
-    thresholdWeight: bigint | number,
-    members: string[],
-    weights: (bigint | number)[]
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::cryptographic_org::create_organization_entry`,
-      typeArguments: [],
-      arguments: [
-        tx.pure.vector('u8', Array.from(groupPk)),
-        tx.pure.u64(BigInt(thresholdWeight)),
-        tx.pure.vector('address', members),
-        tx.pure.vector('u64', weights.map(w => BigInt(w))),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 7. 执行门限聚合签名提案
-   */
-  public buildExecuteThresholdProposalPTB(
-    orgId: string,
-    arg1: Uint8Array | bigint | number,
-    arg2: Uint8Array,
-    arg3?: Uint8Array | number,
-    arg4?: number
-  ): Transaction {
-    const tx = new Transaction();
-    let nonce: bigint;
-    let payload: Uint8Array;
-    let frostSignature: Uint8Array;
-    let actionType: number;
-
-    if (arg1 instanceof Uint8Array) {
-      // 兼容旧签名: (orgId, payload, frostSig, actionType)
-      nonce = 1n;
-      payload = arg1;
-      frostSignature = arg2;
-      actionType = typeof arg3 === 'number' ? arg3 : 1;
-    } else {
-      // 标准新签名: (orgId, nonce, payload, frostSig, actionType)
-      nonce = BigInt(arg1);
-      payload = arg2;
-      frostSignature = (arg3 as Uint8Array) ?? new Uint8Array(64);
-      actionType = typeof arg4 === 'number' ? arg4 : 1;
-    }
-
-    tx.moveCall({
-      target: `${this.packageId}::cryptographic_org::execute_threshold_proposal`,
-      typeArguments: [],
-      arguments: [
-        tx.object(orgId),
-        tx.pure.u64(nonce),
-        tx.pure.vector('u8', Array.from(payload)),
-        tx.pure.vector('u8', Array.from(frostSignature)),
-        tx.pure.u8(actionType),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 8. 推进组织换届纪元 (Resharing 之后，保留公钥但递增版本)
-   */
-  public buildAdvanceOrganizationEpochPTB(
-    orgId: string,
-    nonce: bigint | number,
-    frostSignature: Uint8Array
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::cryptographic_org::advance_organization_epoch`,
-      typeArguments: [],
-      arguments: [
-        tx.object(orgId),
-        tx.pure.u64(BigInt(nonce)),
-        tx.pure.vector('u8', Array.from(frostSignature)),
-      ],
-    });
-    return tx;
-  }
-
-  /**
-   * 9. 完全轮换组织主公钥 (应对拜占庭恶意节点或旧分片泄露场景)
-   */
-  public buildRotateGroupKeyPTB(
-    orgId: string,
-    nonce: bigint | number,
-    newGroupPk: Uint8Array,
-    frostSignature: Uint8Array
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::cryptographic_org::rotate_group_key`,
-      typeArguments: [],
-      arguments: [
-        tx.object(orgId),
-        tx.pure.u64(BigInt(nonce)),
-        tx.pure.vector('u8', Array.from(newGroupPk)),
-        tx.pure.vector('u8', Array.from(frostSignature)),
-      ],
-    });
-    return tx;
+    this.sdk = new SdkAgentVaultClient(config);
   }
 
   // ------------------------------------------------------------------
-  // DKG 会话 (dkg_committee)
+  // 金库 — 全部直通 SDK
   // ------------------------------------------------------------------
 
-  /** Clock 共享对象固定地址 (Sui 框架时钟)。 */
-  public static readonly CLOCK_OBJECT_ID =
-    '0x0000000000000000000000000000000000000000000000000000000000000006';
-
-  /** 创建限时门限 DKG 会话。返回 PTB；session_id 从 SessionCreatedEvent 读取。 */
-  public buildCreateDkgSessionPTB(
-    threshold: bigint | number,
-    participants: string[],
-    deadlineTimestampMs: bigint | number
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::create_dkg_session`,
-      typeArguments: [],
-      arguments: [
-        tx.pure.u64(BigInt(threshold)),
-        tx.pure.vector('address', participants),
-        tx.pure.u64(BigInt(deadlineTimestampMs)),
-      ],
-    });
-    return tx;
+  public buildInitializeVaultPTB(recipientOrCoinType?: string, secondArg?: string): Transaction {
+    return ptb(this.sdk.buildInitializeVaultPTB(recipientOrCoinType, secondArg));
+  }
+  public buildDepositPTB(vaultId: string, coinInput: CoinInput, coinType?: string): Transaction {
+    return ptb(this.sdk.buildDepositPTB(vaultId, coinInput as unknown as string, coinType));
+  }
+  public buildWithdrawPTB(masterCapId: string, vaultId: string, amount: bigint | number, recipient: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildWithdrawPTB(masterCapId, vaultId, amount, recipient, coinType));
+  }
+  public buildIssueOperatorCapPTB(masterCapId: string, vaultId: string, operatorAddress: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildIssueOperatorCapPTB(masterCapId, vaultId, operatorAddress, coinType));
+  }
+  public buildSpawnAgentCardPTB(opCapId: string, vaultId: string, agentAddress: string, dailyBudget: bigint | number, serviceHash: Uint8Array | string = new Uint8Array(0), coinType?: string): Transaction {
+    return ptb(this.sdk.buildSpawnAgentCardPTB(opCapId, vaultId, agentAddress, dailyBudget, serviceHash, coinType));
+  }
+  public buildSetAgentBudgetPTB(opCapId: string, vaultId: string, agentCapId: string, newDailyBudget: bigint | number, coinType?: string): Transaction {
+    return ptb(this.sdk.buildSetAgentBudgetPTB(opCapId, vaultId, agentCapId, newDailyBudget, coinType));
+  }
+  public buildPauseAgentPTB(opCapId: string, vaultId: string, agentCapId: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildPauseAgentPTB(opCapId, vaultId, agentCapId, coinType));
+  }
+  public buildResumeAgentPTB(opCapId: string, vaultId: string, agentCapId: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildResumeAgentPTB(opCapId, vaultId, agentCapId, coinType));
+  }
+  public buildSpendX402BudgetPTB(agentCapId: string, vaultId: string, amount: bigint | number, recipient: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildSpendX402BudgetPTB(agentCapId, vaultId, amount, recipient, coinType));
+  }
+  public buildEmergencyPurgePTB(masterCapId: string, vaultId: string, sweepRecipient: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildEmergencyPurgePTB(masterCapId, vaultId, sweepRecipient, coinType));
   }
 
-  /** 参与者链上确认。 */
+  // ------------------------------------------------------------------
+  // 密码学组织 / 门限治理 — 直通
+  // ------------------------------------------------------------------
+
+  public buildCreateOrganizationPTB(groupPk: Uint8Array, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[]): Transaction {
+    return ptb(this.sdk.buildCreateOrganizationPTB(groupPk, thresholdWeight, members, weights));
+  }
+  public buildAdvanceOrganizationEpochPTB(orgId: string, nonce: bigint | number, frostSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildAdvanceOrganizationEpochPTB(orgId, nonce, frostSignature));
+  }
+  public buildRotateGroupKeyPTB(orgId: string, nonce: bigint | number, newGroupPk: Uint8Array, frostSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildRotateGroupKeyPTB(orgId, nonce, newGroupPk, frostSignature));
+  }
+  public buildUpdateOrganizationRosterPTB(orgId: string, nonce: bigint | number, priorMembers: string[], members: string[], weights: (bigint | number)[], newThresholdWeight: bigint | number, frostSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildUpdateOrganizationRosterPTB(orgId, nonce, priorMembers, members, weights, newThresholdWeight, frostSignature));
+  }
+
+  /** 资产托管：创建共享托管金库（new + share；正权重成员发起）。 */
+  public buildCreateAssetCustodyPTB(orgId: string): Transaction {
+    return ptb(this.sdk.buildCreateAssetCustodyPTB(orgId));
+  }
+
+  /** 资产托管：存入一件 owned 对象（动态子对象托管，原 ID 仍可独立读取）。 */
+  public buildDepositAssetPTB(custodyId: string, orgId: string, assetType: string, assetId: string): Transaction {
+    return ptb(this.sdk.buildDepositAssetPTB(custodyId, orgId, assetType, assetId));
+  }
+
+  /** 资产托管：发起动用提案（borrow 借出一个 PTB / release 永久转出，收款人冻结在提案里）。 */
+  public buildCreateCustodyProposalPTB(input: {
+    custodyId: string; orgId: string; assetType: string; kind: number; slot: bigint | number;
+    title: string | Uint8Array; deadlineMs: bigint | number; recipient?: string;
+  }): Transaction {
+    return ptb(this.sdk.buildCreateCustodyProposalPTB(input));
+  }
+
+  /** 资产托管：赞成 / 否决（claimedWeight 须与链上名册一致）。 */
+  public buildSubmitCustodyVotePTB(proposalId: string, orgId: string, claimedWeight: bigint | number): Transaction {
+    return ptb(this.sdk.buildSubmitCustodyVotePTB(proposalId, orgId, claimedWeight));
+  }
+
+  public buildRejectCustodyVotePTB(proposalId: string, orgId: string): Transaction {
+    return ptb(this.sdk.buildRejectCustodyVotePTB(proposalId, orgId));
+  }
+
+  /** 资产托管：执行转出（资产转给提案冻结的收款人）。 */
+  public buildExecuteReleasePTB(custodyId: string, proposalId: string, orgId: string, assetType: string): Transaction {
+    return ptb(this.sdk.buildExecuteReleasePTB(custodyId, proposalId, orgId, assetType));
+  }
+
+  /**
+   * 资产托管升级模板：借出 → 授权 → 升级 → 提交 → 归还 一笔完成。
+   * 六命令 PTB 全在 SDK 侧构建后一次跨界（模板内部有 Upgrade 命令，不可拆）。
+   */
+  public buildCustodyUpgradeTemplatePTB(input: {
+    custodyId: string; proposalId: string; orgId: string;
+    modules: string[] | number[][]; dependencies: string[]; digest32: Uint8Array;
+    currentPackageId: string; gasBudgetMist?: bigint;
+  }): Transaction {
+    return ptb(this.sdk.buildCustodyUpgradeTemplatePTB(input));
+  }
+  public buildCreateOrganizationFromSessionPTB(sessionId: string, thresholdWeight: bigint | number): Transaction {
+    return ptb(this.sdk.buildCreateOrganizationFromSessionPTB(sessionId, thresholdWeight));
+  }
+
+  // ------------------------------------------------------------------
+  // DKG 会话 (dkg_committee) — 直通
+  // ------------------------------------------------------------------
+
+  public buildCreateDkgSessionPTB(threshold: bigint | number, participants: string[], deadlineTimestampMs: bigint | number): Transaction {
+    return ptb(this.sdk.buildCreateDkgSessionPTB(threshold, participants, deadlineTimestampMs));
+  }
   public buildConfirmParticipantPTB(sessionId: string): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::confirm_participant`,
-      typeArguments: [],
-      arguments: [tx.object(sessionId), tx.object(AgentVaultClient.CLOCK_OBJECT_ID)],
-    });
-    return tx;
+    return ptb(this.sdk.buildConfirmParticipantPTB(sessionId));
   }
-
-  /** Round 1 提交多项式承诺。 */
   public buildSubmitCommitmentPTB(sessionId: string, commitmentBytes: Uint8Array): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::submit_commitment`,
-      typeArguments: [],
-      arguments: [
-        tx.object(sessionId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.vector('u8', Array.from(commitmentBytes)),
-      ],
-    });
-    return tx;
+    return ptb(this.sdk.buildSubmitCommitmentPTB(sessionId, commitmentBytes));
   }
-
-  /** 写入密态信箱份额（sender/recipient 均须为参与者；首写优先，不可覆盖）。 */
-  public buildDepositMailboxSharePTB(
-    sessionId: string,
-    recipient: string,
-    encryptedPayload: Uint8Array
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::deposit_mailbox_share`,
-      typeArguments: [],
-      arguments: [
-        tx.object(sessionId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.address(recipient),
-        tx.pure.vector('u8', Array.from(encryptedPayload)),
-      ],
-    });
-    return tx;
+  public buildRegisterEncryptionKeyPTB(sessionId: string, encryptionPublicKey: Uint8Array): Transaction {
+    return ptb(this.sdk.buildRegisterEncryptionKeyPTB(sessionId, encryptionPublicKey));
   }
-
-  /**
-   * 一次性提交承诺 + 给多名收件人的密态份额（对应 Move 的 submit_async_package）。
-   */
-  public buildSubmitAsyncPackagePTB(
-    sessionId: string,
-    commitmentBytes: Uint8Array,
-    recipients: string[],
-    encryptedPayloads: Uint8Array[]
-  ): Transaction {
-    if (recipients.length !== encryptedPayloads.length) {
-      throw new Error('recipients and encryptedPayloads length mismatch');
-    }
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::submit_async_package`,
-      typeArguments: [],
-      arguments: [
-        tx.object(sessionId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.vector('u8', Array.from(commitmentBytes)),
-        tx.pure.vector('address', recipients),
-        (tx.pure as any).vector('vector<u8>', encryptedPayloads.map(p => Array.from(p))),
-      ],
-    });
-    return tx;
+  public buildDepositMailboxSharePTB(sessionId: string, recipient: string, encryptedPayload: Uint8Array): Transaction {
+    return ptb(this.sdk.buildDepositMailboxSharePTB(sessionId, recipient, encryptedPayload));
   }
-
-  /**
-   * v2 固化：要求 FROST 聚合签名绑定 (SESSION_CERT_V1: || bcs(session_id) || group_pk)，
-   * 由 group_pk 的门限成员钥匙签名，防止调用方编造公钥。
-   */
-  public buildFinalizeSessionV2PTB(
-    sessionId: string,
-    groupPublicKey: Uint8Array,
-    frostSignature: Uint8Array
-  ): Transaction {
-    if (groupPublicKey.length !== 32) throw new Error('groupPublicKey must be 32 bytes');
-    if (frostSignature.length !== 64) throw new Error('frostSignature must be 64 bytes');
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::finalize_session_v2`,
-      typeArguments: [],
-      arguments: [
-        tx.object(sessionId),
-        tx.pure.vector('u8', Array.from(groupPublicKey)),
-        tx.pure.vector('u8', Array.from(frostSignature)),
-      ],
-    });
-    return tx;
+  public buildSubmitAsyncPackagePTB(sessionId: string, commitmentBytes: Uint8Array, recipients: string[], encryptedPayloads: Uint8Array[]): Transaction {
+    return ptb(this.sdk.buildSubmitAsyncPackagePTB(sessionId, commitmentBytes, recipients, encryptedPayloads));
   }
-
-  /** 到期且法定人数不足时任何人触发链上作废。 */
+  /** 现行 attest_group_key 入口不再读 Clock；clockId 仅保留兼容旧签名，忽略。 */
+  public buildAttestGroupKeyPTB(sessionId: string, groupPublicKey: Uint8Array, _clockId = AgentVaultClient.CLOCK_OBJECT_ID): Transaction {
+    return ptb(this.sdk.buildAttestGroupKeyPTB(sessionId, groupPublicKey));
+  }
+  public buildFinalizeSessionPTB(sessionId: string, groupPublicKey: Uint8Array): Transaction {
+    return ptb(this.sdk.buildFinalizeSessionPTB(sessionId, groupPublicKey));
+  }
   public buildHandleSessionTimeoutPTB(sessionId: string): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::dkg_committee::handle_session_timeout`,
-      typeArguments: [],
-      arguments: [tx.object(sessionId)],
-    });
-    return tx;
+    return ptb(this.sdk.buildHandleSessionTimeoutPTB(sessionId));
   }
 
   // ------------------------------------------------------------------
-  // 全异步治理提案 (asynchronous_proposal) —— 链上待签提案 + 真金库转账
+  // 全异步治理提案 (asynchronous_proposal) — 直通
   // ------------------------------------------------------------------
 
-  /** 发起转账提案（调用者必须是 org 成员；threshold 自动取自 org）。 */
-  public buildCreateTransferProposalPTB(
-    orgId: string,
-    title: string,
-    recipient: string,
-    amount: bigint | number,
-    deadlineMs: bigint | number
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::asynchronous_proposal::create_transfer_proposal`,
-      typeArguments: [],
-      arguments: [
-        tx.object(orgId),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(title))),
-        tx.pure.address(recipient),
-        tx.pure.u64(BigInt(amount)),
-        tx.pure.u64(BigInt(deadlineMs)),
-      ],
-    });
-    return tx;
+  public buildCreateTransferProposalPTB(orgId: string, title: string, recipient: string, amount: bigint | number, deadlineMs: bigint | number): Transaction {
+    return ptb(this.sdk.buildCreateTransferProposalPTB(orgId, title, recipient, amount, deadlineMs));
   }
-
-  /** 成员异步投票（权重由组织名册裁定，claimed_weight 必须 == 名册实际权重）。 */
-  public buildSubmitAsyncVotePTB(
-    proposalId: string,
-    orgId: string,
-    claimedWeight: bigint | number,
-    partialSignature: Uint8Array
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::asynchronous_proposal::submit_async_vote`,
-      typeArguments: [],
-      arguments: [
-        tx.object(proposalId),
-        tx.object(orgId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.u64(BigInt(claimedWeight)),
-        tx.pure.vector('u8', Array.from(partialSignature)),
-      ],
-    });
-    return tx;
+  public buildSubmitAsyncVotePTB(proposalId: string, orgId: string, claimedWeight: bigint | number, partialSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildSubmitAsyncVotePTB(proposalId, orgId, claimedWeight, partialSignature));
   }
-
-  /**
-   * Subagent 代理投票（记录在 cap.master_owner 名下，受单笔/日限额约束）。
-   */
-  public buildSubmitAsyncVoteBySubagentPTB(
-    proposalId: string,
-    orgId: string,
-    subagentCapId: string,
-    partialSignature: Uint8Array
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::asynchronous_proposal::submit_async_vote_by_subagent`,
-      typeArguments: [],
-      arguments: [
-        tx.object(proposalId),
-        tx.object(orgId),
-        tx.object(subagentCapId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.vector('u8', Array.from(partialSignature)),
-      ],
-    });
-    return tx;
+  public buildRejectAsyncVotePTB(proposalId: string, orgId: string): Transaction {
+    return ptb(this.sdk.buildRejectAsyncVotePTB(proposalId, orgId));
   }
-
-  /**
-   * 门限达标后任何人触发执行：内部真调 vault::withdraw 完成金库划转。
-   */
-  public buildExecuteTransferProposalPTB(
-    proposalId: string,
-    orgId: string,
-    vaultId: string,
-    masterCapId: string,
-    coinType?: string
-  ): Transaction {
-    const tx = new Transaction();
-    const typeArg = coinType ?? this.defaultCoinType;
-    tx.moveCall({
-      target: `${this.packageId}::asynchronous_proposal::execute_transfer_proposal`,
-      typeArguments: [typeArg],
-      arguments: [
-        tx.object(proposalId),
-        tx.object(orgId),
-        tx.object(vaultId),
-        tx.object(masterCapId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-      ],
-    });
-    return tx;
+  public buildSubmitAsyncVoteBySubagentPTB(proposalId: string, orgId: string, subagentCapId: string, partialSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildSubmitAsyncVoteBySubagentPTB(proposalId, orgId, subagentCapId, partialSignature));
   }
-
-  /** 签发并共享 SubagentCoSignCap（推荐生产模式）。返回 PTB；cap_id 从事件/共享对象读取。 */
-  public buildCreateSharedSubagentCapPTB(
-    agentAddress: string,
-    voterWeight: bigint | number,
-    maxBudgetPerTx: bigint | number,
-    dailyBudgetLimit: bigint | number,
-    expiresAtMs: bigint | number
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::asynchronous_proposal::create_shared_subagent_cap`,
-      typeArguments: [],
-      arguments: [
-        tx.pure.address(agentAddress),
-        tx.pure.u64(BigInt(voterWeight)),
-        tx.pure.u64(BigInt(maxBudgetPerTx)),
-        tx.pure.u64(BigInt(dailyBudgetLimit)),
-        tx.pure.u64(BigInt(expiresAtMs)),
-      ],
-    });
-    return tx;
+  public buildExecuteTransferProposalPTB(proposalId: string, orgId: string, vaultId: string, masterCapId: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildExecuteTransferProposalPTB(proposalId, orgId, vaultId, masterCapId, coinType));
   }
-
-  /** 主账号吊销 Subagent 协签资格。 */
+  public buildCreateSharedSubagentCapPTB(agentAddress: string, voterWeight: bigint | number, maxBudgetPerTx: bigint | number, dailyBudgetLimit: bigint | number, expiresAtMs: bigint | number): Transaction {
+    return ptb(this.sdk.buildCreateSharedSubagentCapPTB(agentAddress, voterWeight, maxBudgetPerTx, dailyBudgetLimit, expiresAtMs));
+  }
   public buildRevokeSubagentCapPTB(capId: string): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::asynchronous_proposal::revoke_subagent_cosign_cap`,
-      typeArguments: [],
-      arguments: [tx.object(capId)],
-    });
-    return tx;
+    return ptb(this.sdk.buildRevokeSubagentCapPTB(capId));
   }
-
-  /** 从已固化会话创建组织（members=已确认参与者，weight 全 1）。 */
-  public buildCreateOrganizationFromSessionPTB(
-    sessionId: string,
-    thresholdWeight: bigint | number
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::cryptographic_org::create_organization_from_session`,
-      typeArguments: [],
-      arguments: [tx.object(sessionId), tx.pure.u64(BigInt(thresholdWeight))],
-    });
-    return tx;
+  public buildShadowFollowVotePTB(proposalId: string, orgId: string, subagentCapId: string): Transaction {
+    return ptb(this.sdk.buildShadowFollowVotePTB(proposalId, orgId, subagentCapId));
   }
 
   // ------------------------------------------------------------------
-  // 链上红包 (agent_vault::red_packet)
+  // 链上红包 (red_packet_v2) — 直通；红包+消息同 PTB 组合保留在此层
   // ------------------------------------------------------------------
 
-  /** 创建群聊链上红包（支持 SUI / 任意 Coin<T>，支持拼手气与等额红包） */
-  public buildCreateRedPacketPTB(
-    channelId: string,
-    totalAmount: bigint | number,
-    count: number,
-    isRandom: boolean,
-    message: string = "恭喜发财，万事大吉！",
-    durationMs: number = 86400000,
-    coinType: string = "0x2::sui::SUI"
-  ): Transaction {
-    const tx = new Transaction();
-    const amountBig = BigInt(totalAmount);
-    let coinArg: any;
-    if (coinType === "0x2::sui::SUI" || coinType.endsWith("::sui::SUI")) {
-      const [splitCoin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountBig)]);
-      coinArg = splitCoin;
-    } else {
-      throw new Error("Non-SUI coin splitting requires explicit Coin object input");
-    }
-
-    tx.moveCall({
-      target: `${this.packageId}::red_packet::create_red_packet`,
-      typeArguments: [coinType],
-      arguments: [
-        tx.object(channelId),
-        coinArg,
-        tx.pure.u64(BigInt(count)),
-        tx.pure.bool(isRandom),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(message))),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.u64(BigInt(durationMs)),
-      ],
-    });
-    return tx;
+  public buildCreateRedPacketPTB(channelId: string, totalAmount: bigint | number, count: number, isRandom: boolean, message: string = "恭喜发财，万事大吉！", durationMs: number = 86400000, coinType?: string): Transaction {
+    return ptb(this.sdk.buildCreateRedPacketPTB(channelId, totalAmount, count, isRandom, message, durationMs, coinType));
+  }
+  public buildClaimRedPacketPTB(packetId: string, channelId: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildClaimRedPacketPTB(packetId, channelId, coinType));
+  }
+  public buildRefundRedPacketPTB(packetId: string, coinType?: string): Transaction {
+    return ptb(this.sdk.buildRefundRedPacketPTB(packetId, coinType));
   }
 
-  /** 成员抢红包入口 (claim_red_packet_entry) */
-  public buildClaimRedPacketPTB(
-    packetId: string,
-    channelId: string,
-    coinType: string = "0x2::sui::SUI"
-  ): Transaction {
-    const tx = new Transaction();
+  /** Create a packet and publish its greeting in the same atomic PTB. */
+  public buildCreateRedPacketWithMessagePTB(channelId: string, totalAmount: bigint | number, count: number, isRandom: boolean, message: string, durationMs: number = 86400000, coinType?: string): Transaction {
+    // 在 SDK 事务对象上继续拼接（操作的是 SDK 自建事务，不跨版本传值）。
+    const tx = this.sdk.buildCreateRedPacketPTB(channelId, totalAmount, count, isRandom, message, durationMs, coinType);
     tx.moveCall({
-      target: `${this.packageId}::red_packet::claim_red_packet_entry`,
-      typeArguments: [coinType],
-      arguments: [
-        tx.object(packetId),
-        tx.object(channelId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-      ],
+      target: `${this.packageId}::onchain_chat::post_message`,
+      arguments: [tx.object(channelId), tx.object(AgentVaultClient.CLOCK_OBJECT_ID), tx.pure.vector('u8', []), tx.pure.vector('u8', Array.from(new TextEncoder().encode(message)))],
     });
-    return tx;
-  }
-
-  /** 发起人过期赎回未领取的剩余红包 */
-  public buildRefundRedPacketPTB(
-    packetId: string,
-    coinType: string = "0x2::sui::SUI"
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::red_packet::refund_expired_red_packet`,
-      typeArguments: [coinType],
-      arguments: [
-        tx.object(packetId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-      ],
-    });
-    return tx;
+    return ptb(tx);
   }
 
   // ------------------------------------------------------------------
-  // 链上群聊 (agent_vault::onchain_chat)
+  // 链上群聊 (onchain_chat) — SDK chat 切片 + 钱包流（gas 支付）变体
   // ------------------------------------------------------------------
 
-  /** 创建链上抗女巫聊天频道 */
-  public buildCreateChatChannelPTB(
-    orgAddress: string,
-    name: string,
-    initialMembers: string[]
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::onchain_chat::create_channel`,
-      typeArguments: [],
-      arguments: [
-        tx.pure.address(orgAddress),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(name))),
-        tx.pure.vector('address', initialMembers),
-      ],
-    });
-    return tx;
+  public buildCreateChatChannelPTB(orgAddress: string, name: string, initialMembers: string[]): Transaction {
+    return ptb(this.sdk.buildCreateChatChannelPTB(orgAddress, name, initialMembers));
+  }
+
+  /** Creator stake and member economics are explicit; no yield is generated by this call. */
+  public buildCreateStakedChatChannelPTB(orgAddress: string, name: string, initialMembers: string[], creatorStake: bigint): Transaction {
+    if (creatorStake <= 0n) throw new Error('Creator stake must be positive');
+    return ptb(buildCreateChannelWithStake({ packageId: this.packageId, orgId: orgAddress, name, initialMembers, stake: { amount: creatorStake } }));
+  }
+
+  public buildCreateMembershipChatChannelPTB(orgAddress: string, name: string, creatorStake: bigint, entryFee: bigint, memberStake: bigint, shares: [number, number, number]): Transaction {
+    if ([creatorStake, entryFee, memberStake].some(value => value < 0n)) throw new Error('Amounts cannot be negative');
+    if (shares.some(value => !Number.isInteger(value) || value < 0) || shares.reduce((sum, value) => sum + value, 0) !== 10000) throw new Error('Yield shares must total 10000 BPS');
+    return ptb(buildCreateCreatorMonetizedChannel({ packageId: this.packageId }, {
+      orgId: orgAddress, name, creatorStake: { amount: creatorStake }, entryFee, requiredMemberStake: memberStake,
+      creatorYieldShareBps: BigInt(shares[0]), gasSubsidyShareBps: BigInt(shares[1]), memberRebateShareBps: BigInt(shares[2]),
+    }));
+  }
+
+  /**
+   * 入群：门票 + 保本质押一次付清，receipt 直接转给实际发送者。
+   * `paymentAmount` 是该频道的应付总额（门票 + 质押，来自频道状态）；
+   * 币源由 SDK 统一解析——地址余额与 owned coin 之间自动择优。
+   */
+  public buildJoinChatChannelPTB(channelId: string, paymentAmount: bigint): Transaction {
+    if (paymentAmount < 0n) throw new Error('Payment amount cannot be negative');
+    return ptb(buildJoinChannel({ packageId: this.packageId, channelId, payment: { amount: paymentAmount } }));
+  }
+
+  /** Consumes the sender's typed receipt and returns principal through the entry sink. */
+  public buildLeaveChatChannelPTB(channelId: string, receiptId: string): Transaction {
+    return ptb(buildMemberUnstakeAndLeave({ packageId: this.packageId, channelId, receiptId }));
   }
 
   /** 发送频道消息（附带 Walrus 去中心化存储 Blob ID 索引） */
-  public buildPostChatMessagePTB(
-    channelId: string,
-    contentPreview: string,
-    walrusBlobId: string = ""
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::onchain_chat::post_message`,
-      typeArguments: [],
-      arguments: [
-        tx.object(channelId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(walrusBlobId))),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(contentPreview))),
-      ],
-    });
-    return tx;
+  public buildPostChatMessagePTB(channelId: string, contentPreview: string, walrusBlobId: string = ""): Transaction {
+    return ptb(this.sdk.buildPostChatMessagePTB(channelId, contentPreview, walrusBlobId));
+  }
+
+  /**
+   * Send a burst through the deployed `post_message_batch` entry point: the
+   * contract advances one sequence and emits one event per line, but the
+   * transaction and the 0.001 SUI subsidy transfer are paid once for the burst.
+   */
+  public buildPostChatMessageBatchPTB(channelId: string, contentPreviews: string[]): Transaction {
+    if (contentPreviews.length === 0) throw new Error(t("vault.noMessagesToSend"))
+    if (contentPreviews.length > 32) throw new Error(t("vault.maxMergedMessages"))
+    if (contentPreviews.some(text => !text.trim())) throw new Error(t("vault.emptyMessage"))
+    return ptb(buildPostMessageBatch({ packageId: this.packageId, channelId }, contentPreviews.map(text => ({
+      walrusBlobId: new Uint8Array(),
+      contentPreview: new TextEncoder().encode(text),
+    }))));
+  }
+
+  /**
+   * Fallback for an older package: one `post_message` per line inside one PTB.
+   * Each line still triggers its own subsidy transfer in that contract, so this
+   * saves only the transaction envelope, not the per-line rebate.
+   */
+  public buildPostChatMessagesPTB(channelId: string, contentPreviews: string[]): Transaction {
+    if (contentPreviews.length === 0) throw new Error(t("vault.noMessagesToSend"))
+    if (contentPreviews.length > 32) throw new Error(t("vault.maxMergedMessages"))
+    if (contentPreviews.some(text => !text.trim())) throw new Error(t("vault.emptyMessage"))
+    return ptb(buildPostMessagesSequential({ packageId: this.packageId, channelId }, contentPreviews));
   }
 
   /** Subagent / AI 哨兵代发频道消息 */
-  public buildPostChatMessageBySubagentPTB(
-    channelId: string,
-    capId: string,
-    contentPreview: string,
-    walrusBlobId: string = ""
-  ): Transaction {
-    const tx = new Transaction();
-    tx.moveCall({
-      target: `${this.packageId}::onchain_chat::post_message_by_subagent`,
-      typeArguments: [],
-      arguments: [
-        tx.object(channelId),
-        tx.object(capId),
-        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(walrusBlobId))),
-        tx.pure.vector('u8', Array.from(new TextEncoder().encode(contentPreview))),
-      ],
-    });
-    return tx;
+  public buildPostChatMessageBySubagentPTB(channelId: string, capId: string, contentPreview: string, walrusBlobId: string = ""): Transaction {
+    return ptb(this.sdk.buildPostChatMessageBySubagentPTB(channelId, capId, contentPreview, walrusBlobId));
+  }
+
+  /** 签发并共享 Subagent 发信 Cap；cap_id 从创建对象/事件读取。 */
+  public buildCreateSharedSubagentMessagingCapPTB(channelId: string, agentAddress: string, expiresAtMs: bigint | number, rateLimitPerMinute: bigint | number): Transaction {
+    if (BigInt(rateLimitPerMinute) <= 0n) throw new Error('Rate limit must be positive');
+    if (BigInt(expiresAtMs) <= BigInt(Date.now())) throw new Error('Expiry must be in the future');
+    return ptb(buildCreateSharedSubagentMessagingCap({ packageId: this.packageId, channelId }, {
+      agentAddress, expiresAtMs: BigInt(expiresAtMs), rateLimitPerMinute: BigInt(rateLimitPerMinute),
+    }));
+  }
+
+  /** 主账号吊销 Subagent 发信资格。 */
+  public buildRevokeSubagentMessagingCapPTB(capId: string): Transaction {
+    return ptb(buildRevokeSubagentMessagingCap({ packageId: this.packageId, capId }));
   }
 
   // ------------------------------------------------------------------
-  // 核心钱包能力 (Direct Wallet Transfers & Batch Payments)
+  // 核心钱包能力 (Direct Wallet Transfers & Batch Payments) — 直通
   // ------------------------------------------------------------------
 
-  /** 原生单笔快速转账 */
-  public buildDirectTransferPTB(
-    recipient: string,
-    amountMist: bigint | number
-  ): Transaction {
-    const tx = new Transaction();
-    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(BigInt(amountMist))]);
-    tx.transferObjects([coin], tx.pure.address(recipient));
-    return tx;
+  public buildDirectTransferPTB(recipient: string, amountMist: bigint | number): Transaction {
+    return ptb(this.sdk.buildDirectTransferPTB(recipient, amountMist));
   }
-
-  /** 批量转账 / 工资发放 (单笔 PTB 同时向多名收款人转账，大幅节省 Gas) */
-  public buildBatchTransferPTB(
-    transfers: { recipient: string; amountMist: bigint | number }[]
-  ): Transaction {
-    const tx = new Transaction();
-    const amounts = transfers.map((t) => tx.pure.u64(BigInt(t.amountMist)));
-    const splitResult = tx.splitCoins(tx.gas, amounts);
-    transfers.forEach((t, i) => {
-      tx.transferObjects([splitResult[i]], tx.pure.address(t.recipient));
-    });
-    return tx;
-  }
-
-  // ------------------------------------------------------------------
-  // 影子跟投 (ShadowVote / 影子代签投票)
-  // ------------------------------------------------------------------
-
-  /**
-   * 影子跟投：基于 SubagentCoSignCap，代理跟随策略或领投人自动执行链上治理投票。
-   */
-  public buildShadowFollowVotePTB(
-    proposalId: string,
-    orgId: string,
-    subagentCapId: string
-  ): Transaction {
-    const dummySignature = new Uint8Array(64).fill(0x5a); // 影子委托签名标识
-    return this.buildSubmitAsyncVoteBySubagentPTB(
-      proposalId,
-      orgId,
-      subagentCapId,
-      dummySignature
-    );
+  public buildBatchTransferPTB(transfers: { recipient: string; amountMist: bigint | number }[]): Transaction {
+    return ptb(this.sdk.buildBatchTransferPTB(transfers));
   }
 }
 
 // --------------------------------------------------------------------
-// 域隔离摘要 (与 agent_vault::cryptographic_org 的 compute_*_digest 严格一致)
-// 字节序: DOMAIN || chain_id || bcs(org_id) || bcs(epoch_version) || bcs(nonce) || …
+// 域隔离摘要 — 算法在 SDK org/digest（单一事实源），此处仅保留前端
+// 一直使用的位置参数签名包装。
 // --------------------------------------------------------------------
 
-import { bcs } from '@mysten/sui/bcs';
-import { sha256 } from '@noble/hashes/sha2.js';
-
-function concatBytes(...parts: Uint8Array[]): Uint8Array {
-  const total = parts.reduce((n, p) => n + p.length, 0);
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const p of parts) {
-    out.set(p, off);
-    off += p.length;
-  }
-  return out;
+export function computeProposalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, payload: Uint8Array): Uint8Array {
+  return sdkProposalDigest({ chainId, orgId, epochVersion, nonce, payload });
 }
 
-const utf8 = (s: string) => new TextEncoder().encode(s);
-
-function orgIdBytes(orgId: string): Uint8Array {
-  return bcs.Address.serialize(orgId).toBytes();
+export function computeThresholdApprovalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number): Uint8Array {
+  return sdkApprovalDigest({ chainId, orgId, epochVersion, nonce, newEpochVersion });
 }
 
-function u64Bytes(v: bigint | number): Uint8Array {
-  return bcs.u64().serialize(BigInt(v)).toBytes();
+export function computeKeyRotationDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newGroupPk: Uint8Array): Uint8Array {
+  return sdkKeyRotationDigest({ chainId, orgId, epochVersion, nonce, newGroupPk });
 }
 
-/** H(DOMAIN_PROPOSAL || chain_id || org_id || epoch || nonce || payload) —— execute_threshold_proposal 验证对象 */
-export function computeProposalDigest(
-  chainId: Uint8Array | string,
-  orgId: string,
-  epochVersion: bigint | number,
-  nonce: bigint | number,
-  payload: Uint8Array
-): Uint8Array {
-  return sha256(
-    concatBytes(
-      utf8('SUI_ORG_PROPOSAL_V1:'),
-      typeof chainId === 'string' ? utf8(chainId) : chainId,
-      orgIdBytes(orgId),
-      u64Bytes(epochVersion),
-      u64Bytes(nonce),
-      payload
-    )
-  );
+export function computeRosterUpdateDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[]): Uint8Array {
+  if (members.length !== weights.length) throw new Error('Roster members and weights must have equal length')
+  return sdkRosterDigest({ chainId, orgId, epochVersion, nonce, newEpochVersion, thresholdWeight, newMembers: members, newWeights: weights });
 }
 
-/** H(DOMAIN_THRESHOLD_APPROVAL || chain_id || org_id || epoch || nonce || new_epoch_version) —— advance_organization_epoch 验证对象 */
-export function computeThresholdApprovalDigest(
-  chainId: Uint8Array | string,
-  orgId: string,
-  epochVersion: bigint | number,
-  nonce: bigint | number,
-  newEpochVersion: bigint | number
-): Uint8Array {
-  return sha256(
-    concatBytes(
-      utf8('SUI_ORG_APPROVAL_V1:'),
-      typeof chainId === 'string' ? utf8(chainId) : chainId,
-      orgIdBytes(orgId),
-      u64Bytes(epochVersion),
-      u64Bytes(nonce),
-      u64Bytes(newEpochVersion)
-    )
-  );
-}
-
-/** H(DOMAIN_KEY_ROTATION || chain_id || org_id || epoch || nonce || new_group_pk) —— rotate_group_key 验证对象 */
-export function computeKeyRotationDigest(
-  chainId: Uint8Array | string,
-  orgId: string,
-  epochVersion: bigint | number,
-  nonce: bigint | number,
-  newGroupPk: Uint8Array
-): Uint8Array {
-  return sha256(
-    concatBytes(
-      utf8('SUI_ORG_KEY_ROTATION_V1:'),
-      typeof chainId === 'string' ? utf8(chainId) : chainId,
-      orgIdBytes(orgId),
-      u64Bytes(epochVersion),
-      u64Bytes(nonce),
-      newGroupPk
-    )
-  );
-}
-
-/** H(SESSION_CERT_V1: || bcs(session_id) || group_pk) —— finalize_session_v2 验证消息（先 sha256 由 ThresholdSignerNode 消化） */
-export function computeSessionCertPayload(
-  sessionId: string,
-  groupPublicKey: Uint8Array
-): Uint8Array {
-  return concatBytes(utf8('SESSION_CERT_V1:'), orgIdBytes(sessionId), groupPublicKey);
-}
 
 /** 默认链域，与合约 DEFAULT_CHAIN_ID 一致。 */
-export const DEFAULT_ORG_CHAIN_ID = 'sui-testnet:';
+export const DEFAULT_ORG_CHAIN_ID = CHAIN_IDS.testnet;

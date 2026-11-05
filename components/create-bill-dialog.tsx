@@ -17,6 +17,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { X, Plus, Calendar, DollarSign, Users, Search, QrCode, Check, AtSign, Wallet, History } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
+import { QrAddressScanner } from "@/components/qr-address-scanner"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   DropdownMenu,
@@ -28,25 +29,19 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 
-import { getCachedDevAccounts } from "@/lib/dev-keystore"
 import { getActiveAccount } from "@/lib/onchain-store"
+import { getFollowing, getIdentityByAddress, identityConfigured } from "@/lib/identity-client"
+import { canonicalPaymentAssets } from "@/lib/payment-assets"
+import { useI18n } from "@/components/i18n-provider"
 
 interface CreateBillDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-const defaultContacts = [
-  { id: "1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", type: "wallet" as const },
-  { id: "2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
-  { id: "3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", type: "wallet" as const },
-  { id: "4", name: "Sui Community Pool", address: "0x0000000000000000000000000000000000000000000000000000000000000002", type: "wallet" as const },
-]
-
-const frequentGroups = [
-  { id: "g1", name: "Core Contributors", members: ["1", "2"] },
-  { id: "g2", name: "MultiSig Threshold Signers", members: ["1", "2", "3"] },
-]
+interface Contact { id: string; name: string; address: string; type: "wallet" | "email" }
+const defaultContacts: Contact[] = []
+const historicalParticipants: Contact[] = []
 
 interface Payee {
   id: string
@@ -57,6 +52,7 @@ interface Payee {
 }
 
 export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) {
+  const { t } = useI18n()
   const [payees, setPayees] = useState<Payee[]>([{ id: "1", address: "", amount: "" }])
   const [splitType, setSplitType] = useState("equal")
   const [step, setStep] = useState(1)
@@ -65,42 +61,59 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
   const [searchTerm, setSearchTerm] = useState("")
   const [recentContacts, setRecentContacts] = useState(defaultContacts)
 
+  const [contactsError, setContactsError] = useState("")
   useEffect(() => {
-    const devAccs = getCachedDevAccounts()
-    if (devAccs.length > 0) {
-      setRecentContacts(
-        devAccs.map((a, i) => ({
-          id: String(i + 1),
-          name: a.name,
-          address: a.address,
-          type: "wallet" as const,
-        }))
-      )
+    let generation = 0
+    const load = async () => {
+      const run = ++generation
+      setRecentContacts([]); setContactsError("")
+      const address = getActiveAccount()?.address
+      if (!open || !address || !identityConfigured()) return
+      try {
+        const profile = await getIdentityByAddress(address)
+        const list = profile ? await getFollowing(profile) : []
+        if (run === generation && getActiveAccount()?.address === address) setRecentContacts(list.map(person => ({ id: person.id, name: person.displayName || `${person.label}.id`, address: person.address, type: "wallet" as const })))
+      } catch (error) { if (run === generation) setContactsError(error instanceof Error ? error.message : t("voting.errContactsRead")) }
     }
+    void load()
+    window.addEventListener("sui-account-switched", load); window.addEventListener("storage", load)
+    return () => { generation++; window.removeEventListener("sui-account-switched", load); window.removeEventListener("storage", load) }
   }, [open])
 
-  const [title, setTitle] = useState("团队协作餐叙 AA")
-  const [description, setDescription] = useState("测试网团队例会分账")
-  const [totalAmount, setTotalAmount] = useState("10")
+  const [title, setTitle] = useState("")
+  const [description, setDescription] = useState("")
+  const [totalAmount, setTotalAmount] = useState("")
   const [selectedToken, setSelectedToken] = useState("SUI")
+  const [acceptedTokens, setAcceptedTokens] = useState<string[]>(["SUI"])
+  const [deadline, setDeadline] = useState(() => new Date(Date.now() + 86_400_000 * 7).toISOString().slice(0, 10))
 
-  const tokens = ["SUI", "USDC", "USDT"]
+  const tokens = canonicalPaymentAssets()
+
+  const toggleAcceptedToken = (symbol: string, checked: boolean) => {
+    setAcceptedTokens(current => checked ? [...new Set([...current, symbol])] : current.filter(value => value !== symbol))
+  }
 
   const handleFinalSubmit = () => {
     try {
       const stored = JSON.parse(localStorage.getItem("sui_bills") || "[]")
-      const parsedAmt = parseFloat(totalAmount) || 10
+      const parsedAmt = parseFloat(totalAmount)
       const activePayees = payees.filter((p) => p.address)
-      const myAddress = getActiveAccount()?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
+      const myAddress = getActiveAccount()?.address
+      if (!myAddress || !title.trim() || !Number.isFinite(parsedAmt) || parsedAmt <= 0 || activePayees.length === 0) { setContactsError(t("voting.errBillRequired")) ; return }
+      if (!deadline) { setContactsError(t("voting.errBillDeadline")) ; return }
+      if (selectedToken !== "SUI") { setContactsError(t("voting.errBillSuiOnly")) ; return }
       const newBill = {
         id: `bill_${Date.now()}`,
-        title: title || "团队账单分摊",
-        description: description || "账单结算",
+        title: title.trim(),
+        description: description.trim() || t("voting.billDefaultDescription"),
         amount: parsedAmt,
         token: selectedToken,
-        participants: activePayees.length > 0 ? activePayees.length : 2,
+        coinType: "0x2::sui::SUI",
+        acceptedTokens,
+        acceptedTokensNote: t("voting.billTokensNote"),
+        participants: activePayees.length,
         paid: 0,
-        deadline: new Date(Date.now() + 86400000 * 7).toISOString().slice(0, 10),
+        deadline,
         progress: 0,
         status: "pending",
         color: "from-blue-500 to-cyan-400",
@@ -113,7 +126,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
       }
       localStorage.setItem("sui_bills", JSON.stringify([newBill, ...stored]))
       window.dispatchEvent(new CustomEvent("sui-bills-updated", { detail: newBill }))
-    } catch {}
+    } catch { setContactsError(t("voting.errBillSave")); return }
     onOpenChange(false)
   }
 
@@ -126,6 +139,13 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
         setStep(1)
         setCurrentInput("")
         setShowQrScanner(false)
+        setTitle("")
+        setDescription("")
+        setTotalAmount("")
+        setSelectedToken("SUI")
+        setAcceptedTokens(["SUI"])
+        setDeadline(new Date(Date.now() + 86_400_000 * 7).toISOString().slice(0, 10))
+        setContactsError("")
       }, 300)
     }
   }, [open])
@@ -175,57 +195,11 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
     })
   }
 
-  const addGroup = (groupId: string) => {
-    const group = frequentGroups.find((g) => g.id === groupId)
-    if (!group) return
-
-    // Get contacts from the group
-    const groupContacts = group.members
-      .map((memberId) => recentContacts.find((c) => c.id === memberId))
-      .filter(Boolean) as typeof recentContacts
-
-    // Add all contacts from the group
-    const newPayees = [...payees]
-
-    // Remove empty payees
-    const filteredPayees = newPayees.filter((p) => p.address)
-
-    // Add group members
-    const updatedPayees = [
-      ...filteredPayees,
-      ...groupContacts.map((contact) => ({
-        id: `gp_${Date.now()}_${contact.id}`,
-        address: contact.address,
-        amount: "",
-        name: contact.name,
-        type: contact.type as "wallet" | "email",
-      })),
-    ]
-
-    setPayees(updatedPayees)
-  }
-
-  const handleQrScan = (result: string) => {
-    // 真实的 Sui 扫码结果或有效测试网地址
-    const validAddress = result?.startsWith("0x") ? result : "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
-
-    // Find an empty payee slot or add a new one
+  const handleQrScan = (validAddress: string) => {
     const emptyPayee = payees.find((p) => !p.address)
-
-    if (emptyPayee) {
-      updatePayee(emptyPayee.id, { address: validAddress, type: "wallet" })
-    } else {
-      setPayees([
-        ...payees,
-        {
-          id: Date.now().toString(),
-          address: validAddress,
-          amount: "",
-          type: "wallet" as const,
-        },
-      ])
-    }
-
+    if (emptyPayee) updatePayee(emptyPayee.id, { address: validAddress, type: "wallet" })
+    else setPayees([...payees, { id: Date.now().toString(), address: validAddress, amount: "", type: "wallet" }])
+    setContactsError("")
     setShowQrScanner(false)
   }
 
@@ -237,6 +211,21 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
   }
 
   const nextStep = () => {
+    if (step === 1) {
+      if (!title.trim() || !Number.isFinite(Number(totalAmount)) || Number(totalAmount) <= 0) {
+        setContactsError(t("voting.errStep1Fields"))
+        return
+      }
+      if (!deadline) {
+        setContactsError(t("voting.errStep1Deadline"))
+        return
+      }
+    }
+    if (step === 2 && payees.filter((payee) => payee.address).length === 0) {
+      setContactsError(t("voting.errStep2Payees"))
+      return
+    }
+    setContactsError("")
     setStep(step + 1)
   }
 
@@ -266,13 +255,22 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
       <DialogContent className="sm:max-w-[425px] p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-4 pb-0">
           <DialogTitle>Create Bill Request</DialogTitle>
-          <DialogDescription>Create a new bill request to split expenses with others.</DialogDescription>
+          <DialogDescription>{t("voting.billDialogDesc")}</DialogDescription>
+          {contactsError && <p role="alert" className="text-xs text-destructive">{contactsError}</p>}
         </DialogHeader>
 
         <div className="relative overflow-hidden">
           <div className="flex justify-between px-4 pt-4">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="flex flex-col items-center" onClick={() => i < step && setStep(i)}>
+              <button
+                key={i}
+                type="button"
+                disabled={i >= step}
+                onClick={() => setStep(i)}
+                aria-current={i === step ? "step" : undefined}
+                aria-label={t("voting.stepAria", { index: i, label: ["Details", "Participants", "Review"][i - 1] })}
+                className="flex flex-col items-center rounded-md disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
                 <div
                   className={`h-8 w-8 rounded-full flex items-center justify-center text-sm ${
                     i < step
@@ -287,7 +285,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                 <div className="text-xs mt-1 text-muted-foreground">
                   {i === 1 ? "Details" : i === 2 ? "Participants" : "Review"}
                 </div>
-              </div>
+              </button>
             ))}
             <div className="absolute top-[28px] left-[68px] w-[120px] h-[2px] bg-muted">
               <div className={`h-full bg-primary transition-all ${step > 1 ? "w-full" : "w-0"}`}></div>
@@ -359,9 +357,9 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                           <SelectValue placeholder="Select" />
                         </SelectTrigger>
                         <SelectContent>
-                          {tokens.map((token) => (
-                            <SelectItem key={token} value={token}>
-                              {token}
+                          {tokens.map((asset) => (
+                            <SelectItem key={asset.symbol} value={asset.symbol} disabled={asset.source === "unavailable"}>
+                              {asset.source === "unavailable" ? t("voting.tokenUnavailable", { symbol: asset.symbol }) : asset.symbol}
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -372,20 +370,23 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                   <div className="space-y-1">
                     <Label className="text-xs font-medium">Accepted Tokens</Label>
                     <div className="flex flex-wrap gap-2 mt-1">
-                      {tokens.map((token) => (
-                        <div key={token} className="flex items-center">
+                      {tokens.map((asset) => (
+                        <div key={asset.symbol} className="flex items-center">
                           <input
                             type="checkbox"
-                            id={`token-${token}`}
+                            id={`token-${asset.symbol}`}
                             className="mr-1.5"
-                            defaultChecked={token === "USDC"}
+                            checked={acceptedTokens.includes(asset.symbol)}
+                            disabled={asset.source === "unavailable"}
+                            onChange={(event) => toggleAcceptedToken(asset.symbol, event.target.checked)}
                           />
-                          <Label htmlFor={`token-${token}`} className="text-xs">
-                            {token}
+                          <Label htmlFor={`token-${asset.symbol}`} className="text-xs">
+                            {asset.symbol}
                           </Label>
                         </div>
                       ))}
                     </div>
+                    <p className="text-[11px] text-muted-foreground">{t("voting.acceptedTokensNote")}</p>
                   </div>
 
                   <div className="space-y-1">
@@ -393,7 +394,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                       Deadline
                     </Label>
                     <div className="relative">
-                      <Input id="deadline" type="date" className="pl-9" />
+                      <Input id="deadline" type="date" className="pl-9" value={deadline} onChange={(event) => setDeadline(event.target.value)} />
                       <Calendar className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" />
                     </div>
                   </div>
@@ -451,6 +452,15 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent className="w-64 p-1">
+                            <div className="px-1 pb-1">
+                              <Input
+                                value={searchTerm}
+                                onChange={(event) => setSearchTerm(event.target.value)}
+                                placeholder={t("voting.searchContacts")}
+                                aria-label={t("voting.searchContacts")}
+                                className="h-7 text-xs"
+                              />
+                            </div>
                             <DropdownMenuLabel className="text-xs px-2 py-1.5 font-medium text-muted-foreground">
                               Recent Contacts
                             </DropdownMenuLabel>
@@ -547,26 +557,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                       </div>
                     </div>
 
-                    {/* QR Scanner Modal (simplified for demo) */}
-                    {showQrScanner && (
-                      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                        <div className="bg-background rounded-lg p-4 max-w-sm w-full">
-                          <h3 className="font-medium mb-2">Scan QR Code</h3>
-                          <div className="border-2 border-dashed border-muted-foreground rounded-lg h-48 flex items-center justify-center mb-4">
-                            <div className="text-center">
-                              <QrCode className="h-12 w-12 mx-auto mb-2 text-muted-foreground" />
-                              <p className="text-sm text-muted-foreground">Position QR code in this area</p>
-                            </div>
-                          </div>
-                          <div className="flex justify-between">
-                            <Button variant="outline" onClick={() => setShowQrScanner(false)}>
-                              Cancel
-                            </Button>
-                            <Button onClick={() => handleQrScan("")}>Simulate Scan</Button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    <QrAddressScanner open={showQrScanner} onOpenChange={setShowQrScanner} onAddress={handleQrScan} />
 
                     {/* Participant Tags */}
                     <div className="flex flex-wrap gap-2 mb-3">
@@ -740,11 +731,11 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                   <div className="rounded-lg border p-3 space-y-2">
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Title</span>
-                      <span className="text-xs font-medium">Dinner at Satoshi's</span>
+                      <span className="text-xs font-medium">{title.trim() || t("voting.notFilled")}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Amount</span>
-                      <span className="text-xs font-medium">120 USDC</span>
+                      <span className="text-xs font-medium">{totalAmount || "0"} {selectedToken}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Split Type</span>
@@ -752,7 +743,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Deadline</span>
-                      <span className="text-xs font-medium">April 1, 2025</span>
+                      <span className="text-xs font-medium">{deadline ? new Date(`${deadline}T00:00:00`).toLocaleDateString() : t("voting.notChosen")}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Participants</span>
@@ -765,7 +756,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                     <div className="rounded-lg border p-3 max-h-[150px] overflow-y-auto">
                       {payees
                         .filter((p) => p.address)
-                        .map((payee, index) => (
+                        .map((payee) => (
                           <div key={payee.id} className="flex justify-between py-1 border-b last:border-0">
                             <div className="flex items-center text-xs truncate max-w-[180px]">
                               <Avatar className="h-5 w-5 mr-1.5">
@@ -783,7 +774,9 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
                               <span className="truncate">{payee.name || payee.address}</span>
                             </div>
                             <span className="text-xs font-medium">
-                              {splitType === "equal" ? "30 USDC" : `${payee.amount || "0"} USDC`}
+                              {splitType === "equal"
+                                ? `${(Number(totalAmount || 0) / Math.max(1, payees.filter((p) => p.address).length)).toFixed(2)} ${selectedToken}`
+                                : `${payee.amount || "0"} ${selectedToken}`}
                             </span>
                           </div>
                         ))}

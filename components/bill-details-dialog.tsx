@@ -6,10 +6,16 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { QrCode, Calendar, User, Share2 } from "lucide-react"
+import { Calendar, User, Share2 } from "lucide-react"
+import { getActiveAccount } from "@/lib/onchain-store"
+import type { BillView, StoredBill } from "@/lib/bill-record"
+import { parseDecimalValue } from "@/lib/coin-amount"
+import { buildPaymentLink, canonicalPaymentAssets } from "@/lib/payment-assets"
+import { QRCodeSVG } from "qrcode.react"
 import { PaymentDialog } from "@/components/payment-dialog"
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { motion, AnimatePresence } from "framer-motion"
+import { useI18n } from "@/components/i18n-provider"
 
 interface BillDetailsDialogProps {
   open: boolean
@@ -18,46 +24,64 @@ interface BillDetailsDialogProps {
 }
 
 export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDialogProps) {
+  const { t } = useI18n()
   const [isPaymentOpen, setIsPaymentOpen] = useState(false)
   const [activeTab, setActiveTab] = useState("participants")
 
-  // Mock data - in a real app, you would fetch this based on billId
-  const bill = {
-    id: billId,
-    title: "Dinner at Satoshi's",
-    description: "Group dinner at the new crypto-themed restaurant",
-    amount: 120,
-    token: "USDC",
-    creator: "0x1a2b...3c4d",
-    creatorName: "Alex",
-    participants: [
-      { address: "0x5e6f...7g8h", name: "Sam", amount: 30, paid: true },
-      { address: "jamie@gmail.com", name: "Jamie", amount: 30, paid: true },
-      { address: "0x2k3l...4m5n", name: "Taylor", amount: 30, paid: false },
-      { address: "0x6o7p...8q9r", name: "You", amount: 30, paid: false },
-    ],
-    deadline: "2025-04-01",
-    progress: 50,
-    status: "pending",
-    acceptedTokens: ["USDC", "USDT", "SUI"],
-    color: "from-blue-500 to-cyan-400",
+  const [bill, setBill] = useState<BillView | null>(null)
+  useEffect(() => {
+    setIsPaymentOpen(false)
+    const load = () => {
+      try {
+        const saved: unknown = JSON.parse(localStorage.getItem("sui_bills") || "[]")
+        const found = Array.isArray(saved)
+          ? (saved as StoredBill[]).find(b => b?.id === billId && b.id.startsWith("bill_"))
+          : undefined
+        // A bill written before `payees` existed still has a participant count;
+        // it simply has no per-participant rows to show.
+        setBill(found ? {
+          ...found,
+          participants: found.payees ?? [],
+          creatorName: found.creator,
+          acceptedTokens: Array.isArray(found.acceptedTokens) && found.acceptedTokens.length
+            ? found.acceptedTokens
+            : found.token ? [found.token] : [],
+        } as BillView : null)
+      } catch { setBill(null) }
+    }
+    load()
+    window.addEventListener("sui-bills-updated", load)
+    return () => window.removeEventListener("sui-bills-updated", load)
+  }, [billId, open])
+  const activeAddress = getActiveAccount()?.address
+  const isCreator = !!activeAddress && bill?.creator === activeAddress
+  const userParticipant = bill?.participants.find((p) => p.address.toLowerCase() === activeAddress?.toLowerCase())
+  // Bills are SUI-only on chain, so the QR carries base units for the SUI coin.
+  const billAmount = userParticipant?.amount || bill?.amount
+  const billTotal = typeof billAmount === "string" ? parseDecimalValue(billAmount) : null
+  let billPaymentLink = ""
+  if (bill?.creator && billTotal) {
+    try {
+      billPaymentLink = buildPaymentLink({ address: bill.creator, total: billTotal, asset: canonicalPaymentAssets()[0], nonce: `bill-${bill.id}-${activeAddress?.slice(-8) || "anon"}`, label: bill.title })
+    } catch { billPaymentLink = "" }
   }
-
-  const isCreator = bill.participants.find((p) => p.name === "You") === undefined
-  const userParticipant = bill.participants.find((p) => p.name === "You")
+  if (!bill) return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent><DialogHeader><DialogTitle>{t("voting.billDetailsTitle")}</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">{t("voting.billNotFound")}</p></DialogContent></Dialog>
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[500px] p-0 gap-0 overflow-hidden">
-        <div className={`h-24 bg-gradient-to-r ${bill.color} p-4 flex flex-col justify-end`}>
-          <DialogHeader className="text-white">
+        <div className={`relative h-24 bg-gradient-to-r ${bill.color} p-4 flex flex-col justify-end`}>
+          {/* Scrim: white text over the light gradient endpoints of the bill
+              palette reaches only ~1.7:1. See group-details-dialog. */}
+          <div className="absolute inset-0 bg-black/45" aria-hidden />
+          <DialogHeader className="relative text-white">
             <DialogTitle className="flex items-center justify-between">
               <span className="text-xl">{bill.title}</span>
               <Badge
                 variant={bill.status === "completed" ? "outline" : "default"}
                 className="bg-white/20 text-white border-white/40"
               >
-                {bill.status === "completed" ? "Completed" : "Pending"}
+                {bill.status === "completed" ? "Completed" : "Pending"}{t("voting.billLocalBadge")}
               </Badge>
             </DialogTitle>
             <p className="text-white/80 text-sm mt-1">{bill.description}</p>
@@ -69,11 +93,11 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
             <div className="flex items-center">
               <Avatar className="h-10 w-10 mr-3 border-2 border-background">
                 <AvatarFallback className="bg-gradient-to-br from-primary to-purple-500 text-white">
-                  {bill.creatorName[0]}
+                  {(bill.creatorName ?? "?")[0]}
                 </AvatarFallback>
               </Avatar>
               <div>
-                <p className="text-sm font-medium">{bill.creatorName}</p>
+                <p className="text-sm font-medium">{bill.creatorName ?? t("voting.unknownCreator")}</p>
                 <p className="text-xs text-muted-foreground">Creator</p>
               </div>
             </div>
@@ -83,7 +107,7 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
               </p>
               <div className="flex items-center text-xs text-muted-foreground">
                 <Calendar className="h-3 w-3 mr-1" />
-                {new Date(bill.deadline).toLocaleDateString()}
+                {bill.deadline ? new Date(bill.deadline).toLocaleDateString() : t("voting.notSet")}
               </div>
             </div>
           </div>
@@ -100,6 +124,12 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
               className="h-1.5 rounded-full"
               indicatorClassName={`bg-gradient-to-r ${bill.color}`}
             />
+            {/* The bill and its `paid` flags live in this browser. Only the
+                per-payee digests below are chain evidence, so the label says
+                what is local and how to verify a payment that claims one. */}
+            <p className="mt-1.5 text-[11px] text-muted-foreground">
+              {t("voting.localProgressNote")}
+            </p>
           </div>
 
           <Tabs defaultValue="participants" value={activeTab} onValueChange={setActiveTab} className="w-full">
@@ -143,11 +173,11 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
                                   : "bg-gradient-to-br from-amber-400 to-orange-400"
                               }`}
                             >
-                              {participant.name[0]}
+                              {(participant.name || participant.address)[0]}
                             </AvatarFallback>
                           </Avatar>
                           <div>
-                            <p className="font-medium text-sm">{participant.name}</p>
+                            <p className="font-medium text-sm">{participant.name || participant.address}</p>
                             {participant.address.includes("@") ? (
                               <p className="text-xs text-muted-foreground flex items-center">
                                 <span className="text-xs bg-blue-100 text-blue-600 px-1 rounded mr-1">@</span>
@@ -166,8 +196,9 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
                             {participant.amount} {bill.token}
                           </p>
                           <Badge variant={participant.paid ? "outline" : "secondary"} className="text-xs">
-                            {participant.paid ? "Paid" : "Pending"}
+                            {participant.paid ? (participant.txDigest ? t("voting.paidVerifiable") : t("voting.paidLocal")) : "Pending"}
                           </Badge>
+                          {participant.paid && participant.txDigest && <a href={`https://suiscan.xyz/testnet/tx/${participant.txDigest}`} target="_blank" rel="noreferrer" className="mt-0.5 block font-mono text-[10px] text-primary underline-offset-2 hover:underline">{t("voting.txDigestLink")}</a>}
                         </div>
                       </div>
                     ))}
@@ -198,15 +229,8 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
                       <p className="text-sm font-medium">Payment QR Code</p>
                       <div className="flex justify-center mt-2 border rounded-md p-4 bg-white">
                         <div className="flex flex-col items-center">
-                          <div className="relative">
-                            <QrCode className="h-32 w-32" />
-                            <div className="absolute inset-0 flex items-center justify-center">
-                              <div className="h-8 w-8 rounded-full bg-white p-1">
-                                <div className="h-full w-full rounded-full bg-gradient-to-r from-primary to-purple-500"></div>
-                              </div>
-                            </div>
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-2">Scan to pay with any Sui wallet</p>
+                          {billPaymentLink ? <QRCodeSVG value={billPaymentLink} size={128} /> : <p className="py-6 text-center text-xs text-muted-foreground">{t("voting.qrUnavailable")}</p>}
+                          <p className="text-xs text-muted-foreground mt-2">{t("voting.qrNote")}</p>
                         </div>
                       </div>
                     </div>
@@ -233,11 +257,18 @@ export function BillDetailsDialog({ open, onOpenChange, billId }: BillDetailsDia
         </div>
       </DialogContent>
 
-      {userParticipant && (
+      {userParticipant && bill && (
         <PaymentDialog
           open={isPaymentOpen}
           onOpenChange={setIsPaymentOpen}
-          bill={bill}
+          bill={{
+            id: bill.id,
+            title: bill.title,
+            creator: bill.creator,
+            token: bill.token,
+            coinType: bill.coinType,
+            amount: Number(userParticipant.amount || bill.amount),
+          }}
           amount={userParticipant.amount}
         />
       )}

@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import {
   Dialog,
   DialogContent,
@@ -22,48 +22,32 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { motion, AnimatePresence } from "framer-motion"
 import { format } from "date-fns"
 import { cn } from "@/lib/utils"
-import {
-  CalendarIcon,
-  XIcon,
-  PlusIcon,
-  SearchIcon,
-  UserIcon,
-  Users,
-  EyeIcon,
-  EyeOffIcon,
-  LinkIcon,
-  Vote,
-  CheckCircle2Icon,
-  ListFilter,
-  AlignLeftIcon,
-  AlertTriangleIcon,
-  BarChartIcon,
-  LockIcon,
-  ShieldCheckIcon,
-  SparklesIcon,
-} from "lucide-react"
+import { CalendarIcon, XIcon, PlusIcon, UserIcon, Users, EyeIcon, EyeOffIcon, LinkIcon, Vote, CheckCircle2Icon, ListFilter, AlignLeftIcon, AlertTriangleIcon, BarChartIcon, LockIcon, SparklesIcon } from "lucide-react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 
-import { getCachedDevAccounts } from "@/lib/dev-keystore"
-import { getActiveAccount, createTransferProposalOnChain, KNOWN_TESTNET_ORG_ID } from "@/lib/onchain-store"
+import { getActiveAccount, getUserGroups } from "@/lib/onchain-store"
+import { getGovernanceVotes, saveGovernanceDraft, governancePublicationGaps } from "@/lib/governance"
+import { GroupProposalEntryDialog } from "@/components/group-proposal-entry-dialog"
+import { governancePublicationScope, publishGovernancePoll, resumeGovernancePoll } from "@/lib/governance-chain"
+import { TransactionReceiptError } from "@/lib/pending-transactions"
+import { createSubmissionGuard } from "@/lib/wallet-creation-state"
+import { usePendingCreation } from "@/lib/use-pending-creation"
+import { groupPollReader, resolveGroupPollScope } from "@/lib/group-polls"
+import { useI18n } from "@/components/i18n-provider"
 
 interface CreateVoteDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
+  draftId?: string
+  initialVoteId?: string
+  initialGroupId?: string
 }
 
-const defaultGroups = [
-  {
-    id: "group-1",
-    name: "Team Treasury (Sui MultiSig)",
-    orgObjectId: KNOWN_TESTNET_ORG_ID,
-    members: [
-      { id: "user-1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", weight: 2 },
-      { id: "user-2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", weight: 1 },
-      { id: "user-3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f", weight: 1 },
-    ],
-  },
-]
+interface VoterGroup {
+  id: string
+  name: string
+  members: Array<{ name: string; address: string; weight: number }>
+}
 
 interface VoteOption {
   id: string
@@ -80,30 +64,16 @@ interface Voter {
 
 const initialVoteOption = { id: "option-1", text: "" }
 
-export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) {
+export function CreateVoteDialog({ open, onOpenChange, draftId, initialVoteId, initialGroupId }: CreateVoteDialogProps) {
+  const { t } = useI18n()
   const [step, setStep] = useState(1)
-  const [groups, setGroups] = useState(defaultGroups)
-  const [recentContacts, setRecentContacts] = useState<Array<{ id: string; name: string; address: string; type: "wallet" | "email" }>>([])
+  const [groups, setGroups] = useState<VoterGroup[]>([])
+  const [recentContacts] = useState<Array<{ id: string; name: string; address: string; type: "wallet" | "email" }>>([])
 
   useEffect(() => {
-    try {
-      const storedGroups = JSON.parse(localStorage.getItem("user_groups") || "[]")
-      if (Array.isArray(storedGroups) && storedGroups.length > 0) {
-        setGroups(storedGroups)
-      }
-    } catch {}
-
-    const devAccs = getCachedDevAccounts()
-    if (devAccs.length > 0) {
-      setRecentContacts(devAccs.map((a, i) => ({ id: `dev-${i}`, name: a.name, address: a.address, type: "wallet" as const })))
-    } else {
-      setRecentContacts([
-        { id: "user-1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", type: "wallet" as const },
-        { id: "user-2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
-        { id: "user-3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f", type: "wallet" as const },
-      ])
-    }
+    setGroups(getUserGroups().filter(g => Array.isArray(g.members)))
   }, [open])
+  const [saveError, setSaveError] = useState<string | null>(null)
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")
   const [voteType, setVoteType] = useState("single") // single, multiple, ranked
@@ -123,60 +93,64 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
   const [weightCalculation, setWeightCalculation] = useState("linear") // linear, sqrt, quadratic
   const [snapshotBlock, setSnapshotBlock] = useState("latest") // latest, specific
   const [specificBlock, setSpecificBlock] = useState("")
-  const [isTimeLockedSeal, setIsTimeLockedSeal] = useState(true) // Mysten SEAL 时间锁盲投
+  const [isTimeLockedSeal, setIsTimeLockedSeal] = useState(false) // 仅保存设置草稿，尚未接入 SEAL
   const [targetNftType, setTargetNftType] = useState("") // NFT Gating 合约类型
 
-  // Reset state when dialog opens/closes
-  useEffect(() => {
-    if (!open) {
-      setTimeout(() => {
-        setStep(1)
-        setTitle("")
-        setDescription("")
-        setVoteType("single")
-        setVoterSource("manual")
-        setSelectedGroup("")
-        setVoters([])
-        setSearchTerm("")
-        setVoteOptions([initialVoteOption])
-        setIsAnonymous(false)
-        setShowResults("after")
-        setExpiryDate(undefined)
-        setCreateTransaction(false)
-        setSelectedTransaction(undefined)
-        // 重置新添加的状态
-        setWeightType("manual")
-        setTokenAddress("")
-        setTokenSymbol("")
-        setWeightCalculation("linear")
-        setSnapshotBlock("latest")
-        setSpecificBlock("")
-        setIsTimeLockedSeal(true)
-        setTargetNftType("")
-      }, 300)
-    }
-  }, [open])
+  const [allowLinkAccess, setAllowLinkAccess] = useState(true)
+  const [publicationInfo, setPublicationInfo] = useState(false)
+  const [fundingOpen, setFundingOpen] = useState(false)
+  const [publishing, setPublishing] = useState(false)
+  const [published, setPublished] = useState<{ id: string; digest: string; warning?: string } | null>(null)
+  const recovery = usePendingCreation(open, "publish-poll", governancePublicationScope(selectedGroup))
+  const publicationGuard = useRef(createSubmissionGuard())
+  const initialRosterGeneration = useRef(0)
 
-  // When a group is selected, sync the voters
+  // Hydrate every setting when resuming. No delayed reset can erase a reopened draft.
   useEffect(() => {
-    if (selectedGroup && voterSource === "group") {
-      const group = groups.find((g) => g.id === selectedGroup)
-      if (group) {
-        setVoters(
-          group.members.map((member) => ({
-            id: member.id,
-            name: member.name,
-            address: member.address,
-            weight: member.weight,
-            type: member.address.includes("@") ? ("email" as const) : ("wallet" as const),
-          })),
-        )
-      }
+    if (!open) return
+    const run = ++initialRosterGeneration.current
+    const saved = getGovernanceVotes().find(vote => vote.id === (draftId || initialVoteId))
+    const groupStart = !saved && !!initialGroupId
+    setSaveError(null); setPublished(null); setPublicationInfo(false); setStep(1); setSearchTerm("")
+    setTitle(saved?.title || ""); setDescription(saved?.description || "")
+    setVoteType(saved?.voteType || "single"); setVoterSource(saved?.voterSource || (groupStart ? "group" : "manual"))
+    setSelectedGroup(saved?.selectedGroup || saved?.groupId || initialGroupId || "")
+    setVoters(saved?.voters.map(voter => ({ ...voter, address: voter.address || "", weight: voter.weight ?? 1 })) || [])
+    setVoteOptions(saved?.options.length ? saved.options.map(option => ({ id: option.id, text: option.text })) : [initialVoteOption])
+    setIsAnonymous(!!saved?.isAnonymous); setShowResults(saved?.showResultsDuring ? "during" : "after")
+    setExpiryDate(saved?.expiresAt && Number.isFinite(Date.parse(saved.expiresAt)) ? new Date(saved.expiresAt) : undefined)
+    setCreateTransaction(!!saved?.createTransaction); setSelectedTransaction(saved?.selectedTransaction)
+    setWeightType(saved?.weightType || "manual"); setTokenAddress(saved?.tokenAddress || ""); setTokenSymbol(saved?.tokenSymbol || "")
+    setWeightCalculation(saved?.weightCalculation || "linear"); setSnapshotBlock(saved?.snapshotBlock || "latest"); setSpecificBlock(saved?.specificBlock || "")
+    setIsTimeLockedSeal(!!saved?.isTimeLockedSeal); setTargetNftType(saved?.targetNftType || "")
+    setAllowLinkAccess(saved?.allowLinkAccess !== false)
+    if (groupStart) {
+      try {
+        const scope = resolveGroupPollScope(initialGroupId, undefined, getUserGroups())
+        if (!scope.groupId) throw new Error(t("voting.errGroupScope"))
+        void groupPollReader.readOrganization(scope.orgId).then(org => {
+          if (run !== initialRosterGeneration.current) return
+          setVoters(Object.entries(org.members).map(([address, weight]) => ({ id: address, name: address, address, weight, type: "wallet" as const })))
+        }).catch(error => { if (run === initialRosterGeneration.current) setSaveError(error instanceof Error ? error.message : t("voting.errRosterRead")) })
+      } catch (error) { setSaveError(error instanceof Error ? error.message : t("voting.errRosterReadShort")) }
     }
-  }, [selectedGroup, voterSource])
+    const invalidate = () => { initialRosterGeneration.current++ }
+    return () => { invalidate() }
+  }, [open, draftId, initialVoteId, initialGroupId])
+
+  const selectGroup = (groupId: string) => {
+    initialRosterGeneration.current++
+    setSelectedGroup(groupId)
+    const members = groups.find(group => group.id === groupId)?.members.map(member => ({
+      // Voter rows are keyed by id; the address is the only stable identity a
+      // group roster carries, so it doubles as one.
+      ...member, id: member.address, weight: member.weight ?? 1, type: "wallet" as const,
+    })) || []
+    setVoters(current => voterSource === "group" ? members : [...current, ...members.filter(member => !current.some(voter => voter.address.toLowerCase() === member.address.toLowerCase()))])
+  }
 
   const addVoteOption = () => {
-    setVoteOptions([...voteOptions, { id: `option-${voteOptions.length + 1}`, text: "" }])
+    setVoteOptions([...voteOptions, { id: `option-${Date.now()}`, text: "" }])
   }
 
   const updateVoteOption = (id: string, text: string) => {
@@ -190,7 +164,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
   }
 
   const addVoter = (contact: (typeof recentContacts)[0]) => {
-    if (!voters.some((v) => v.id === contact.id)) {
+    if (!voters.some((v) => v.address.toLowerCase() === contact.address.toLowerCase())) {
       setVoters([
         ...voters,
         {
@@ -220,65 +194,59 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
     setStep(step - 1)
   }
 
+  const voteDraft = () => {
+    const previous = draftId ? getGovernanceVotes().find(vote => vote.id === draftId) : undefined
+    return {
+      ...previous,
+      id: draftId || `draft-${crypto.randomUUID()}`,
+      title: title.trim(), description: description.trim(),
+      creator: previous?.creator || getActiveAccount()?.address || t("voting.localUser"),
+      creatorAddress: previous?.creatorAddress || getActiveAccount()?.address,
+      createdAt: previous?.createdAt || new Date().toISOString(),
+      expiresAt: expiryDate?.toISOString(),
+      voteType, status: "draft", source: "local-draft",
+      selectedGroup, groupId: selectedGroup, voterSource, createTransaction, selectedTransaction, allowLinkAccess,
+      group: groups.find(g => g.id === selectedGroup)?.name || previous?.group || t("voting.noGroupSelected"),
+      isAnonymous, isTimeLockedSeal, weightType, targetNftType,
+      weightCalculation, tokenAddress, tokenSymbol, snapshotBlock, specificBlock,
+      showResultsDuring: showResults === "during", voters,
+      color: previous?.color || "from-primary to-purple-500",
+      options: voteOptions.map(opt => ({ id: opt.id, text: opt.text.trim() })),
+    }
+  }
   const handleCreateVote = () => {
-    if (!title.trim()) return
-
-    const newVote = {
-      id: `vote-${Date.now()}`,
-      title: title.trim(),
-      description: description.trim(),
-      creator: "Me (Organizer)",
-      creatorAvatar: "/placeholder.svg?height=40&width=40",
-      createdAt: new Date().toISOString(),
-      expiresAt: expiryDate ? expiryDate.toISOString() : new Date(Date.now() + 86400000 * 7).toISOString(),
-      voteType,
-      totalVotes: 1,
-      myVote: null,
-      status: "active",
-      progress: {
-        option1: 1,
-        option2: 0,
-      },
-      group: groups.find((g) => g.id === selectedGroup)?.name || "团队财务",
-      isAnonymous,
-      isTimeLockedSeal,
-      sealThreshold: 2,
-      weightType,
-      targetNftType: weightType === "nft" ? targetNftType.trim() : undefined,
-      weightCalculation: weightType === "token" ? weightCalculation : undefined,
-      color: "from-primary to-purple-500",
-      showResultsDuring: isTimeLockedSeal ? false : showResults === "always",
-      options: voteOptions.map((opt) => ({
-        id: opt.id,
-        text: opt.text,
-        votes: 0,
-        percentage: 0,
-      })),
-    }
-
+    setSaveError(null)
+    if (!title.trim()) { setSaveError(t("voting.errTitleRequired")); return }
     try {
-      const stored = JSON.parse(localStorage.getItem("sui_governance_votes") || "[]")
-      stored.unshift(newVote)
-      localStorage.setItem("sui_governance_votes", JSON.stringify(stored))
-      window.dispatchEvent(new CustomEvent("sui-votes-updated", { detail: stored }))
-
-      if (createTransaction) {
-        createTransferProposalOnChain({
-          title: title.trim(),
-          recipient: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-          amount: 10,
-          token: "SUI",
-          description: description.trim() || "关联治理转账提案",
-          groupId: selectedGroup || "group-1",
-          groupName: groups.find((g) => g.id === selectedGroup)?.name || "Team Treasury",
-          deadlineMs: expiryDate ? expiryDate.getTime() : undefined,
-        }).catch((err) => console.warn("Attached onchain proposal notice:", err))
-      }
-    } catch (e) {
-      console.warn("Failed to save vote to localStorage", e)
+      saveGovernanceDraft(voteDraft())
+      onOpenChange(false)
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : t("voting.errDraftSaveFail"))
     }
-
-    onOpenChange(false)
+  }
+  const handleResumeVote = async () => {
+    if (!recovery.pending || !publicationGuard.current.enter()) return
+    setPublishing(true); setSaveError(null)
+    try { setPublished(await resumeGovernancePoll(recovery.pending)); recovery.setPending(undefined) }
+    catch (error) {
+      if (error instanceof TransactionReceiptError) recovery.setPending(error.status === "failed" ? undefined : error.receipt)
+      setSaveError(error instanceof Error ? error.message : t("voting.errResumeNotConfirmed"))
+    } finally { publicationGuard.current.leave(); setPublishing(false) }
+  }
+  const handlePublishVote = async () => {
+    if (publishing || published || recovery.blocked || !publicationGuard.current.enter()) return
+    setPublishing(true); setSaveError(null); setPublicationInfo(true)
+    const draft = voteDraft()
+    try {
+      // Save every selected policy before capability/transaction checks. A
+      // failed publication leaves a resumable configuration, never a fake poll.
+      saveGovernanceDraft(draft)
+      const result = await publishGovernancePoll(draft)
+      setPublished(result)
+    } catch (error) {
+      if (error instanceof TransactionReceiptError) recovery.setPending(error.status === "failed" ? undefined : error.receipt)
+      setSaveError(error instanceof Error ? error.message : t("voting.errPublishFail"))
+    } finally { publicationGuard.current.leave(); setPublishing(false) }
   }
 
   // Filter contacts based on search term
@@ -290,18 +258,26 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
       )
     : recentContacts
 
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[600px] p-0 gap-0 overflow-hidden">
+  return (<>
+    <Dialog open={open && !fundingOpen} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[600px] max-h-[90dvh] overflow-y-auto p-0 gap-0">
         <DialogHeader className="p-4 pb-0">
-          <DialogTitle>创建投票提案</DialogTitle>
-          <DialogDescription>创建一个新的投票提案供成员投票</DialogDescription>
+          <DialogTitle>{draftId ? t("voting.dialogTitleEdit") : initialVoteId ? t("voting.dialogTitleFromHistory") : t("voting.newVote")}</DialogTitle>
+          <DialogDescription>{t("voting.dialogDesc")}</DialogDescription>
         </DialogHeader>
 
         <div className="relative overflow-hidden">
           <div className="flex justify-between px-4 pt-4">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="flex flex-col items-center" onClick={() => i < step && setStep(i)}>
+              <button
+                key={i}
+                type="button"
+                disabled={i >= step}
+                onClick={() => setStep(i)}
+                aria-current={i === step ? "step" : undefined}
+                aria-label={t("voting.stepAria", { index: i, label: [t("voting.stepBasic"), t("voting.stepOptions"), t("voting.stepSettings")][i - 1] })}
+                className="flex flex-col items-center rounded-md disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
                 <div
                   className={`h-8 w-8 rounded-full flex items-center justify-center text-sm ${
                     i < step
@@ -314,9 +290,9 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                   {i}
                 </div>
                 <div className="text-xs mt-1 text-muted-foreground">
-                  {i === 1 ? "基本信息" : i === 2 ? "选项和选民" : "设置和确认"}
+                  {i === 1 ? t("voting.stepBasic") : i === 2 ? t("voting.stepOptions") : t("voting.stepSettings")}
                 </div>
-              </div>
+              </button>
             ))}
             <div className="absolute top-[28px] left-[68px] w-[120px] h-[2px] bg-muted">
               <div className={`h-full bg-primary transition-all ${step > 1 ? "w-full" : "w-0"}`}></div>
@@ -339,11 +315,11 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                 <div className="space-y-3">
                   <div className="space-y-1">
                     <Label htmlFor="title" className="text-xs font-medium">
-                      投票标题
+                      {t("voting.titleLabel")}
                     </Label>
                     <Input
                       id="title"
-                      placeholder="例如：增加市场预算提案"
+                      placeholder={t("voting.titlePlaceholder")}
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
                     />
@@ -351,11 +327,11 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
 
                   <div className="space-y-1">
                     <Label htmlFor="description" className="text-xs font-medium">
-                      详细描述
+                      {t("voting.descriptionLabel")}
                     </Label>
                     <Textarea
                       id="description"
-                      placeholder="提供关于此投票的详细信息..."
+                      placeholder={t("voting.descriptionPlaceholder")}
                       className="resize-none h-24"
                       value={description}
                       onChange={(e) => setDescription(e.target.value)}
@@ -363,68 +339,68 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-xs font-medium">投票类型</Label>
+                    <Label className="text-xs font-medium">{t("voting.voteTypeLabel")}</Label>
                     <Tabs value={voteType} onValueChange={setVoteType} className="w-full">
                       <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl h-9">
                         <TabsTrigger
                           value="single"
                           className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                         >
-                          单选
+                          {t("voting.modeSingle")}
                         </TabsTrigger>
                         <TabsTrigger
                           value="multiple"
                           className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                         >
-                          多选
+                          {t("voting.modeMultiple")}
                         </TabsTrigger>
                         <TabsTrigger
                           value="ranked"
                           className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                         >
-                          排序
+                          {t("voting.modeRanked")}
                         </TabsTrigger>
                       </TabsList>
                     </Tabs>
                     <p className="text-xs text-muted-foreground mt-1">
                       {voteType === "single"
-                        ? "选民只能选择一个选项"
+                        ? t("voting.hintSingle")
                         : voteType === "multiple"
-                          ? "选民可以选择多个选项"
-                          : "选民对选项进行排序投票"}
+                          ? t("voting.hintMultiple")
+                          : t("voting.hintRanked")}
                     </p>
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-xs font-medium">投票权重类型</Label>
+                    <Label className="text-xs font-medium">{t("voting.weightTypeLabel")}</Label>
                     <Tabs value={weightType} onValueChange={setWeightType} className="w-full">
                       <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl h-9">
                         <TabsTrigger
                           value="manual"
                           className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                         >
-                          手动设置
+                          {t("voting.weightManualTab")}
                         </TabsTrigger>
                         <TabsTrigger
                           value="token"
                           className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                         >
-                          代币余额
+                          {t("voting.weightToken")}
                         </TabsTrigger>
                         <TabsTrigger
                           value="nft"
                           className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                         >
-                          NFT持有
+                          {t("voting.weightNftTab")}
                         </TabsTrigger>
                       </TabsList>
                     </Tabs>
                     <p className="text-xs text-muted-foreground mt-1">
                       {weightType === "manual"
-                        ? "手动为每个选民设置投票权重"
+                        ? t("voting.hintWeightManual")
                         : weightType === "token"
-                          ? "根据选民持有的代币数量确定投票权重"
-                          : "根据选民持有的NFT数量确定投票权重"}
+                          ? t("voting.hintWeightToken")
+                          : t("voting.hintWeightNft")}
                     </p>
                   </div>
 
@@ -432,7 +408,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                     <div className="space-y-3 mt-3 p-3 rounded-lg border">
                       <div className="space-y-1">
                         <Label htmlFor="tokenAddress" className="text-xs font-medium">
-                          代币合约地址
+                          {t("voting.tokenAddressLabel")}
                         </Label>
                         <Input
                           id="tokenAddress"
@@ -444,39 +420,39 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
 
                       <div className="space-y-1">
                         <Label htmlFor="tokenSymbol" className="text-xs font-medium">
-                          代币符号
+                          {t("voting.tokenSymbolLabel")}
                         </Label>
                         <Input
                           id="tokenSymbol"
-                          placeholder="例如：ETH, USDC"
+                          placeholder={t("voting.tokenSymbolPlaceholder")}
                           value={tokenSymbol}
                           onChange={(e) => setTokenSymbol(e.target.value)}
                         />
                       </div>
 
                       <div className="space-y-1">
-                        <Label className="text-xs font-medium">权重计算方式</Label>
+                        <Label className="text-xs font-medium">{t("voting.calcLabel")}</Label>
                         <Select value={weightCalculation} onValueChange={setWeightCalculation}>
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="linear">线性 (1代币 = 1票)</SelectItem>
-                            <SelectItem value="sqrt">平方根 (票数 = √代币数)</SelectItem>
-                            <SelectItem value="quadratic">二次方 (票数 = 代币数²)</SelectItem>
+                            <SelectItem value="linear">{t("voting.calcLinearOption")}</SelectItem>
+                            <SelectItem value="sqrt">{t("voting.calcSqrtOption")}</SelectItem>
+                            <SelectItem value="quadratic">{t("voting.calcQuadraticOption")}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
 
                       <div className="space-y-1">
-                        <Label className="text-xs font-medium">余额快照</Label>
+                        <Label className="text-xs font-medium">{t("voting.snapshotLabel")}</Label>
                         <Select value={snapshotBlock} onValueChange={setSnapshotBlock}>
                           <SelectTrigger>
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="latest">使用最新区块</SelectItem>
-                            <SelectItem value="specific">使用特定区块</SelectItem>
+                            <SelectItem value="latest">{t("voting.snapshotLatestOption")}</SelectItem>
+                            <SelectItem value="specific">{t("voting.snapshotSpecificOption")}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -484,11 +460,11 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                       {snapshotBlock === "specific" && (
                         <div className="space-y-1">
                           <Label htmlFor="specificBlock" className="text-xs font-medium">
-                            区块高度
+                            {t("voting.blockHeightLabel")}
                           </Label>
                           <Input
                             id="specificBlock"
-                            placeholder="例如：16123456"
+                            placeholder={t("voting.blockHeightPlaceholder")}
                             value={specificBlock}
                             onChange={(e) => setSpecificBlock(e.target.value)}
                           />
@@ -502,16 +478,16 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                       <div className="space-y-1">
                         <Label htmlFor="targetNftType" className="text-xs font-medium flex items-center">
                           <SparklesIcon className="h-3.5 w-3.5 mr-1 text-purple-500" />
-                          治理凭证 NFT 合约类型 (Type Tag)
+                          {t("voting.nftTypeLabel")}
                         </Label>
                         <Input
                           id="targetNftType"
-                          placeholder="例如：0x83fb...::membership::CouncilBadge"
+                          placeholder={t("voting.nftTypePlaceholder")}
                           value={targetNftType}
                           onChange={(e) => setTargetNftType(e.target.value)}
                         />
                         <p className="text-[11px] text-muted-foreground mt-1">
-                          门禁规则：仅持有该 Move NFT 资产的钱包地址具有投票资格，1 NFT = 1 票。
+                          {t("voting.nftNote")}
                         </p>
                       </div>
                     </div>
@@ -519,7 +495,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
 
                   <div className="space-y-1">
                     <Label htmlFor="expiry" className="text-xs font-medium">
-                      投票截止日期
+                      {t("voting.expiryLabel")}
                     </Label>
                     <Popover>
                       <PopoverTrigger asChild>
@@ -531,7 +507,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                           )}
                         >
                           <CalendarIcon className="mr-2 h-4 w-4" />
-                          {expiryDate ? format(expiryDate, "PPP") : "选择日期"}
+                          {expiryDate ? format(expiryDate, "PPP") : t("voting.pickDate")}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0">
@@ -557,7 +533,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                   <div className="space-y-2">
                     <Label className="text-xs font-medium flex items-center">
                       <ListFilter className="h-4 w-4 mr-1.5" />
-                      投票选项
+                      {t("voting.optionsSection")}
                     </Label>
 
                     <div className="space-y-2">
@@ -567,7 +543,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             {index + 1}
                           </div>
                           <Input
-                            placeholder={`选项 ${index + 1}`}
+                            placeholder={t("voting.optionPlaceholder", { index: index + 1 })}
                             value={option.text}
                             onChange={(e) => updateVoteOption(option.id, e.target.value)}
                             className="flex-1"
@@ -587,7 +563,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                     </div>
 
                     <Button type="button" variant="outline" size="sm" onClick={addVoteOption} className="w-full mt-2">
-                      <PlusIcon className="h-4 w-4 mr-1" /> 添加选项
+                      <PlusIcon className="h-4 w-4 mr-1" /> {t("voting.addOption")}
                     </Button>
                   </div>
 
@@ -595,7 +571,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                   <div className="space-y-2 pt-4 border-t">
                     <Label className="text-xs font-medium flex items-center">
                       <Users className="h-4 w-4 mr-1.5" />
-                      投票人员
+                      {t("voting.votersSection")}
                     </Label>
 
                     <div className="space-y-2">
@@ -605,19 +581,19 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             value="manual"
                             className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                           >
-                            手动添加
+                            {t("voting.addManually")}
                           </TabsTrigger>
                           <TabsTrigger
                             value="group"
                             className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                           >
-                            从组同步
+                            {t("voting.syncFromGroup")}
                           </TabsTrigger>
                           <TabsTrigger
                             value="hybrid"
                             className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
                           >
-                            混合模式
+                            {t("voting.hybridMode")}
                           </TabsTrigger>
                         </TabsList>
                       </Tabs>
@@ -625,11 +601,11 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                       {(voterSource === "group" || voterSource === "hybrid") && (
                         <div className="space-y-1 mt-2">
                           <Label htmlFor="group" className="text-xs font-medium">
-                            选择组
+                            {t("voting.selectGroupLabel")}
                           </Label>
-                          <Select value={selectedGroup} onValueChange={setSelectedGroup}>
+                          <Select value={selectedGroup} onValueChange={selectGroup}>
                             <SelectTrigger id="group">
-                              <SelectValue placeholder="选择一个组" />
+                              <SelectValue placeholder={t("voting.selectGroupPlaceholder")} />
                             </SelectTrigger>
                             <SelectContent>
                               {groups.map((group) => (
@@ -646,13 +622,18 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                         <div className="mt-2">
                           <div className="flex items-center gap-2 mb-2">
                             <Input
-                              placeholder="搜索联系人..."
+                              placeholder={t("voting.searchContactsPlaceholder")}
                               value={searchTerm}
                               onChange={(e) => setSearchTerm(e.target.value)}
                               className="flex-1"
                             />
-                            <Button type="button" variant="outline" size="icon" className="h-9 w-9">
-                              <SearchIcon className="h-4 w-4" />
+                            <Button type="button" variant="outline" size="icon" className="h-9 w-9"onClick={() => {
+                              const address = searchTerm.trim()
+                              if (!/^0x[0-9a-fA-F]{1,64}$/.test(address) && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(address)) { setSaveError(t("voting.errInvalidVoterInput")); return }
+                              addVoter({ id: address.toLowerCase(), name: address, address, type: address.includes("@") ? "email" : "wallet" })
+                              setSearchTerm(""); setSaveError(null)
+                            }} aria-label={t("voting.addVoterAria")}>
+                              <PlusIcon className="h-4 w-4" />
                             </Button>
                           </div>
 
@@ -687,7 +668,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                                 </div>
                               ))}
                               {filteredContacts.length === 0 && (
-                                <div className="p-2 text-center text-sm text-muted-foreground">未找到匹配的联系人</div>
+                                <div className="p-2 text-center text-sm text-muted-foreground">{t("voting.noContactsFound")}</div>
                               )}
                             </div>
                           </ScrollArea>
@@ -697,7 +678,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                       {/* 已选择的投票人 */}
                       {voters.length > 0 && (
                         <div className="mt-3">
-                          <Label className="text-xs font-medium">已选择的投票人 ({voters.length})</Label>
+                          <Label className="text-xs font-medium">{t("voting.selectedVoters", { count: voters.length })}</Label>
                           <ScrollArea className="h-[150px] border rounded-md p-2 mt-1">
                             <div className="space-y-1">
                               {voters.map((voter) => (
@@ -793,7 +774,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                   <div className="space-y-2">
                     <Label className="text-xs font-medium flex items-center">
                       <EyeIcon className="h-4 w-4 mr-1.5" />
-                      隐私设置
+                      {t("voting.privacySection")}
                     </Label>
 
                     <div className="space-y-2">
@@ -804,13 +785,13 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                           </div>
                           <div>
                             <div className="flex items-center gap-1.5">
-                              <p className="text-sm font-semibold">Mysten SEAL 时间锁盲投</p>
+                              <p className="text-sm font-semibold">{t("voting.sealTimeLockTitle")}</p>
                               <span className="text-[10px] bg-purple-500/15 text-purple-700 dark:text-purple-300 font-semibold px-1.5 py-0.5 rounded">
-                                Threshold: 2
+                                {t("voting.notWiredBadge")}
                               </span>
                             </div>
                             <p className="text-xs text-muted-foreground mt-0.5">
-                              选票在客户端经门限加密上链，截止前全网密态，截止后通过 Sui 时钟统一解密，杜绝羊群效应
+                              {t("voting.sealTimeLockDesc")}
                             </p>
                           </div>
                         </div>
@@ -827,9 +808,9 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             )}
                           </div>
                           <div>
-                            <p className="text-sm font-medium">隐藏选民身份 (匿名投票)</p>
+                            <p className="text-sm font-medium">{t("voting.anonymousTitle")}</p>
                             <p className="text-xs text-muted-foreground">
-                              {isAnonymous ? "投票人的地址将被遮蔽" : "投票人的地址将公开显示"}
+                              {isAnonymous ? t("voting.anonymousOn") : t("voting.anonymousOff")}
                             </p>
                           </div>
                         </div>
@@ -846,9 +827,9 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             )}
                           </div>
                           <div>
-                            <p className="text-sm font-medium">结果显示时间</p>
+                            <p className="text-sm font-medium">{t("voting.resultsTimingTitle")}</p>
                             <p className="text-xs text-muted-foreground">
-                              {showResults === "after" ? "投票结束后显示结果" : "投票期间实时显示结果"}
+                              {showResults === "after" ? t("voting.resultsAfterHint") : t("voting.resultsDuringHint")}
                             </p>
                           </div>
                         </div>
@@ -857,8 +838,8 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             <SelectValue />
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="after">投票结束后</SelectItem>
-                            <SelectItem value="during">投票期间</SelectItem>
+                            <SelectItem value="after">{t("voting.resultsAfter")}</SelectItem>
+                            <SelectItem value="during">{t("voting.resultsDuring")}</SelectItem>
                           </SelectContent>
                         </Select>
                       </div>
@@ -869,11 +850,11 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             <LinkIcon className="h-4 w-4 text-primary" />
                           </div>
                           <div>
-                            <p className="text-sm font-medium">访问链接</p>
-                            <p className="text-xs text-muted-foreground">创建可共享的链接供未添加的用户访问</p>
+                            <p className="text-sm font-medium">{t("voting.linkAccessTitle")}</p>
+                            <p className="text-xs text-muted-foreground">{allowLinkAccess ? t("voting.linkAccessOn") : t("voting.linkAccessOff")}</p>
                           </div>
                         </div>
-                        <Switch defaultChecked />
+                        <Switch checked={allowLinkAccess} onCheckedChange={setAllowLinkAccess} />
                       </div>
                     </div>
                   </div>
@@ -881,7 +862,7 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                   <div className="space-y-2 pt-4 border-t">
                     <Label className="text-xs font-medium flex items-center">
                       <CheckCircle2Icon className="h-4 w-4 mr-1.5" />
-                      执行设置
+                      {t("voting.settingsExecution")}
                     </Label>
 
                     <div className="space-y-2">
@@ -891,9 +872,9 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                             <Vote className="h-4 w-4 text-primary" />
                           </div>
                           <div>
-                            <p className="text-sm font-medium">投票后创建交易</p>
+                            <p className="text-sm font-medium">{t("voting.createTxTitle")}</p>
                             <p className="text-xs text-muted-foreground">
-                              {createTransaction ? "投票通过后自动创建交易执行" : "仅记录投票结果，不执行交易"}
+                              {createTransaction ? t("voting.createTxOn") : t("voting.createTxOff")}
                             </p>
                           </div>
                         </div>
@@ -902,18 +883,18 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
 
                       {createTransaction && (
                         <div className="space-y-1 pl-10">
-                          <Label className="text-xs font-medium">选择交易模板</Label>
+                          <Label className="text-xs font-medium">{t("voting.selectTemplateLabel")}</Label>
                           <Select value={selectedTransaction} onValueChange={setSelectedTransaction}>
                             <SelectTrigger>
-                              <SelectValue placeholder="选择交易模板" />
+                              <SelectValue placeholder={t("voting.selectTemplateLabel")} />
                             </SelectTrigger>
                             <SelectContent>
-                              <SelectItem value="template-1">转账到外部钱包</SelectItem>
-                              <SelectItem value="template-2">质押代币</SelectItem>
-                              <SelectItem value="template-3">代币兑换</SelectItem>
+                              <SelectItem value="template-1">{t("voting.templateTransfer")}</SelectItem>
+                              <SelectItem value="template-2">{t("voting.templateStake")}</SelectItem>
+                              <SelectItem value="template-3">{t("voting.templateSwap")}</SelectItem>
                             </SelectContent>
                           </Select>
-                          <p className="text-xs text-muted-foreground mt-1">投票通过后将使用所选模板创建交易</p>
+                          <p className="text-xs text-muted-foreground mt-1">{t("voting.templateNote")}</p>
                         </div>
                       )}
                     </div>
@@ -923,13 +904,13 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
                     <div className="flex items-start">
                       <AlertTriangleIcon className="h-5 w-5 text-yellow-500 mr-2 mt-0.5" />
                       <div>
-                        <p className="text-sm font-medium text-yellow-700">提交前确认</p>
+                        <p className="text-sm font-medium text-yellow-700">{t("voting.confirmTitle")}</p>
                         <p className="text-xs text-yellow-600 mt-1">
-                          请确认所有投票设置正确。投票创建后，部分设置将无法更改。
+                          {t("voting.confirmBody")}
                           {expiryDate && (
                             <>
                               <br />
-                              投票将在 <strong>{format(expiryDate, "PPP")}</strong> 结束。
+                              {t("voting.draftDeadlinePrefix")} <strong>{format(expiryDate, "PPP")}</strong>{t("voting.draftDeadlineSuffix")}
                             </>
                           )}
                         </p>
@@ -942,34 +923,39 @@ export function CreateVoteDialog({ open, onOpenChange }: CreateVoteDialogProps) 
           </AnimatePresence>
         </div>
 
+        {recovery.pending && <div role="status" className="mx-4 mb-3 rounded-lg border p-3 text-xs space-y-2 break-all"><p>{t("voting.recoveryIntro")}{recovery.pending.digest || t("voting.noDigestYet")}{t("voting.recoveryTail")}</p>{!recovery.pending.persistent && <p>{t("voting.storageUnavailable")}</p>}<Button size="sm" variant="outline" disabled={publishing || !recovery.pending.digest} onClick={() => void handleResumeVote()}>{t("voting.resumeByDigest")}</Button></div>}
+        {recovery.receiptError && <p role="alert" className="px-4 text-xs text-destructive">{recovery.receiptError}</p>}
+        {publicationInfo && <div className="mx-4 mb-3 rounded-lg border bg-muted/30 p-3 space-y-2 text-xs" role="status">
+          {governancePublicationGaps().map(gap => <p key={gap}>{gap}</p>)}
+          <Button size="sm" variant="outline" onClick={() => setFundingOpen(true)}>{t("voting.createFundingProposal")}</Button>
+        </div>}
+        {published && <div className="mx-4 mb-3 rounded-lg border p-3 text-xs space-y-2" role="status"><p>{t("voting.voteTxConfirmed")}{published.warning}</p><a className="block break-all underline" href={`?vote=${published.id}`}>{t("voting.openSharedVote", { id: published.id })}</a><a className="block break-all underline" target="_blank" rel="noreferrer" href={`https://suiscan.xyz/testnet/tx/${published.digest}`}>{t("voting.viewRealReceipt", { digest: published.digest })}</a><p className="text-muted-foreground">{t("voting.originalDraftKept")}</p></div>}
+        {saveError && <p role="alert" className="px-4 text-xs text-destructive">{saveError}</p>}
         <DialogFooter className="p-4 pt-2">
           {step > 1 ? (
             <div className="flex w-full justify-between">
               <Button type="button" variant="outline" onClick={prevStep} size="sm">
-                上一步
+                {t("voting.prevStep")}
               </Button>
               {step < 3 ? (
                 <Button type="button" onClick={nextStep} size="sm">
-                  下一步
+                  {t("voting.nextStep")}
                 </Button>
               ) : (
-                <Button
-                  type="submit"
-                  size="sm"
-                  onClick={handleCreateVote}
-                  className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-                >
-                  创建投票
-                </Button>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" size="sm" variant="outline" onClick={handleCreateVote}>{t("voting.saveDraft")}</Button>
+                  <Button type="button" size="sm" disabled={publishing || !!published || recovery.blocked} onClick={() => void handlePublishVote()} className="bg-gradient-to-r from-primary to-purple-500">{publishing ? t("voting.waitingSignatureConfirm") : published ? t("voting.publishedLabel") : t("voting.publishVote")}</Button>
+                </div>
               )}
             </div>
           ) : (
             <Button type="button" onClick={nextStep} className="w-full">
-              下一步
+              {t("voting.nextStep")}
             </Button>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  )
+    <GroupProposalEntryDialog open={open && fundingOpen} onOpenChange={setFundingOpen} />
+  </>)
 }

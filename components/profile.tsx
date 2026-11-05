@@ -1,424 +1,289 @@
 "use client"
 
-import { Badge } from "@/components/ui/badge"
-
+import { useEffect, useMemo, useRef, useState } from "react"
+import { motion } from "framer-motion"
+import { QRCodeSVG } from "qrcode.react"
+import Link from "next/link"
+import { ArrowDownLeft, Check, ChevronDown, ChevronRight, Copy, ExternalLink, HardDrive, History, Loader2, QrCode, RefreshCw, ShieldCheck, Users, Wallet } from "lucide-react"
+import { useI18n } from "@/components/i18n-provider"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
+import { Badge } from "@/components/ui/badge"
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { HistoryItem } from "@/components/history-item"
-import { motion } from "framer-motion"
-import { Copy, ExternalLink, QrCode, ChevronDown } from "lucide-react"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
-import { useState, useEffect } from "react"
-import { fetchRealBalances, getProposals, type TokenBalanceInfo } from "@/lib/onchain-store"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { IdentityPanel } from "@/components/identity-panel"
+import { safeAvatar } from "@/components/identity-avatar"
+import { ShareQrDialog } from "@/components/share-qr-dialog"
+import { GroupDetailsDialog } from "@/components/group-details-dialog"
+import { getActiveAccount, getUserGroups } from "@/lib/onchain-store"
+import { useTheme } from "next-themes"
+import { mergeDiscoveredGroups } from "@/lib/group-discovery"
+import { useGroupDiscovery } from "@/lib/use-group-discovery"
+import { reverseResolveSuiNSName } from "@/lib/suins"
+import type { IdentityProfile } from "@/lib/identity-client"
+import { readWalletActivity, readWalletAssets, type WalletActivity, type WalletAsset } from "@/lib/wallet-data"
+import { fetchTokenPrices, formatChange, formatUsd, totalUsdValue, type PriceSnapshot } from "@/lib/price-feed"
 
-export default function Profile() {
-  const [activeAccount, setActiveAccount] = useState("personal")
-  const [savedUser, setSavedUser] = useState<any>(null)
-  const [tokenBalances, setTokenBalances] = useState<{
-    sui: TokenBalanceInfo
-    ssui: TokenBalanceInfo
-    usdc: TokenBalanceInfo
-    wal: TokenBalanceInfo
-  }>({
-    sui: { symbol: "SUI", name: "Sui Native Coin", coinType: "0x2::sui::SUI", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-    ssui: { symbol: "sSUI", name: "Spring Staked SUI", coinType: "0x...::ssui::SSUI", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-    usdc: { symbol: "USDC", name: "Sui Native USDC", coinType: "0x...::usdc::USDC", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-    wal: { symbol: "WAL", name: "Walrus Protocol", coinType: "0x...::wal::WAL", balance: "0.00", usdValue: "0.00", rawBalance: 0n },
-  })
-  const [proposalsHistory, setProposalsHistory] = useState<any[]>([])
-  const [userGroups, setUserGroups] = useState<any[]>([])
+type Account = NonNullable<ReturnType<typeof getActiveAccount>>
+const shortAddress = (address: string) => `${address.slice(0, 8)}…${address.slice(-6)}`
+const tokenColors = ["bg-indigo-500", "bg-fuchsia-500", "bg-emerald-500", "bg-sky-500"]
+
+export default function Profile({ onShowGroups }: { onShowGroups?: () => void }) {
+  const { t, locale, setLocale } = useI18n()
+  const [account, setAccount] = useState<Account | null>(null)
+  const [identity, setIdentity] = useState<IdentityProfile | null>(null)
+  const [groups, setGroups] = useState<Array<{ id: string; name: string }>>([])
+  const [selectedGroup, setSelectedGroup] = useState("")
+  const [assets, setAssets] = useState<WalletAsset[]>([])
+  const [activities, setActivities] = useState<WalletActivity[]>([])
+  const [dataAddress, setDataAddress] = useState("")
+  const [assetsLoading, setAssetsLoading] = useState(false)
+  const [activityLoading, setActivityLoading] = useState(false)
+  const [assetError, setAssetError] = useState("")
+  const [prices, setPrices] = useState<PriceSnapshot | null>(null)
+  const [activityError, setActivityError] = useState("")
+  const [cursor, setCursor] = useState<string | null>(null)
+  const [hasMore, setHasMore] = useState(false)
+  const [notice, setNotice] = useState("")
+  const [shareOpen, setShareOpen] = useState(false)
+  const [suinsName, setSuinsName] = useState("")
+  /** Set when the reverse lookup failed, so the fallback label is not read as "no name". */
+  const [suinsError, setSuinsError] = useState("")
+  const [shareLink, setShareLink] = useState("")
+  const [revision, setRevision] = useState(0)
+  // next-themes resolves on the client; `mounted` keeps the control out of the
+  // server render so markup stays deterministic.
+  const { theme, resolvedTheme, setTheme } = useTheme()
+  const [mounted, setMounted] = useState(false)
+  useEffect(() => setMounted(true), [])
+  const discovery = useGroupDiscovery()
+  // The same discovery source backs the dashboard list, so the menu counts and
+  // the dashboard counts cannot disagree.
+  const allGroups = useMemo(() => mergeDiscoveredGroups(groups, discovery.data), [groups, discovery.data])
+  const activityRun = useRef(0)
+  const loadingMore = useRef(false)
 
   useEffect(() => {
-    let cancelled = false
-
-    const load = async () => {
-      let activeAddr = ""
-      try {
-        const stored = localStorage.getItem("sui_active_account")
-        if (stored) {
-          const parsed = JSON.parse(stored)
-          if (parsed?.address && typeof parsed.address === "string" && parsed.address.startsWith("0x")) {
-            if (!cancelled) setSavedUser(parsed)
-            activeAddr = parsed.address
-          } else {
-            localStorage.removeItem("sui_active_account")
-            if (!cancelled) setSavedUser(null)
-          }
-        }
-      } catch (e) {
-        console.warn("Failed to read user from localStorage", e)
-      }
-
-      // 读取真实群组
-      try {
-        const grps = JSON.parse(localStorage.getItem("user_groups") || "[]")
-        if (!cancelled) setUserGroups(grps)
-      } catch {}
-
-      // 从 Sui RPC 抓取真实代币余额
-      if (activeAddr) {
-        try {
-          const b = await fetchRealBalances(activeAddr)
-          if (!cancelled) {
-            setTokenBalances({
-              sui: b.sui,
-              ssui: b.ssui,
-              usdc: b.usdc,
-              wal: b.wal,
-            })
-          }
-        } catch (e) {
-          console.warn("[Profile] fetchRealBalances failed:", e)
-        }
-      }
-
-      // 读取提案历史
-      try {
-        const pList = getProposals()
-        const mapped = pList.map((p) => ({
-          id: p.id,
-          type: p.status === "executed" ? "creation" : p.status === "approved" ? "approval" : "creation",
-          title: `${p.title} (${p.status})`,
-          description: `${p.amount} ${p.token} to ${p.recipient.slice(0, 8)}...`,
-          date: p.createdAt.slice(0, 10),
-          group: p.groupName,
-        }))
-        if (!cancelled) setProposalsHistory(mapped)
-      } catch {}
+    const sync = () => {
+      const next = getActiveAccount()
+      setAccount(current => current?.address === next?.address && current?.identifier === next?.identifier ? current : next)
+      setGroups(getUserGroups())
     }
-
-    load()
-    const id = window.setInterval(load, 5000)
+    sync()
+    window.addEventListener("storage", sync)
+    window.addEventListener("sui-account-switched", sync)
+    window.addEventListener("sui-groups-updated", sync)
     return () => {
-      cancelled = true
-      window.clearInterval(id)
+      window.removeEventListener("storage", sync)
+      window.removeEventListener("sui-account-switched", sync)
+      window.removeEventListener("sui-groups-updated", sync)
     }
   }, [])
 
-  const personalAddress = savedUser?.address || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
-  const personalLabel = savedUser ? `${savedUser.identifier} (${savedUser.authMethodLabel || savedUser.type})` : "未连接钱包 (点击右上角登录)"
+  const address = account?.address || ""
+  const visibleAssets = dataAddress === address ? assets : []
+  const visibleActivities = dataAddress === address ? activities : []
+  const profile = identity?.address.toLowerCase() === address.toLowerCase() ? identity : null
+  const name = profile?.displayName || (profile ? `${profile.label}.id` : suinsName || account?.identifier || t("profile.personalAccount"))
 
-  const dynamicGroupAccounts = userGroups.map((g: any, idx: number) => ({
-    id: g.id || `group-${idx}`,
-    name: `${g.name || "群组"} (${g.members?.length || 1} 成员多签)`,
-    address: g.orgObjectId || "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-    type: "group",
-  }))
+  // The wallet's own default .sui name, verified to still resolve back to it.
+  // Presentation only: a minted protocol identity takes precedence.
+  useEffect(() => {
+    setSuinsName("")
+    setSuinsError("")
+    if (!address || profile) return
+    let cancelled = false
+    void reverseResolveSuiNSName(address)
+      .then(value => { if (!cancelled) setSuinsName(value ?? "") })
+      .catch(error => { if (!cancelled) setSuinsError(error instanceof Error ? error.message : t("profile.suinsLookupFailed")) })
+    return () => { cancelled = true }
+  }, [address, profile])
 
-  const accounts = [
-    {
-      id: "personal",
-      name: personalLabel,
-      address: personalAddress,
-      type: "personal",
-    },
-    ...(dynamicGroupAccounts.length > 0
-      ? dynamicGroupAccounts
-      : [
-          {
-            id: "group-1",
-            name: "Team Treasury (Sui MultiSig)",
-            address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-            type: "group",
-          },
-          {
-            id: "group-2",
-            name: "DAO Fund (Sui Native)",
-            address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-            type: "group",
-          },
-        ]),
-  ]
+  useEffect(() => {
+    setShareOpen(false); setNotice(""); setIdentity(null)
+    if (!address) { setShareLink(""); return }
+    const url = new URL("/", window.location.origin)
+    url.searchParams.set("person", address)
+    setShareLink(url.toString())
+  }, [address])
 
-  const currentAccount = accounts.find((a) => a.id === activeAccount) || accounts[0]
-  const shortAddress = currentAccount.address.length > 14
-    ? `${currentAccount.address.slice(0, 8)}...${currentAccount.address.slice(-6)}`
-    : currentAccount.address
+  useEffect(() => {
+    let cancelled = false
+    const run = ++activityRun.current
+    loadingMore.current = false
+    setAssets([]); setActivities([]); setDataAddress(address)
+    setAssetError(""); setActivityError(""); setCursor(null); setHasMore(false); setPrices(null)
+    setAssetsLoading(!!address); setActivityLoading(!!address)
+    if (!address) return
+    void readWalletAssets(address).then(async value => {
+      if (cancelled) return
+      setAssets(value)
+      const snapshot = await fetchTokenPrices(value)
+      if (!cancelled) setPrices(snapshot)
+    })
+      .catch(error => { if (!cancelled) setAssetError(error instanceof Error ? error.message : t("profile.assetsReadFailed")) })
+      .finally(() => { if (!cancelled) setAssetsLoading(false) })
+    void readWalletActivity(address).then(value => {
+      if (!cancelled && run === activityRun.current) { setActivities(value.activities); setCursor(value.cursor); setHasMore(value.hasNextPage) }
+    }).catch(error => { if (!cancelled) setActivityError(error instanceof Error ? error.message : t("profile.activityReadFailed")) })
+      .finally(() => { if (!cancelled && run === activityRun.current) setActivityLoading(false) })
+    const invalidate = () => { activityRun.current++ }
+    return () => { cancelled = true; invalidate() }
+  }, [address, revision])
 
-  const tokens = [
-    {
-      symbol: "SUI",
-      name: "Sui Native Coin",
-      balance: tokenBalances.sui.balance,
-      usdValue: tokenBalances.sui.usdValue,
-      change: "+4.8%",
-      positive: true,
-      color: "bg-gradient-to-r from-blue-500 to-indigo-600",
-    },
-    {
-      symbol: "sSUI",
-      name: "Spring Staked SUI",
-      balance: tokenBalances.ssui.balance,
-      usdValue: tokenBalances.ssui.usdValue,
-      change: "+7.2%",
-      positive: true,
-      color: "bg-gradient-to-r from-purple-500 to-pink-500",
-    },
-    {
-      symbol: "USDC",
-      name: "Sui Native USDC",
-      balance: tokenBalances.usdc.balance,
-      usdValue: tokenBalances.usdc.usdValue,
-      change: "0.0%",
-      positive: true,
-      color: "bg-gradient-to-r from-emerald-500 to-teal-500",
-    },
-    {
-      symbol: "WAL",
-      name: "Walrus Protocol",
-      balance: tokenBalances.wal.balance,
-      usdValue: tokenBalances.wal.usdValue,
-      change: "+12.4%",
-      positive: true,
-      color: "bg-gradient-to-r from-cyan-500 to-blue-500",
-    },
-  ]
-
-  const history = proposalsHistory.length > 0 ? proposalsHistory : [
-    {
-      id: "tx1",
-      type: "approval",
-      title: "Eco Grants #1 (pending)",
-      description: "100 SUI to Treasury",
-      date: new Date().toISOString().slice(0, 10),
-      group: "Team Treasury",
-    },
-  ]
-
-  const container = {
-    hidden: { opacity: 0 },
-    show: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.1,
-      },
-    },
+  async function loadMore() {
+    if (!address || !cursor || loadingMore.current) return
+    loadingMore.current = true
+    const run = activityRun.current
+    setActivityLoading(true); setActivityError("")
+    try {
+      const page = await readWalletActivity(address, cursor)
+      if (run !== activityRun.current) return
+      if (page.hasNextPage && (!page.cursor || page.cursor === cursor)) throw new Error(t("profile.activityPageStuck"))
+      setActivities(current => [...new Map([...current, ...page.activities].map(item => [item.digest, item])).values()])
+      setCursor(page.cursor); setHasMore(page.hasNextPage)
+    } catch (error) { if (run === activityRun.current) setActivityError(error instanceof Error ? error.message : t("profile.activityReadFailed")) }
+    finally { if (run === activityRun.current) { loadingMore.current = false; setActivityLoading(false) } }
   }
 
-  const item = {
-    hidden: { opacity: 0, y: 20 },
-    show: { opacity: 1, y: 0 },
+  async function copyAddress() {
+    if (!address) return
+    try { await navigator.clipboard.writeText(address); setNotice(t("profile.addressCopied")) }
+    catch { setNotice(t("profile.copyFailed")) }
   }
 
-  return (
-    <div className="space-y-4">
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3 }}>
-        <Card className="overflow-hidden border-none shadow-sm">
-          <div className="h-24 bg-gradient-to-r from-primary to-purple-500"></div>
-          <CardContent className="p-3 relative">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center">
-                <Avatar className="h-16 w-16 border-4 border-background -mt-12 shadow-md">
-                  <AvatarFallback className="bg-gradient-to-br from-primary to-purple-500 text-white">
-                    {currentAccount.name[0]}
-                  </AvatarFallback>
-                </Avatar>
-                <div className="ml-3 mt-1">
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="p-0 h-auto hover:bg-transparent">
-                        <h3 className="font-bold text-lg flex items-center">
-                          {currentAccount.name} <ChevronDown className="h-4 w-4 ml-1" />
-                        </h3>
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56">
-                      <DropdownMenuLabel>Switch Account</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      {accounts.map((account) => (
-                        <DropdownMenuItem
-                          key={account.id}
-                          onClick={() => setActiveAccount(account.id)}
-                          className="flex items-center cursor-pointer"
-                        >
-                          <Avatar className="h-6 w-6 mr-2">
-                            <AvatarFallback
-                              className={`text-white text-xs ${
-                                account.type === "personal"
-                                  ? "bg-gradient-to-br from-primary to-purple-500"
-                                  : "bg-gradient-to-br from-blue-500 to-cyan-400"
-                              }`}
-                            >
-                              {account.name[0]}
-                            </AvatarFallback>
-                          </Avatar>
-                          <div className="flex flex-col">
-                            <span className="text-sm">{account.name}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {account.address.slice(0, 6)}...{account.address.slice(-4)}
-                            </span>
-                          </div>
-                        </DropdownMenuItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                  <div className="flex items-center text-xs text-muted-foreground">
-                    {shortAddress}
-                    <Button variant="ghost" size="icon" className="h-6 w-6 ml-1">
-                      <Copy className="h-3 w-3" />
+  return <div className="space-y-4">
+    <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+      <Card className="overflow-hidden border-none shadow-sm">
+        <div className="relative h-24 bg-gradient-to-r from-primary to-purple-500"><div className="absolute -right-6 -top-12 h-40 w-40 rounded-full border-[24px] border-white/10" /></div>
+        <CardContent className="relative p-4 pt-0">
+          <div className="flex items-start justify-between gap-3">
+            <Avatar className="-mt-8 h-16 w-16 border-4 border-background shadow-md">
+              {profile && safeAvatar(profile.avatarUrl) && <AvatarImage src={profile.avatarUrl} referrerPolicy="no-referrer" className="object-cover" alt={t("profile.avatarAlt")} />}
+              <AvatarFallback className="bg-gradient-to-br from-primary to-purple-500 text-xl font-semibold text-white">{address ? name.slice(0, 1).toUpperCase() : <Wallet className="h-6 w-6" />}</AvatarFallback>
+            </Avatar>
+            <Badge variant="outline" className="mt-3 border-primary/25 text-primary">{t("profile.personalAccount")}</Badge>
+          </div>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild><Button variant="ghost" className="mt-2 h-auto max-w-full justify-start gap-1 p-0 hover:bg-transparent"><span className="truncate text-lg font-bold">{address ? name : t("profile.connectWalletPrompt")}</span><ChevronDown className="h-4 w-4 shrink-0" /></Button></DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-64">
+              <DropdownMenuLabel>{t("profile.menuAccountsGroups")}</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => document.getElementById("btn-nav-wallet")?.click()}><Wallet className="mr-2 h-4 w-4" />{t("profile.connectOrSwitch")}</DropdownMenuItem>
+              {/* Theme selection lives in the account menu; the choice persists in this browser.
+                  Selected state compares `theme` (the stored choice), not `resolvedTheme` —
+                  "system" never appears as a resolved value. */}
+              <DropdownMenuLabel className="pt-1 text-[11px] font-normal text-muted-foreground">{t("profile.themeLabel")}</DropdownMenuLabel>
+              {mounted && (
+                <div className="flex gap-1 px-1.5 pb-1" role="group" aria-label={t("profile.themeLabel")}>
+                  {([["system", t("profile.themeSystem")], ["light", t("profile.themeLight")], ["dark", t("profile.themeDark")]] as const).map(([value, label]) => (
+                    <Button key={value} size="sm" variant={theme === value ? "secondary" : "outline"} className="h-7 flex-1 px-1 text-xs" aria-pressed={theme === value} onClick={() => setTheme(value)}>
+                      {value === "system" ? (resolvedTheme === "dark" ? t("profile.themeSystemDark") : t("profile.themeSystemLight")) : label}
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-6 w-6">
-                      <ExternalLink className="h-3 w-3" />
-                    </Button>
-                  </div>
-                </div>
-              </div>
-              <Badge
-                variant="outline"
-                className={`${
-                  currentAccount.type === "personal"
-                    ? "border-primary/30 text-primary"
-                    : "border-blue-500/30 text-blue-500"
-                }`}
-              >
-                {currentAccount.type === "personal" ? "Personal" : "Multi-Sig"}
-              </Badge>
-            </div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.05 }}
-        className="mb-4"
-      >
-        <Card className="border-none shadow-sm overflow-hidden">
-          <CardHeader className="p-3 pb-0">
-            <div className="flex items-center justify-between">
-              <h3 className="font-medium text-sm">Wallet Address</h3>
-              <div className="flex space-x-1">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-6 w-6"
-                  onClick={() => navigator.clipboard.writeText(currentAccount.address)}
-                >
-                  <Copy className="h-3 w-3" />
-                </Button>
-                <Button variant="ghost" size="icon" className="h-6 w-6">
-                  <ExternalLink className="h-3 w-3" />
-                </Button>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent className="p-3 flex flex-col items-center">
-            <div className="bg-white p-3 rounded-lg mb-2 relative group">
-              <div className="absolute inset-0 bg-gradient-to-r from-primary/20 to-purple-500/20 opacity-0 group-hover:opacity-100 transition-opacity rounded-lg"></div>
-              <QrCode className="h-32 w-32 text-primary" />
-              <div className="absolute inset-0 flex items-center justify-center">
-                <div className="h-8 w-8 rounded-full bg-white p-1">
-                  <div className="h-full w-full rounded-full bg-gradient-to-r from-primary to-purple-500"></div>
-                </div>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground text-center">Scan this QR code to send assets to this wallet</p>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.1 }}
-      >
-        <Card className="border-none shadow-sm">
-          <CardHeader className="p-3 pb-0">
-            <h3 className="font-medium text-sm">Wallet Balance</h3>
-          </CardHeader>
-          <CardContent className="p-3">
-            <motion.div className="space-y-2" variants={container} initial="hidden" animate="show">
-              {tokens.map((token) => (
-                <motion.div key={token.symbol} variants={item}>
-                  <div className="flex items-center p-2 rounded-lg hover:bg-muted/50 transition-colors">
-                    <div
-                      className={`flex h-8 w-8 items-center justify-center rounded-full text-white text-xs ${token.color}`}
-                    >
-                      {token.symbol}
-                    </div>
-                    <div className="ml-3 flex-1">
-                      <div className="font-medium text-sm">{token.name}</div>
-                      <div className="text-xs text-muted-foreground">{token.symbol}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-medium text-sm">{token.balance}</div>
-                      <div className="flex items-center text-xs">
-                        <span className="text-muted-foreground mr-1">${token.usdValue}</span>
-                        <span className={token.positive ? "text-green-500" : "text-red-500"}>{token.change}</span>
-                      </div>
-                    </div>
-                  </div>
-                </motion.div>
-              ))}
-            </motion.div>
-          </CardContent>
-        </Card>
-      </motion.div>
-
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.3, delay: 0.2 }}
-      >
-        <Card className="border-none shadow-sm">
-          <CardHeader className="p-3 pb-0">
-            <h3 className="font-medium text-sm">Activity History</h3>
-          </CardHeader>
-          <CardContent className="p-3">
-            <Tabs defaultValue="all" className="w-full">
-              <TabsList className="grid w-full grid-cols-3 p-1 bg-muted/50 rounded-xl">
-                <TabsTrigger
-                  value="all"
-                  className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-                >
-                  All
-                </TabsTrigger>
-                <TabsTrigger
-                  value="approvals"
-                  className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-                >
-                  Approvals
-                </TabsTrigger>
-                <TabsTrigger
-                  value="creations"
-                  className="rounded-lg text-xs data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm"
-                >
-                  Created
-                </TabsTrigger>
-              </TabsList>
-              <TabsContent value="all" className="mt-3 space-y-3">
-                {history.map((item) => (
-                  <HistoryItem key={item.id} item={item} />
-                ))}
-              </TabsContent>
-              <TabsContent value="approvals" className="mt-3 space-y-3">
-                {history
-                  .filter((item) => item.type === "approval")
-                  .map((item) => (
-                    <HistoryItem key={item.id} item={item} />
                   ))}
-              </TabsContent>
-              <TabsContent value="creations" className="mt-3 space-y-3">
-                {history
-                  .filter((item) => item.type === "creation")
-                  .map((item) => (
-                    <HistoryItem key={item.id} item={item} />
-                  ))}
-              </TabsContent>
-            </Tabs>
-          </CardContent>
-        </Card>
-      </motion.div>
-    </div>
-  )
+                </div>
+              )}
+              <DropdownMenuLabel className="pt-1 text-[11px] font-normal text-muted-foreground">{t("profile.languageLabel")}</DropdownMenuLabel>
+              {mounted && (
+                <div className="flex gap-1 px-1.5 pb-1" role="group" aria-label={t("profile.languageLabel")}>
+                  <Button size="sm" variant={locale === "en" ? "secondary" : "outline"} className="h-7 flex-1 px-1 text-xs" aria-pressed={locale === "en"} onClick={() => setLocale("en")}>English</Button>
+                  <Button size="sm" variant={locale === "zh" ? "secondary" : "outline"} className="h-7 flex-1 px-1 text-xs" aria-pressed={locale === "zh"} onClick={() => setLocale("zh")}>中文</Button>
+                </div>
+              )}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={onShowGroups}><Users className="mr-2 h-4 w-4" />{t("profile.myGroupsCount", { count: allGroups.length })}</DropdownMenuItem>
+              {allGroups.map(group => <DropdownMenuItem key={group.id} onClick={() => setSelectedGroup(group.id)}><span className="truncate">{group.name}</span>{group.origin === "chain" && <Badge variant="outline" className="ml-2 text-[10px]">{t("profile.chainBadge")}</Badge>}</DropdownMenuItem>)}
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+            <span className="min-w-0 truncate font-mono">{address ? shortAddress(address) : t("profile.loginHint")}</span>
+            {address && <><Button size="icon" variant="ghost" className="h-7 w-7" aria-label={t("profile.copyAddressAria")} onClick={() => void copyAddress()}><Copy className="h-3.5 w-3.5" /></Button><Button size="icon" variant="ghost" className="h-7 w-7" aria-label={t("profile.viewOnExplorerAria")} asChild><a href={`https://suiscan.xyz/testnet/account/${address}`} target="_blank" rel="noreferrer"><ExternalLink className="h-3.5 w-3.5" /></a></Button></>}
+          </div>
+          {suinsError && <p role="status" className="mt-1 text-[11px] text-amber-600">{t("profile.suinsErrorNote", { error: suinsError })}</p>}
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" variant="outline" className="flex-1 rounded-lg" disabled={!address} onClick={() => document.getElementById("profile-receive")?.scrollIntoView({ behavior: "smooth", block: "center" })}><ArrowDownLeft className="mr-1.5 h-4 w-4" />{t("profile.receive")}</Button>
+            <Button size="sm" variant="outline" className="flex-1 rounded-lg" disabled={!address} onClick={() => setShareOpen(true)}><QrCode className="mr-1.5 h-4 w-4" />{t("profile.businessCard")}</Button>
+            <Button size="sm" variant="outline" className="rounded-lg" onClick={onShowGroups}><Users className="mr-1.5 h-4 w-4" />{t("profile.groupsBtn")}</Button>
+          </div>
+          {notice && <p role="status" className="mt-2 text-xs text-primary">{notice}</p>}
+        </CardContent>
+      </Card>
+    </motion.div>
+
+    <Card id="profile-receive" className="scroll-mt-20 overflow-hidden border-none shadow-sm">
+      <CardHeader className="p-4 pb-2"><h2 className="text-sm font-semibold">{t("profile.qrTitle")}</h2></CardHeader>
+      <CardContent className="p-4 pt-1">
+        <Tabs defaultValue="receive">
+          <TabsList className="grid w-full grid-cols-2 rounded-xl bg-muted/50"><TabsTrigger value="receive" className="rounded-lg text-xs">{t("profile.tabReceiveAddress")}</TabsTrigger><TabsTrigger value="identity" className="rounded-lg text-xs">{t("profile.tabBusinessCard")}</TabsTrigger></TabsList>
+          {[{ key: "receive", value: address, label: t("profile.qrReceiveLabel"), caption: t("profile.qrReceiveCaption") }, { key: "identity", value: shareLink, label: t("profile.qrIdentityLabel"), caption: t("profile.qrIdentityCaption") }].map(qr => <TabsContent key={qr.key} value={qr.key} className="mt-4 text-center">
+            {qr.value ? <><div className="mx-auto w-fit rounded-xl bg-white p-3 shadow-sm ring-1 ring-black/5"><QRCodeSVG value={qr.value} size={144} level="M" marginSize={2} title={qr.label} /></div><p className="mt-3 break-all font-mono text-xs text-muted-foreground">{address}</p><p className="mt-1 text-xs text-muted-foreground">{qr.caption}</p></> : <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground"><QrCode className="h-10 w-10 opacity-40" /><p className="text-sm">{t("profile.qrConnectFirst")}</p></div>}
+            {qr.key === "receive" ? <Button size="sm" variant="ghost" className="mt-2 text-primary" disabled={!address} onClick={() => void copyAddress()}><Copy className="mr-1 h-3.5 w-3.5" />{t("profile.copyReceiveAddress")}</Button> : <Button size="sm" variant="ghost" className="mt-2 text-primary" disabled={!address} onClick={() => setShareOpen(true)}>{t("profile.shareQr")}</Button>}
+          </TabsContent>)}
+        </Tabs>
+      </CardContent>
+    </Card>
+
+    <Card className="border-none shadow-sm">
+      <CardHeader className="flex-row items-center justify-between space-y-0 p-4 pb-1"><h2 className="text-sm font-semibold">{t("profile.assetsTitle")}</h2><Button size="icon" variant="ghost" className="h-7 w-7" aria-label={t("profile.refreshAssetsAria")} disabled={!address || assetsLoading || activityLoading} onClick={() => setRevision(value => value + 1)}><RefreshCw className={`h-3.5 w-3.5 ${assetsLoading ? "animate-spin" : ""}`} /></Button></CardHeader>
+      <CardContent className="p-3 pt-1">
+        {assetError && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{assetError}</p>}
+        {!assetsLoading && visibleAssets.length > 0 && (() => {
+          const total = prices ? totalUsdValue(visibleAssets, prices.prices) : null
+          return <p className="px-2.5 pb-1 text-xs text-muted-foreground">{total !== null ? t("profile.assetsUsdTotal", { total: formatUsd(total), source: prices?.source ?? "", time: new Date(prices!.fetchedAt).toLocaleTimeString(locale === "zh" ? "zh-CN" : "en-US") }) : t("profile.assetsNoPrice")}</p>
+        })()}
+        {assetsLoading ? <p role="status" className="flex items-center gap-2 p-3 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t("profile.assetsLoading")}</p> : visibleAssets.map((asset, index) => {
+          const price = prices?.prices[asset.coinType]
+          const fiat = price && asset.decimals !== null ? Number(asset.rawBalance) / 10 ** asset.decimals * price.usd : null
+          const change = formatChange(price?.change24h ?? null)
+          return <motion.div key={asset.coinType} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(index, 8) * 0.03 }} className="flex items-center gap-3 rounded-xl p-2.5 transition-colors hover:bg-muted/50">
+          <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold text-white ${tokenColors[index % tokenColors.length]}`}>{asset.symbol.slice(0, 4)}</div>
+          <div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{asset.name || asset.symbol}</p><a href={`https://suiscan.xyz/testnet/coin/${asset.coinType}`} target="_blank" rel="noreferrer" className="block truncate text-xs text-muted-foreground" title={asset.coinType}>{asset.symbol} · {asset.coinType.slice(0, 6)}…{asset.coinType.split("::").at(-1)}</a></div>
+          <div className="min-w-0 max-w-[48%] text-right"><p className="break-all font-mono text-sm font-medium tabular-nums">{asset.balance}</p>{fiat !== null && <p className="text-xs text-muted-foreground">{formatUsd(fiat)}{change && <span className={`ml-1 ${price!.change24h! >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>{change} 24h</span>}</p>}{fiat === null && <p className="text-xs text-muted-foreground" title={asset.metadataError}>{asset.decimals === null ? t("profile.rawUnitsPendingMeta") : asset.symbol}</p>}</div>
+        </motion.div>})}
+        {!assetsLoading && !address && <p className="p-3 text-sm text-muted-foreground">{t("profile.assetsConnectFirst")}</p>}
+      </CardContent>
+    </Card>
+
+    {/* 高级与说明拆到独立页面，保持个人页聚焦 */}
+    <Card className="border-none shadow-sm">
+      <CardHeader className="p-4 pb-2"><h2 className="text-sm font-semibold">{t("profile.moreTitle")}</h2></CardHeader>
+      <CardContent className="p-2 pt-0">
+        <Link href="/trust" className="flex items-center gap-3 rounded-xl p-3 transition-colors hover:bg-muted/50">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary"><ShieldCheck className="h-4 w-4" /></div>
+          <div className="min-w-0 flex-1"><p className="text-sm font-medium">{t("profile.trustEntry")}</p><p className="text-xs text-muted-foreground">{t("profile.trustEntrySub")}</p></div>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </Link>
+        <Link href="/walrus" className="flex items-center gap-3 rounded-xl p-3 transition-colors hover:bg-muted/50">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-500/10 text-amber-600"><HardDrive className="h-4 w-4" /></div>
+          <div className="min-w-0 flex-1"><p className="text-sm font-medium">{t("profile.walrusEntry")}</p><p className="text-xs text-muted-foreground">{t("profile.walrusEntrySub")}</p></div>
+          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+        </Link>
+      </CardContent>
+    </Card>
+
+
+    <Card className="border-none shadow-sm">
+      <CardHeader className="p-4 pb-2"><h2 className="flex items-center gap-2 text-sm font-semibold"><History className="h-4 w-4 text-primary" />{t("profile.activityTitle")}</h2></CardHeader>
+      <CardContent className="p-4 pt-1">
+        <Tabs defaultValue="all">
+          <TabsList className="grid w-full grid-cols-3 rounded-xl bg-muted/50">{[{ key: "all", label: t("profile.activityAll") }, { key: "approval", label: t("profile.activityApproval") }, { key: "creation", label: t("profile.activityCreation") }].map(tab => <TabsTrigger key={tab.key} value={tab.key} className="rounded-lg text-xs">{tab.label}</TabsTrigger>)}</TabsList>
+          {["all", "approval", "creation"].map(tab => <TabsContent key={tab} value={tab} className="mt-3 space-y-1">
+            {visibleActivities.filter(item => tab === "all" || item.category === tab).map(item => <a key={item.digest} href={`https://suiscan.xyz/testnet/tx/${item.digest}`} target="_blank" rel="noreferrer" className="flex items-start gap-3 rounded-xl py-3 transition-colors hover:bg-muted/40">
+              <div className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${item.success ? "bg-primary/10 text-primary" : "bg-destructive/10 text-destructive"}`}>{item.category === "approval" ? <Check className="h-4 w-4" /> : <History className="h-4 w-4" />}</div>
+              <div className="min-w-0 flex-1"><p className="text-sm font-medium">{item.title}<span className={`ml-2 text-xs ${item.success ? "text-muted-foreground" : "text-destructive"}`}>{item.success ? t("profile.activityConfirmed") : t("profile.activityFailed")}</span></p><p className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{item.digest}</p><p className="mt-1 text-xs text-muted-foreground">{item.timestampMs ? new Date(item.timestampMs).toLocaleString(locale === "zh" ? "zh-CN" : "en-US") : t("profile.waitingBlockTime")}</p></div><ExternalLink className="mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            </a>)}
+            {!activityLoading && !activityError && !visibleActivities.some(item => tab === "all" || item.category === tab) && <p className="py-6 text-center text-sm text-muted-foreground">{address ? hasMore ? t("profile.activityNoneInLoaded") : t("profile.activityNone") : t("profile.activityConnectFirst")}</p>}
+          </TabsContent>)}
+        </Tabs>
+        {activityError && <p role="alert" className="mt-3 text-sm text-destructive">{activityError}</p>}
+        {activityLoading && <p role="status" className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground"><Loader2 className="h-3.5 w-3.5 animate-spin" />{t("profile.activityLoading")}</p>}
+        {hasMore && <Button size="sm" variant="ghost" className="mt-2 w-full text-primary" disabled={activityLoading} onClick={() => void loadMore()}>{t("profile.loadMoreActivity")}</Button>}
+      </CardContent>
+    </Card>
+
+
+    <IdentityPanel onProfileLoaded={setIdentity} />
+    <ShareQrDialog open={shareOpen && !!address} onOpenChange={setShareOpen} title={t("profile.shareQrTitle")} kind="person" identifier={address} description={t("profile.shareQrDescription")} />
+    {selectedGroup && <GroupDetailsDialog open onOpenChange={open => { if (!open) setSelectedGroup("") }} groupId={selectedGroup} />}
+  </div>
 }

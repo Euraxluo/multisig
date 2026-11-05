@@ -1,183 +1,180 @@
-"use client";
+"use client"
 
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Progress } from "@/components/ui/progress";
-import { Copy, Pause, Play, ShieldAlert, Key, Check } from "lucide-react";
-import { useState } from "react";
-import { AgentVirtualCard } from "@/types/agent";
+import { useState } from "react"
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { Progress } from "@/components/ui/progress"
+import { Copy, Pause, Play, ShieldAlert, Key, Check, ExternalLink } from "lucide-react"
+import { formatSuiUnits } from "@/lib/agent-vault-chain"
+import { remainingBudget } from "@/lib/use-agent-vault"
+import { useI18n } from "@/components/i18n-provider"
+import type { AgentCapView } from "@/types/agent"
 
 interface AgentDetailsDialogProps {
-  card: AgentVirtualCard | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onTogglePause?: (cardId: string) => void;
-  onOpenAdjust?: (card: AgentVirtualCard) => void;
-  onOpenExport?: (card: AgentVirtualCard) => void;
+  cap: AgentCapView | null
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onTogglePause?: (cap: AgentCapView) => void
+  onOpenAdjust?: (cap: AgentCapView) => void
+  onOpenExport?: (cap: AgentCapView) => void
+  busy?: boolean
+  notice?: string
 }
 
-export function AgentDetailsDialog({
-  card,
-  open,
-  onOpenChange,
-  onTogglePause,
-  onOpenAdjust,
-  onOpenExport,
-}: AgentDetailsDialogProps) {
-  const [activeTab, setActiveTab] = useState("overview");
-  const [copied, setCopied] = useState(false);
+const statusText: Record<AgentCapView["status"], string> = {
+  ACTIVE: "agents.statusActive", QUOTA_REACHED: "agents.statusQuotaReached", PAUSED: "agents.statusPaused", REVOKED: "agents.statusRevoked", STALE: "agents.statusStale", UNVERIFIED: "agents.statusUnverified",
+}
+const statusClass: Record<AgentCapView["status"], string> = {
+  ACTIVE: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+  QUOTA_REACHED: "bg-amber-500/10 text-amber-500 border-amber-500/20",
+  PAUSED: "bg-muted text-muted-foreground",
+  REVOKED: "bg-red-500/10 text-red-500 border-red-500/20",
+  STALE: "bg-red-500/10 text-red-500 border-red-500/20",
+  UNVERIFIED: "bg-muted text-muted-foreground",
+}
 
-  if (!card) return null;
+export function AgentDetailsDialog({ cap, open, onOpenChange, onTogglePause, onOpenAdjust, onOpenExport, busy, notice }: AgentDetailsDialogProps) {
+  const { t } = useI18n()
+  const [activeTab, setActiveTab] = useState("overview")
+  const [copied, setCopied] = useState("")
 
-  const quotaPercent = Math.min(100, Math.round((card.spentToday / card.dailyBudget) * 100));
+  if (!cap) return null
 
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
+  const spent = cap.effectiveSpentUnits > cap.dailyBudgetUnits ? cap.dailyBudgetUnits : cap.effectiveSpentUnits
+  const quotaPercent = cap.dailyBudgetUnits > 0n ? Number((spent * 100n) / cap.dailyBudgetUnits) : 0
+  const remaining = remainingBudget(cap)
+  const totalSpent = cap.spends.reduce((sum, row) => sum + row.amountUnits, 0n)
+  const name = cap.label?.name || `${cap.capId.slice(0, 10)}…`
+
+  const copy = (label: string, text: string) => {
+    void navigator.clipboard.writeText(text)
+    setCopied(label)
+    setTimeout(() => setCopied(""), 2000)
+  }
+  const copyButton = (label: string, text: string) => (
+    <button onClick={() => copy(label, text)} className="p-1 hover:text-primary" aria-label={t("agents.details.copyLabel", { label })}>
+      {copied === label ? <Check className="h-3.5 w-3.5 text-emerald-500" /> : <Copy className="h-3.5 w-3.5" />}
+    </button>
+  )
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[480px]">
-        <div className={`h-1.5 -mx-6 -mt-6 rounded-t-lg bg-gradient-to-r ${card.color}`} />
-        <DialogHeader className="pt-2">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <Avatar className="h-10 w-10 border border-border">
-                <AvatarFallback className={`bg-gradient-to-br ${card.color} text-white font-bold text-sm`}>
-                  {card.name.slice(0, 2).toUpperCase()}
-                </AvatarFallback>
-              </Avatar>
-              <div>
-                <DialogTitle className="text-base font-bold">{card.name}</DialogTitle>
-                <p className="text-xs text-muted-foreground">{card.purpose}</p>
-              </div>
+      <DialogContent className="sm:max-w-[480px] max-h-[90dvh] overflow-y-auto">
+        <DialogHeader className="pt-1">
+          <div className="flex items-center justify-between gap-2">
+            <div>
+              <DialogTitle className="text-base font-bold">{name}</DialogTitle>
+              <p className="text-xs text-muted-foreground">{cap.label?.purpose || t("agents.details.noPurpose")}</p>
             </div>
-            <Badge
-              variant="outline"
-              className={
-                card.status === "ACTIVE"
-                  ? "bg-emerald-500/10 text-emerald-500 border-emerald-500/20"
-                  : card.status === "QUOTA_REACHED"
-                  ? "bg-amber-500/10 text-amber-500 border-amber-500/20"
-                  : "bg-muted text-muted-foreground"
-              }
-            >
-              {card.status}
-            </Badge>
+            <Badge variant="outline" className={statusClass[cap.status]}>{t(statusText[cap.status])}</Badge>
           </div>
         </DialogHeader>
 
         <Tabs value={activeTab} onValueChange={setActiveTab} className="mt-3">
-          <TabsList className="grid grid-cols-2 w-full">
-            <TabsTrigger value="overview">配额与状态</TabsTrigger>
-            <TabsTrigger value="security">Move 沙盒与凭证</TabsTrigger>
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="overview">{t("agents.details.tabOverview")}</TabsTrigger>
+            <TabsTrigger value="spends">{t("agents.details.tabSpends")}</TabsTrigger>
+            <TabsTrigger value="security">{t("agents.details.tabSecurity")}</TabsTrigger>
           </TabsList>
 
-          <TabsContent value="overview" className="space-y-4 pt-3">
-            {/* Daily Quota Progress */}
-            <div className="p-3.5 rounded-xl bg-card/60 border border-border/60 space-y-2">
-              <div className="flex justify-between items-center text-xs">
-                <span className="text-muted-foreground">今日 SUI 消耗进度</span>
-                <span className="font-bold text-foreground">
-                  {card.spentToday.toFixed(2)} / {card.dailyBudget.toFixed(2)} SUI ({quotaPercent}%)
-                </span>
+          <TabsContent value="overview" className="space-y-3 pt-3">
+            <div className="space-y-2 rounded-xl border border-border/60 bg-card/60 p-3.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted-foreground">{t("agents.details.epochProgress")}</span>
+                <span className="font-bold text-foreground">{formatSuiUnits(spent)} / {formatSuiUnits(cap.dailyBudgetUnits)} SUI ({quotaPercent}%)</span>
               </div>
               <Progress value={quotaPercent} className="h-2" />
-              <div className="flex justify-between items-center text-[11px] text-muted-foreground pt-1">
-                <span>累计调用：{card.requestCount} 次</span>
-                <span>历史总计：{(card.totalSpentAllTime ?? card.totalSpent).toFixed(2)} SUI</span>
+              <div className="flex justify-between pt-1 text-[11px] text-muted-foreground">
+                <span>{t("agents.details.remaining", { amount: formatSuiUnits(remaining) })}</span>
+                <span>{t("agents.details.lastSpentEpoch", { epoch: cap.lastSpentEpoch.toString() })}</span>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">{cap.reason}</p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 text-[11px]">
+              <div className="rounded-lg border border-border/40 bg-muted/30 p-2.5">
+                <span className="block text-muted-foreground">{t("agents.details.vaultBalance")}</span>
+                <span className="font-mono font-semibold">{formatSuiUnits(cap.vaultBalanceUnits)} SUI</span>
+              </div>
+              <div className="rounded-lg border border-border/40 bg-muted/30 p-2.5">
+                <span className="block text-muted-foreground">{t("agents.details.vaultStatus")}</span>
+                <span className="font-semibold">{cap.vaultPaused ? t("agents.vaultPausedGlobal") : t("agents.vaultRunning")} · v{cap.vaultVersion.toString()}</span>
               </div>
             </div>
 
-            {/* Allowed Services */}
+            <div className="grid grid-cols-3 gap-2 pt-1">
+              <Button variant="outline" size="sm" className="gap-1.5 text-xs" disabled={busy || (cap.status !== "ACTIVE" && cap.status !== "PAUSED" && cap.status !== "QUOTA_REACHED")}
+                onClick={() => onTogglePause?.(cap)}>
+                {cap.isActive ? <Pause className="h-3.5 w-3.5 text-amber-500" /> : <Play className="h-3.5 w-3.5 text-emerald-500" />}
+                {cap.isActive ? t("agents.details.pauseCard") : t("agents.details.resumeCard")}
+              </Button>
+              <Button variant="outline" size="sm" className="text-xs" disabled={busy || cap.status === "STALE"}
+                onClick={() => { onOpenChange(false); onOpenAdjust?.(cap) }}>{t("agents.details.adjustBudget")}</Button>
+              <Button variant="outline" size="sm" className="gap-1 text-xs" onClick={() => { onOpenChange(false); onOpenExport?.(cap) }}>
+                <Key className="h-3.5 w-3.5 text-primary" />{t("agents.details.exportEnv")}
+              </Button>
+            </div>
+            {notice && <p role="status" className="break-all text-xs text-muted-foreground">{notice}</p>}
+            {!cap.isActive && cap.status === "PAUSED" && (
+              <p className="text-[11px] text-muted-foreground">{t("agents.details.pauseNote")}</p>
+            )}
+          </TabsContent>
+
+          <TabsContent value="spends" className="space-y-2 pt-3">
+            <div className="flex items-center justify-between text-xs">
+              <span className="text-muted-foreground">{t("agents.details.recentSpends", { count: cap.spends.length })}{cap.spendsTruncated ? t("agents.details.scanLimitSuffix") : ""}</span>
+              <span className="font-mono">{cap.spendsTruncated ? t("agents.details.listedTotal") : t("agents.details.total")} {formatSuiUnits(totalSpent)} SUI</span>
+            </div>
+            {cap.spendsError && <p role="alert" className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive">{t("agents.details.spendsReadFailed", { error: cap.spendsError })}<br />{t("agents.details.spendsReadFailedNote")}</p>}
+            {!cap.spendsError && cap.spends.length === 0 && !cap.spendsTruncated && <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">{t("agents.details.noSpendEventsScan")}</p>}
+            {!cap.spendsError && cap.spends.length === 0 && cap.spendsTruncated && <p className="rounded-lg border border-dashed p-3 text-xs text-muted-foreground">{t("agents.details.truncatedBeforeReaching")}</p>}
+            {cap.spendsTruncated && <p role="status" className="text-[11px] text-amber-600">{t("agents.details.truncatedNote")}</p>}
             <div className="space-y-1.5">
-              <span className="text-xs font-medium text-foreground">白名单服务商</span>
-              <div className="flex flex-wrap gap-1.5">
-                {card.allowedServices.map((svc) => (
-                  <Badge key={svc} variant="secondary" className="font-mono text-[11px] px-2 py-0.5">
-                    {svc}
-                  </Badge>
-                ))}
-              </div>
-            </div>
-
-            {/* Action Buttons */}
-            <div className="grid grid-cols-3 gap-2 pt-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs gap-1.5"
-                onClick={() => onTogglePause?.(card.id)}
-              >
-                {card.status === "PAUSED" ? <Play className="w-3.5 h-3.5 text-emerald-500" /> : <Pause className="w-3.5 h-3.5 text-amber-500" />}
-                {card.status === "PAUSED" ? "恢复运行" : "暂停副卡"}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs"
-                onClick={() => {
-                  onOpenChange(false);
-                  onOpenAdjust?.(card);
-                }}
-              >
-                调整配额
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="text-xs gap-1"
-                onClick={() => {
-                  onOpenChange(false);
-                  onOpenExport?.(card);
-                }}
-              >
-                <Key className="w-3.5 h-3.5 text-primary" />
-                导出 .env
-              </Button>
+              {cap.spends.map(row => (
+                <div key={row.digest} className="flex items-center justify-between gap-2 rounded-lg border border-border/40 bg-card/40 p-2 text-[11px]">
+                  <div className="min-w-0">
+                    <p className="font-mono font-semibold">-{formatSuiUnits(row.amountUnits)} SUI</p>
+                    <p className="truncate font-mono text-[10px] text-muted-foreground">→ {row.recipient}</p>
+                    <p className="font-mono text-[10px] text-muted-foreground">{t("agents.guard.spendRowMeta", { epoch: row.epoch.toString(), time: row.timestampMs ? new Date(row.timestampMs).toLocaleString() : t("agents.guard.timeUnconfirmed") })}</p>
+                  </div>
+                  <a href={`https://suiscan.xyz/testnet/tx/${row.digest}`} target="_blank" rel="noreferrer" className="flex shrink-0 items-center text-primary">
+                    <ExternalLink className="h-3 w-3" />
+                  </a>
+                </div>
+              ))}
             </div>
           </TabsContent>
 
-          <TabsContent value="security" className="space-y-3 pt-3">
-            <div className="space-y-2 text-xs">
-              <div className="p-3 rounded-lg bg-muted/40 border border-border/40 space-y-1">
-                <span className="text-muted-foreground block text-[11px]">Agent 链上地址</span>
-                <div className="flex items-center justify-between font-mono text-foreground font-medium">
-                  <span>{card.address}</span>
-                  <button onClick={() => handleCopy(card.address)} className="p-1 hover:text-primary">
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-lg bg-muted/40 border border-border/40 space-y-1">
-                <span className="text-muted-foreground block text-[11px]">绑定 Move 权限对象 (AgentCap)</span>
-                <div className="flex items-center justify-between font-mono text-foreground font-medium">
-                  <span>{card.agentCapId || card.capId}</span>
-                  <button onClick={() => handleCopy(card.agentCapId || card.capId)} className="p-1 hover:text-primary">
-                    <Copy className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="p-3 rounded-lg bg-primary/5 border border-primary/20 space-y-1 text-muted-foreground">
-                <p className="font-semibold text-foreground text-xs flex items-center gap-1.5">
-                  <ShieldAlert className="w-3.5 h-3.5 text-primary" />
-                  Move 字节码沙盒防护保障
-                </p>
-                <p className="text-[11px] leading-relaxed">
-                  本 Agent 不持有金库私钥，仅能在 Sui PTB 中通过 AgentCap 在每日 {card.dailyBudget} SUI 限额内发起微支付。如果发生 Prompt 注入或死循环，智能合约将在 Epoch 周期内硬阻断。
-                </p>
-              </div>
+          <TabsContent value="security" className="space-y-2 pt-3 text-xs">
+            <div className="space-y-1 rounded-lg border border-border/40 bg-muted/40 p-3">
+              <span className="block text-[11px] text-muted-foreground">{t("agents.details.capObject")}</span>
+              <div className="flex items-center justify-between gap-2 font-mono font-medium">{cap.capId}{copyButton("cap", cap.capId)}</div>
+            </div>
+            <div className="space-y-1 rounded-lg border border-border/40 bg-muted/40 p-3">
+              <span className="block text-[11px] text-muted-foreground">{t("agents.details.agentAddress")}</span>
+              <div className="flex items-center justify-between gap-2 font-mono font-medium">{cap.agentAddress}{copyButton("agent", cap.agentAddress)}</div>
+            </div>
+            <div className="space-y-1 rounded-lg border border-border/40 bg-muted/40 p-3">
+              <span className="block text-[11px] text-muted-foreground">{t("agents.details.objectOwner")}</span>
+              <div className="flex items-center justify-between gap-2 font-mono font-medium">{cap.capOwner ?? t("agents.details.nonAddressOwner")}{cap.capOwner && copyButton("owner", cap.capOwner)}</div>
+            </div>
+            <div className="space-y-1 rounded-lg border border-border/40 bg-muted/40 p-3">
+              <span className="block text-[11px] text-muted-foreground">{t("agents.details.vaultLabel")}</span>
+              <div className="flex items-center justify-between gap-2 font-mono font-medium">{cap.vaultId}{copyButton("vault", cap.vaultId)}</div>
+            </div>
+            <div className="space-y-1 rounded-lg border border-border/40 bg-muted/40 p-3">
+              <span className="block text-[11px] text-muted-foreground">{t("agents.details.serviceLabel")}</span>
+              <p className="break-all font-mono text-[11px]">{cap.serviceHash.length ? new TextDecoder().decode(cap.serviceHash) : t("agents.details.serviceUnset")}</p>
+            </div>
+            <div className="space-y-1 rounded-lg border border-primary/20 bg-primary/5 p-3 text-[11px] leading-relaxed text-muted-foreground">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-foreground"><ShieldAlert className="h-3.5 w-3.5 text-primary" />{t("agents.details.hardLimits")}</p>
+              <p>{t("agents.details.hardLimitsPrefix")}<span className="font-mono">spend_x402_budget</span>{t("agents.details.hardLimitsSuffix")}</p>
             </div>
           </TabsContent>
         </Tabs>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

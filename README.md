@@ -1,30 +1,38 @@
 # frontend
 
-*Automatically synced with your [v0.dev](https://v0.dev) deployments*
+Local feature setup and validation:
 
-[![Deployed on Vercel](https://img.shields.io/badge/Deployed%20on-Vercel-black?style=for-the-badge&logo=vercel)](https://vercel.com/euraxluos-projects/v0-frontend)
-[![Built with v0](https://img.shields.io/badge/Built%20with-v0.dev-black?style=for-the-badge)](https://v0.dev/chat/projects/DPZKmgu5sxL)
+- [Identity, SuiNS, follows, private messages and QR sharing](docs/identity.md)
+- [Google zkLogin configuration and acceptance checks](docs/zklogin.md)
+- [Unpublished identity Move package and test results](contracts/identity/README.md)
+- [UI feature parity and remaining implementation work](docs/ui-feature-parity.md)
+- [Original frontend feature review against the 2026-10-19 gap audit](docs/original-feature-review.md)
+- [Reusable prompt for driving the project to production](docs/PRODUCTION_PROMPT.md)
+- [Deployment checklist: package ids, upgrade path, env vars, init order](docs/DEPLOYMENT_CHECKLIST.md)
+- [Pre-launch checklist: gates, on-chain evidence, claims that must not be made](docs/PRELAUNCH_CHECKLIST.md)
+- Environment template: `.env.example`
 
-## Overview
+Local verification (no deployment or wallet submission):
 
-This repository will stay in sync with your deployed chats on [v0.dev](https://v0.dev).
-Any changes you make to your deployed app will be automatically pushed to this repository from [v0.dev](https://v0.dev).
+```sh
+pnpm exec tsx --test lib/*.test.ts
+pnpm exec tsc --noEmit --incremental false
+# Start the local app separately. Install Playwright separately or set PLAYWRIGHT_MODULE.
+UI_BASE_URL=http://127.0.0.1:3005 node scripts/ui-regression.mjs
+UI_BASE_URL=http://127.0.0.1:3005 UI_VIEWPORT_WIDTH=1280 node scripts/ui-regression.mjs
+```
 
-## Deployment
+On 2026-10-26, 696 offline frontend tests, the independent TypeScript check, the production build, and 287 strict Move tests passed. The local production-server browser regression passed all sixteen scenarios at both 390px and 1280px, including the treasury read-only path, reopening/deleting a local invoice draft, the notification unread badge, on-chain group membership discovery, the light/dark theme switch, and the read-only Walrus app-policy registry with its fail-closed administration status, with no page errors or horizontal overflow. Associated SDK tests in `sui_project_a` passed under vitest. The legacy Walrus registry remains read-only: ABI presence such as `policy_revision()` cannot prove deployed return values, old-entry isolation, or real payment. The independent `walrus_app_policy_v2` implementation binds a real `MemberStakeReceipt` to `Coin<SUI>` payment, but is not deployed; V2 publication, live ABI verification, and migration remain GAP. ESLint reports 0 errors and 28 warnings; the production build runs lint and type checking.
 
-Your project is live at:
+The browser regression checks profile navigation, wallet discovery, payment tools, preserving historical group files, read-only group polls, local invoice draft reopen/delete, notification unread state, and on-chain group discovery: with a connected account, the group list scans `OrganizationCreatedEvent` and each live organization roster instead of trusting local storage, and an account with no memberships must show zero discovered groups rather than a fabricated one. Browser-only historical fixtures and offline wallet stubs do not demonstrate a live chain lifecycle. Notifications are derived from group proposals already synchronized into this browser; the app has no push subscription. The default testnet v7 package (`0xca0650d4…`) contains `governance_poll`, `scheduled_payments`, `red_packet_v2`, and `organization_treasury`, confirmed by a read-only package-object query on 2026-10-26. Their unset package variables follow `NEXT_PUBLIC_PROPOSAL_PACKAGE_ID`, which defaults to v7; overrides must preserve each module's defining type origin and compatible ABI. Module presence does not prove a full wallet/transaction lifecycle. The independent identity package and the local `walrus_app_policy_v2` module remain NOT-DEPLOYED / GAP. `lib/p2p/` was deleted on 2026-10-22: its 390 lines had no importer, and its "MLS" derived the epoch key as `SHA-256("MLS_EPOCH_SECRET_" + groupId + "_" + epoch + "_TREEKEM")` from fields that travel in cleartext in every message header, so a non-member could decrypt it (verified by script). It also relied on Node's `Buffer`, which does not exist in the browser bundle. The same `Buffer` mistake was present in the live DKG path (`lib/crypto/ceremony.ts`, `resharing.ts`), where creating an organization would have thrown `ReferenceError`; that is fixed with `lib/crypto/bytes.ts` and verified by running a real 3-of-4 DKG in a browser with no `Buffer` global. Each tab panel is wrapped in its own `components/error-boundary.tsx`, so one panel failing to render no longer blanks the whole app or strands the navigation; the fallback shows the thrown message only (no stack, no wallet data) and its retry re-renders the panel without resending any transaction. Network calls are bounded: `lib/suins.ts` races `getNameRecord` (which accepts no signal) against a timeout and reports a timeout as a failure rather than as an unregistered name; `lib/sui-wallet-signer.ts` bounds `executeTransaction` at 60s and routes a timeout to its "uncertain" path, which keeps the digest and refuses to re-sign instead of inviting a duplicate send. Real group encryption is `lib/message-crypto.ts` (ECDH P-256 + HKDF-SHA256 + AES-256-GCM with a fresh ephemeral key per message), not MLS. The same v5 upgrade adds `dkg_committee::register_encryption_key`, so a participant can publish the 65-byte P-256 key that shares are sealed to; without it `deposit_mailbox_share` could only carry plaintext, which every RPC reader can see. `lib/dkg-mailbox.ts` implements the sealing (ephemeral ECDH + HKDF-SHA256 + AES-256-GCM, with session, sender, recipient and epoch bound into the AAD so a payload cannot be replayed into another session) and a reader for the registered keys. That sealing is now wired into `components/dkg-ceremony-dialog.tsx`, which walks the session in five chain-status-driven phases (commitments, encryption key, sealed deposit, confirmation, finalize) and reads each step back from chain instead of trusting tab memory; `lib/dkg-session.ts` reads the session and its three dynamic-field tables, and `lib/dkg-mailbox-keys.ts` keeps the non-extractable P-256 key in IndexedDB so another device reports "no key on this device" rather than minting one that could never open the existing shares. Verified on testnet with three real accounts by `scripts/dkg-mailbox-e2e.ts`: status 1→2, 65-byte key, 64-byte commitment, 137-byte sealed share, no plaintext in the ciphertext, and the recipient opens it. That script sends real transactions. The current v7 DKG finalization path uses member `attest_group_key` calls, then `finalize_session_v3` and `create_organization_from_session`; historical testnet CLI evidence is recorded in `docs/PRELAUNCH_CHECKLIST.md`. The current package rejects the v1/v2 finalizers, but this does not disable older published bytecode. Browser multi-device DKG and extension-wallet lifecycles remain UNVERIFIED. Roster FROST uses a separate session/store/private-transport path; its identity package and Names configuration remain NOT-DEPLOYED / GAP, so real cross-device delivery, event indexing, and pending-receipt recovery remain GAP / UNVERIFIED. `walrus_app_policy` remains a legacy read-only surface: its caller-supplied stake and charge inputs are still callable in old bytecode, and the presence of `policy_revision()` or other ABI functions cannot prove deployed return values, old-entry isolation, or real payment. The profile panel therefore stays fail-closed and displays the legacy risk. The independent `walrus_app_policy_v2` module binds a real `MemberStakeReceipt` to a `Coin<SUI>` payment, but it is not deployed; V2 publication, live ABI verification, and legacy registry migration remain GAP. The registry itself still has no on-chain discovery event (`create_registry` emits none), so its object id must be supplied by hand.
 
-**[https://vercel.com/euraxluos-projects/v0-frontend](https://vercel.com/euraxluos-projects/v0-frontend)**
+## Deployment Status & Verification
 
-## Build your app
+This project is in local development and offline verification mode. There is no live production deployment or public hosting (e.g. Vercel). Live network interaction is restricted to local or testnet validation as documented in `docs/DEPLOYMENT_CHECKLIST.md` and `docs/PRELAUNCH_CHECKLIST.md`.
 
-Continue building your app on:
+## Local Development
 
-**[https://v0.dev/chat/projects/DPZKmgu5sxL](https://v0.dev/chat/projects/DPZKmgu5sxL)**
-
-## How It Works
-
-1. Create and modify your project using [v0.dev](https://v0.dev)
-2. Deploy your chats from the v0 interface
-3. Changes are automatically pushed to this repository
-4. Vercel deploys the latest version from this repository
+```bash
+pnpm install
+pnpm dev
+```

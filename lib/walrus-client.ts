@@ -1,5 +1,7 @@
 "use client"
 
+import { t } from "./i18n/t"
+
 export interface WalrusUploadResult {
   blobId: string
   size: number
@@ -15,25 +17,22 @@ export interface GroupFileInfo {
   id: string
   groupId: string
   name: string
-  size: number
+  size: number | null
   blobId: string
   uploader: string
   uploadedAt: string
   contentType: string
   url: string
+  source?: "local" | "chain"
+  transactionDigest?: string
+  channelId?: string
+  recordIssues?: string[]
 }
+
+export const isWalrusBlobId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{43}$/.test(value)
 
 export const WALRUS_PUBLISHER_URL = "https://publisher.walrus-testnet.walrus.space"
 export const WALRUS_AGGREGATOR_URL = "https://aggregator.walrus-testnet.walrus.space"
-
-/**
- * 计算数据的 SHA-256 哈希作为确定性内容寻址 ID
- */
-async function computeSha256(data: ArrayBuffer): Promise<string> {
-  const hashBuffer = await crypto.subtle.digest("SHA-256", data)
-  const hashArray = Array.from(new Uint8Array(hashBuffer))
-  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("")
-}
 
 /**
  * 上传文件或数据到 Walrus 去中心化存储协议
@@ -46,7 +45,8 @@ export async function uploadToWalrus(
     filename?: string
   } = {}
 ): Promise<WalrusUploadResult> {
-  const epochs = options.epochs || 5
+  const epochs = options.epochs ?? 5
+  if (!Number.isSafeInteger(epochs) || epochs < 1) throw new Error(t("walrus.epochsPositive"))
   let blobData: Blob
   let contentType = options.contentType || "application/octet-stream"
 
@@ -59,36 +59,24 @@ export async function uploadToWalrus(
   }
 
   const arrayBuffer = await blobData.arrayBuffer()
-  const sha256Hex = await computeSha256(arrayBuffer)
-  const fallbackBlobId = `walrus_blob_${sha256Hex.slice(0, 32)}`
-
-  let realBlobId = fallbackBlobId
-  let isLocalFallback = false
+  let realBlobId: string
 
   try {
-    // 尝试向 Walrus 官方测试网 Publisher 发起 HTTP PUT
     const response = await fetch(`${WALRUS_PUBLISHER_URL}/v1/blobs?epochs=${epochs}`, {
       method: "PUT",
       body: arrayBuffer,
       headers: {
         "Content-Type": contentType,
       },
-      signal: AbortSignal.timeout(8000), // 8 秒超时保障
+      signal: AbortSignal.timeout(8000),
     })
 
-    if (response.ok) {
-      const json = await response.json()
-      if (json.newlyCreated?.blobObject?.blobId) {
-        realBlobId = json.newlyCreated.blobObject.blobId
-      } else if (json.alreadyCertified?.blobId) {
-        realBlobId = json.alreadyCertified.blobId
-      }
-    } else {
-      isLocalFallback = true
-    }
-  } catch (e) {
-    // 若测试网节点限流或跨域限制，使用安全本地内容寻址缓存兜底
-    isLocalFallback = true
+    if (!response.ok) throw new Error(t("walrus.publisherHttpError", { status: response.status }))
+    const json = await response.json()
+    realBlobId = json.newlyCreated?.blobObject?.blobId || json.alreadyCertified?.blobId
+    if (!isWalrusBlobId(realBlobId)) throw new Error(t("walrus.publisherNoBlobId"))
+  } catch (error) {
+    throw new Error(error instanceof Error ? t("walrus.uploadFailed", { message: error.message }) : t("walrus.uploadFailedNoMessage"))
   }
 
   // 本地离线/快速缓存
@@ -115,7 +103,7 @@ export async function uploadToWalrus(
     epochs,
     uploadedAt: new Date().toISOString(),
     url: `${WALRUS_AGGREGATOR_URL}/v1/blobs/${realBlobId}`,
-    isLocalFallback,
+    isLocalFallback: false,
   }
 
   return result
@@ -124,7 +112,8 @@ export async function uploadToWalrus(
 /**
  * 从 Walrus 聚合节点（或本地内容缓存）下载 Blob
  */
-export async function downloadFromWalrus(blobId: string): Promise<{ data: Blob; filename?: string }> {
+export async function downloadFromWalrus(blobId: string): Promise<{ data: Blob; filename?: string; source: "cache" | "aggregator" }> {
+  if (!isWalrusBlobId(blobId)) throw new Error(t("walrus.invalidBlobId"))
   // 1. 优先尝试本地缓存
   try {
     const raw = localStorage.getItem(`walrus_blob_${blobId}`)
@@ -134,6 +123,7 @@ export async function downloadFromWalrus(blobId: string): Promise<{ data: Blob; 
       return {
         data: new Blob([buffer], { type: parsed.contentType || "application/octet-stream" }),
         filename: parsed.filename,
+        source: "cache",
       }
     }
   } catch {}
@@ -143,72 +133,59 @@ export async function downloadFromWalrus(blobId: string): Promise<{ data: Blob; 
     const res = await fetch(`${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}`, {
       signal: AbortSignal.timeout(6000),
     })
-    if (res.ok) {
-      const blob = await res.blob()
-      return { data: blob }
-    }
-  } catch {}
-
-  // 3. 兜底回退：返回文本存证
-  const fallbackText = `=== Walrus Blob 存证数据 ===\nBlob ID: ${blobId}\nNetwork: Walrus Testnet (Sui Native)\nStatus: Stored on Decentralized Erasure Coded Nodes\n`
-  return {
-    data: new Blob([fallbackText], { type: "text/plain" }),
-    filename: `walrus_doc_${blobId.slice(0, 8)}.txt`,
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return { data: await res.blob(), source: "aggregator" }
+  } catch (error) {
+    throw new Error(t("walrus.aggregatorReadFailed", { blobId, message: error instanceof Error ? error.message : t("walrus.requestFailed") }))
   }
 }
 
-/**
- * 群文件管理：读取群内所有已共享的 Walrus 附件与文件
- */
+function storedGroupFiles(groupId: string): unknown[] {
+  const raw = localStorage.getItem(`walrus_files_${groupId}`)
+  if (raw === null) return []
+  const parsed: unknown = JSON.parse(raw)
+  if (!Array.isArray(parsed)) throw new Error(t("walrus.groupFileIndexInvalid"))
+  return parsed
+}
+
+/** Local history is unverified; projections never rewrite malformed or unknown rows. */
 export function getGroupWalrusFiles(groupId: string): GroupFileInfo[] {
   if (typeof window === "undefined") return []
   try {
-    const raw = localStorage.getItem(`walrus_files_${groupId}`)
-    if (raw) {
-      return JSON.parse(raw)
-    }
-  } catch {}
-
-  // 默认演示文件
-  return [
-    {
-      id: "wf-1",
-      groupId,
-      name: "DAO_Constitution_v2.pdf",
-      size: 420100,
-      blobId: "walrus_blob_e3b0c44298fc1c149afbf4c8996fb924",
-      uploader: "0xaf08...2e4",
-      uploadedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-      contentType: "application/pdf",
-      url: `${WALRUS_AGGREGATOR_URL}/v1/blobs/walrus_blob_e3b0c44298fc1c149afbf4c8996fb924`,
-    },
-    {
-      id: "wf-2",
-      groupId,
-      name: "Q1_Treasury_Audit_Report.pdf",
-      size: 856000,
-      blobId: "walrus_blob_7f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c",
-      uploader: "0x0000...a1",
-      uploadedAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-      contentType: "application/pdf",
-      url: `${WALRUS_AGGREGATOR_URL}/v1/blobs/walrus_blob_7f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c`,
-    },
-  ]
+    return storedGroupFiles(groupId).map((value, index) => {
+      const row = value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {}
+      const issues: string[] = []
+      const blobId = typeof row.blobId === "string" ? row.blobId : ""
+      if (!isWalrusBlobId(blobId)) issues.push(t("walrus.issueMissingBlobId"))
+      if (row.groupId !== groupId) issues.push(t("walrus.issueGroupUnverified"))
+      const size = typeof row.size === "number" && Number.isSafeInteger(row.size) && row.size >= 0 ? row.size : null
+      if (size === null) issues.push(t("walrus.issueSizeUnknown"))
+      return {
+        id: typeof row.id === "string" ? row.id : `legacy:${index}`, groupId,
+        name: typeof row.name === "string" && row.name ? row.name : t("walrus.unverifiedFileName"),
+        size, blobId, uploader: typeof row.uploader === "string" ? row.uploader : t("walrus.unknownUploader"),
+        uploadedAt: typeof row.uploadedAt === "string" ? row.uploadedAt : "",
+        contentType: typeof row.contentType === "string" ? row.contentType : "application/octet-stream",
+        url: isWalrusBlobId(blobId) ? `${WALRUS_AGGREGATOR_URL}/v1/blobs/${blobId}` : "",
+        source: "local", recordIssues: issues,
+      }
+    })
+  } catch (error) {
+    throw new Error(error instanceof Error ? t("walrus.groupIndexReadFailed", { message: error.message }) : t("walrus.groupIndexReadFailedNoMessage"))
+  }
 }
 
-/**
- * 群文件管理：向指定群记录新增 Walrus 文件
- */
+/** Save the raw history intact; callers retain the upload receipt if storage fails. */
 export function addGroupWalrusFile(groupId: string, file: GroupFileInfo): void {
-  if (typeof window === "undefined") return
+  if (typeof window === "undefined") throw new Error(t("walrus.noWindowSave"))
   try {
-    const existing = getGroupWalrusFiles(groupId)
-    const updated = [file, ...existing.filter((f) => f.id !== file.id)]
+    const existing = storedGroupFiles(groupId)
+    const updated = [file, ...existing.filter(value => !(value !== null && typeof value === "object" && "id" in value && value.id === file.id))]
     localStorage.setItem(`walrus_files_${groupId}`, JSON.stringify(updated))
-    window.dispatchEvent(new CustomEvent("walrus-files-updated", { detail: { groupId, file } }))
-  } catch (e) {
-    console.error("[walrus-client] Failed to save group file:", e)
+  } catch (error) {
+    throw new Error(t("walrus.indexSaveFailed", { message: error instanceof Error ? error.message : t("walrus.storageUnavailable"), blobId: file.blobId }))
   }
+  window.dispatchEvent(new CustomEvent("walrus-files-updated", { detail: { groupId, file } }))
 }
 
 // 辅助工具：Base64 <-> ArrayBuffer

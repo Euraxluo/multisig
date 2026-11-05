@@ -6,56 +6,39 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Send, Code, FileText, Clock, Plus, ChevronRight } from "lucide-react"
 import { motion } from "framer-motion"
-import { TemplateManagerDialog } from "./template-manager-dialog"
+import { TemplateManagerDialog, type TransactionTemplate } from "./template-manager-dialog"
 import { CreateTransactionDialog } from "./create-transaction-dialog"
+import { PaymentDialog } from "./payment-dialog"
+import { getPaymentTemplates } from "@/lib/local-records"
+import { paymentAssetByCoinType, paymentAssetBySymbol, SUI_COIN_TYPE } from "@/lib/payment-assets"
+import { calculateBatchTotal } from "@/lib/transaction-templates"
+import { useI18n } from "@/components/i18n-provider"
 
 interface QuickTemplatesProps {
   groupId?: string
 }
 
-const DEFAULT_TEMPLATES = [
-  {
-    id: "template-1",
-    name: "每月团队津贴发放",
-    type: "transfer",
-    description: "向核心贡献者划拨 50 SUI 津贴",
-    lastUsed: new Date().toISOString(),
-  },
-  {
-    id: "template-2",
-    name: "生态流动性金库充值",
-    type: "contract",
-    description: "向流动性池注入做市资金",
-    lastUsed: new Date(Date.now() - 86400000 * 3).toISOString(),
-  },
-  {
-    id: "template-3",
-    name: "SUI/USDC 快捷对冲",
-    type: "contract",
-    description: "在 DeepBook / Cetus 执行稳定币兑换",
-  },
-]
+const DEFAULT_TEMPLATES: TransactionTemplate[] = []
+
+/** Resolve a template's token to a canonical coin type, or `null` when it cannot be verified. */
+function templateCoinType(template: TransactionTemplate): string | null {
+  const token = template.token?.trim()
+  if (!token) return SUI_COIN_TYPE
+  if (token.includes("::")) return paymentAssetByCoinType(token)?.coinType ?? null
+  return paymentAssetBySymbol(token)?.coinType ?? null
+}
 
 export function QuickTemplates({ groupId }: QuickTemplatesProps) {
+  const { t } = useI18n()
   const [isTemplateManagerOpen, setIsTemplateManagerOpen] = useState(false)
   const [isCreateTransactionOpen, setIsCreateTransactionOpen] = useState(false)
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
+  const [isPaymentOpen, setIsPaymentOpen] = useState(false)
+  const [selectedTemplate, setSelectedTemplate] = useState<TransactionTemplate | null>(null)
+  const [templateError, setTemplateError] = useState("")
   const [templates, setTemplates] = useState(DEFAULT_TEMPLATES)
 
   useEffect(() => {
-    const load = () => {
-      try {
-        const stored = localStorage.getItem("sui_payment_templates")
-        if (stored) {
-          const parsed = JSON.parse(stored)
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setTemplates(parsed)
-            return
-          }
-        }
-        localStorage.setItem("sui_payment_templates", JSON.stringify(DEFAULT_TEMPLATES))
-      } catch {}
-    }
+    const load = () => setTemplates(getPaymentTemplates())
     load()
     window.addEventListener("sui-templates-updated", load)
     window.addEventListener("storage", load)
@@ -83,12 +66,38 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
     return new Date(dateString).toLocaleDateString()
   }
 
-  const useTemplate = useCallback(
-    (templateId: string) => {
-      setSelectedTemplate(templateId)
-      setIsCreateTransactionOpen(true)
+  const applyTemplate = useCallback(
+    (template: TransactionTemplate) => {
+      setTemplateError("")
+      if (template.type === "batch") {
+        if (groupId) {
+          setTemplateError(t("vault.qtBatchProposalUnsupported"))
+          return
+        }
+        if (!template.batchItems || template.batchItems.length === 0) {
+          setTemplateError(t("vault.qtBatchEmptyItems"))
+          return
+        }
+        setSelectedTemplate(template)
+        setIsPaymentOpen(true)
+        return
+      }
+      if (template.type !== "transfer") {
+        setTemplateError(template.type === "contract" ? t("vault.qtContractUnsupported") : t("vault.qtUnknownType", { type: template.type }))
+        return
+      }
+      const coinType = templateCoinType(template)
+      if (!coinType) {
+        setTemplateError(t("vault.qtUnknownToken", { token: template.token ?? "" }))
+        return
+      }
+      setSelectedTemplate(template)
+      // Group proposals must go through the proposal wizard so the treasury and
+      // organisation are confirmed; personal transfers use the direct payment dialog.
+      if (groupId) setIsCreateTransactionOpen(true)
+      else setIsPaymentOpen(true)
     },
-    [setSelectedTemplate, setIsCreateTransactionOpen],
+    [groupId, t],
   )
 
   const container = {
@@ -106,27 +115,31 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
     show: { opacity: 1, y: 0 },
   }
 
+  const selectedCoinType = selectedTemplate ? templateCoinType(selectedTemplate) : null
+
   return (
     <>
       <div className="mb-4">
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-lg font-semibold">Quick Templates</h3>
+          <h3 className="text-lg font-semibold">{groupId ? t("vault.qtGroupTitle") : t("vault.qtPersonalTitle")}</h3>
           <Button
             variant="ghost"
             size="sm"
             className="text-xs flex items-center"
             onClick={() => setIsTemplateManagerOpen(true)}
           >
-            Manage <ChevronRight className="h-3 w-3 ml-1" />
+            {t("vault.qtManage")} <ChevronRight className="h-3 w-3 ml-1" />
           </Button>
         </div>
 
+        <p className="mb-3 text-xs text-muted-foreground">{t("vault.qtStoragePrefix")}{groupId ? t("vault.qtConfirmGroup") : t("vault.qtConfirmPersonal")}{t("vault.qtStorageSuffix")}</p>
+        {templateError && <p role="alert" className="mb-3 text-xs text-destructive">{templateError}</p>}
         <motion.div className="grid gap-2" variants={container} initial="hidden" animate="show">
           {templates.map((template) => (
             <motion.div key={template.id} variants={item}>
               <Card
                 className="cursor-pointer hover:shadow-md transition-all duration-200 border-none shadow-sm"
-                onClick={() => useTemplate(template.id)}
+                onClick={() => applyTemplate(template)}
               >
                 <CardContent className="p-3">
                   <div className="flex items-center justify-between">
@@ -137,6 +150,7 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
                       <div>
                         <h4 className="text-sm font-medium">{template.name}</h4>
                         <p className="text-xs text-muted-foreground">{template.description}</p>
+                        <p className="text-[10px] text-muted-foreground">{template.sourceStatus === "unverified" ? t("vault.tmHistoryBadge") : t("vault.tmLocalBadge")}</p>
                       </div>
                     </div>
                     <Badge variant="outline" className="text-xs">
@@ -161,7 +175,7 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
               onClick={() => setIsTemplateManagerOpen(true)}
             >
               <Plus className="h-4 w-4 mr-2" />
-              Create New Template
+              {t("vault.qtNewLocalTemplate")}
             </Button>
           </motion.div>
         </motion.div>
@@ -169,11 +183,24 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
 
       <TemplateManagerDialog open={isTemplateManagerOpen} onOpenChange={setIsTemplateManagerOpen} />
 
-      <CreateTransactionDialog
-        open={isCreateTransactionOpen}
-        onOpenChange={setIsCreateTransactionOpen}
-        groupId={groupId}
-      />
+      {groupId ? (
+        <CreateTransactionDialog
+          open={isCreateTransactionOpen}
+          onOpenChange={setIsCreateTransactionOpen}
+          groupId={groupId}
+          initialTemplate={selectedTemplate || undefined}
+        />
+      ) : (
+        <PaymentDialog
+          open={isPaymentOpen}
+          onOpenChange={setIsPaymentOpen}
+          title={selectedTemplate ? t("vault.qtPaymentDialogTitle", { kind: selectedTemplate.type === "batch" ? t("vault.typeBatch") : t("vault.qtPersonalTransfer"), name: selectedTemplate.name }) : t("vault.qtPersonalTransfer")}
+          amount={selectedTemplate?.type === "batch" ? calculateBatchTotal(selectedTemplate.batchItems) : selectedTemplate?.amount}
+          recipientAddress={selectedTemplate?.recipient}
+          initialCoinType={selectedCoinType || undefined}
+          batchItems={selectedTemplate?.type === "batch" ? selectedTemplate.batchItems : undefined}
+        />
+      )}
     </>
   )
 }

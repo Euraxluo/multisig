@@ -1,105 +1,107 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useMemo } from "react"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardHeader } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { GroupDetailsDialog } from "@/components/group-details-dialog"
 import { motion } from "framer-motion"
-import { ArrowRight, TrendingUp, Clock, Users, Plus } from "lucide-react"
+import { ArrowRight, Loader2, TrendingUp, Users, Plus, Clock, RefreshCw } from "lucide-react"
 import { CreateGroupDialog } from "@/components/create-group-dialog"
-import { QuickActions } from "@/components/quick-actions"
-import { QuickTemplates } from "@/components/quick-templates"
-import { RecurringPayments } from "@/components/recurring-payments"
-import { getActiveAccount, fetchRealBalances, getProposals } from "@/lib/onchain-store"
-
-const DEFAULT_GROUPS = [
-  {
-    id: "group-1",
-    name: "Team Treasury (Sui MultiSig)",
-    network: "Sui Testnet (v3)",
-    orgObjectId: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4",
-    members: [
-      { name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", weight: 2 },
-      { name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", weight: 1 },
-      { name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", weight: 1 },
-    ],
-    threshold: 2,
-    totalWeight: 4,
-    createdAt: new Date().toISOString(),
-  },
-]
+import { getActiveAccount, getUserGroups, getProposals, type LocalGroupRecord, type ProposalItem } from "@/lib/onchain-store"
+import { readWalletAssets, type WalletAsset } from "@/lib/wallet-data"
+import { fetchTokenPrices, formatUsd, totalUsdValue, type PriceSnapshot } from "@/lib/price-feed"
+import { discoveredGroupRecord, mergeDiscoveredGroups } from "@/lib/group-discovery"
+import { useGroupDiscovery } from "@/lib/use-group-discovery"
+import { useI18n } from "@/components/i18n-provider"
 
 export default function Dashboard() {
+  const { t, locale } = useI18n()
+  const router = useRouter()
   const [selectedGroup, setSelectedGroup] = useState<{ id: string; name: string } | null>(null)
   const [isCreateGroupOpen, setIsCreateGroupOpen] = useState(false)
-  const [userGroups, setUserGroups] = useState<any[]>(DEFAULT_GROUPS)
-  const [totalAssetsUsd, setTotalAssetsUsd] = useState<number>(0)
-  const [pendingCount, setPendingCount] = useState<number>(0)
+  const [userGroups, setUserGroups] = useState<LocalGroupRecord[]>([])
+  const [proposals, setProposals] = useState<ProposalItem[]>([])
+  const [adoptError, setAdoptError] = useState("")
+  const [adopted, setAdopted] = useState("")
+  const discovery = useGroupDiscovery()
 
-  useEffect(() => {
-    let cancelled = false
-
-    const loadData = async () => {
-      // 1. 读取群组列表
-      try {
-        const saved = JSON.parse(localStorage.getItem("user_groups") || "[]")
-        if (!cancelled) {
-          if (Array.isArray(saved) && saved.length > 0) {
-            setUserGroups(saved)
-          } else {
-            setUserGroups(DEFAULT_GROUPS)
-            localStorage.setItem("user_groups", JSON.stringify(DEFAULT_GROUPS))
-          }
-        }
-      } catch {}
-
-      // 2. 读取待处理提案数
-      try {
-        const props = getProposals()
-        const pending = props.filter((p) => p.status === "pending").length
-        if (!cancelled) setPendingCount(pending)
-      } catch {}
-
-      // 3. 从 Sui 真实全节点 RPC 读取活跃钱包链上资产
-      const account = getActiveAccount()
-      if (account?.address) {
-        try {
-          const balances = await fetchRealBalances(account.address)
-          if (!cancelled) {
-            setTotalAssetsUsd(balances.totalUsdValue)
-          }
-        } catch (e) {
-          console.warn("[Dashboard] fetchRealBalances failed:", e)
-        }
-      } else {
-        if (!cancelled) setTotalAssetsUsd(0)
-      }
+  // Adopting a discovered organization writes only chain facts plus an empty
+  // note. It never copies a vault or capability, so nothing is silently granted.
+  const adoptGroup = (orgId: string) => {
+    setAdoptError(""); setAdopted("")
+    const org = discovery.data?.organizations.find(row => row.orgId.toLowerCase() === orgId.toLowerCase())
+    if (!org) { setAdoptError(t("dash.discoveryStale")); return }
+    if (getUserGroups().some(group => typeof group.orgObjectId === "string" && group.orgObjectId.toLowerCase() === orgId.toLowerCase())) {
+      setAdopted(t("dash.alreadySaved")); return
     }
-
-    loadData()
-
-    const onStorage = () => loadData()
-    const onProposalsUpdated = () => loadData()
-    window.addEventListener("storage", onStorage)
-    window.addEventListener("sui-proposals-updated", onProposalsUpdated)
-    window.addEventListener("sui-groups-updated", onStorage)
-    window.addEventListener("sui-account-switched", onStorage)
-    const id = window.setInterval(loadData, 4000)
-
+    try {
+      const saved = JSON.parse(localStorage.getItem("user_groups") || "[]")
+      const next = Array.isArray(saved) ? [...saved, discoveredGroupRecord(org)] : [discoveredGroupRecord(org)]
+      localStorage.setItem("user_groups", JSON.stringify(next))
+      window.dispatchEvent(new CustomEvent("sui-groups-updated", { detail: next }))
+      window.dispatchEvent(new Event("storage"))
+      setUserGroups(getUserGroups())
+      setAdopted(t("dash.adoptSaved"))
+    } catch (cause) {
+      setAdoptError(cause instanceof Error ? cause.message : t("dash.saveGroupFailed"))
+    }
+  }
+  // Real RPC balances for the connected account. No USD valuation is computed
+  // here: the app has no price feed, and a hardcoded price would be invented.
+  const [assets, setAssets] = useState<WalletAsset[]>([])
+  const [assetsAddress, setAssetsAddress] = useState("")
+  const [assetsLoading, setAssetsLoading] = useState(false)
+  const [assetsError, setAssetsError] = useState("")
+  const [prices, setPrices] = useState<PriceSnapshot | null>(null)
+  useEffect(() => {
+    const load = () => { setUserGroups(getUserGroups()); setProposals(getProposals()) }
+    load()
+    window.addEventListener("storage", load)
+    window.addEventListener("sui-groups-updated", load)
+    window.addEventListener("sui-proposals-updated", load)
     return () => {
-      cancelled = true
-      window.removeEventListener("storage", onStorage)
-      window.removeEventListener("sui-proposals-updated", onProposalsUpdated)
-      window.removeEventListener("sui-groups-updated", onStorage)
-      window.removeEventListener("sui-account-switched", onStorage)
-      window.clearInterval(id)
+      window.removeEventListener("storage", load)
+      window.removeEventListener("sui-groups-updated", load)
+      window.removeEventListener("sui-proposals-updated", load)
     }
   }, [])
 
-  // 群组列表只来自用户真实创建的数据，不再展示 demo 假数据
+  useEffect(() => {
+    let cancelled = false
+    const loadAssets = () => {
+      const address = getActiveAccount()?.address || ""
+      setAssets([]); setAssetsAddress(address); setAssetsError(""); setAssetsLoading(!!address); setPrices(null)
+      if (!address) return
+      void readWalletAssets(address)
+        .then(async rows => {
+          if (cancelled || getActiveAccount()?.address !== address) return
+          setAssets(rows)
+          const snapshot = await fetchTokenPrices(rows)
+          if (!cancelled && getActiveAccount()?.address === address) setPrices(snapshot)
+        })
+        .catch(error => { if (!cancelled) setAssetsError(error instanceof Error ? error.message : t("dash.assetsLoadFailed")) })
+        .finally(() => { if (!cancelled) setAssetsLoading(false) })
+    }
+    loadAssets()
+    window.addEventListener("sui-account-switched", loadAssets)
+    window.addEventListener("storage", loadAssets)
+    return () => {
+      cancelled = true
+      window.removeEventListener("sui-account-switched", loadAssets)
+      window.removeEventListener("storage", loadAssets)
+    }
+  }, [])
 
+  // 群组列表 = 本机备注 + 链上发现；本机记录永不因发现结果被隐藏。
+
+  // Chain discovery is the membership source; local records stay as a notes overlay.
+  const groupRows = useMemo(() => mergeDiscoveredGroups(userGroups, discovery.data), [userGroups, discovery.data])
+  const chainOnly = groupRows.filter(row => row.origin === "chain").length
+  const membershipUnknown = groupRows.filter(row => row.origin === "local" && row.orgObjectId && row.membership === "unknown").length
+  const discoveryFailed = !!discovery.error
 
   const container = {
     hidden: { opacity: 0 },
@@ -116,66 +118,105 @@ export default function Dashboard() {
     show: { opacity: 1, y: 0 },
   }
 
+  const groupIds = new Set(groupRows.map(group => group.id))
+  const orgIds = new Set(groupRows.map(group => group.orgObjectId).filter(Boolean).map(id => id.toLowerCase()))
+  const verified = proposals.filter(proposal => (groupIds.has(proposal.groupId) || orgIds.has(String(proposal.orgId || "").toLowerCase())) && proposal.chainSyncedAt && !proposal.syncError)
+  const pending = verified.filter(proposal => proposal.status === "pending" && proposal.deadlineMs >= Date.now()).length
+  const usdTotal = prices ? totalUsdValue(assets, prices.prices) : null
+
   return (
     <div className="space-y-4">
-      {/* Quick Actions, Templates, and Recurring Payments Section */}
-      <div className="space-y-4">
-        <QuickActions />
-        <QuickTemplates />
-        <RecurringPayments />
-      </div>
+      <Card className="border-none bg-gradient-to-br from-primary/10 via-primary/5 to-emerald-500/10 shadow-sm">
+        <CardContent className="p-4">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>{t("dash.assetsTitle")}</span>
+            <TrendingUp className="h-4 w-4 text-primary" />
+          </div>
+          {assetsLoading ? (
+            <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t("dash.assetsLoading")}</p>
+          ) : !assetsAddress ? (
+            <p className="mt-2 text-sm text-muted-foreground">{t("dash.assetsConnectFirst")}</p>
+          ) : (
+            <>
+              <p className="mt-2 truncate font-mono text-2xl font-bold tracking-tight">
+                {assets[0]?.balance ?? (assetsError ? t("dash.readFailed") : "—")} <span className="text-sm font-medium text-muted-foreground">{assets[0]?.symbol ?? (assetsError ? "" : "SUI")}</span>
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                {assets.length > 1 ? t("dash.assetsMulti", { count: assets.length, rest: assets.length - 1 }) : t("dash.assetsRpcNote")}
+              </p>
+              {usdTotal !== null ? (
+                <p className="mt-2 text-sm font-medium">≈ {formatUsd(usdTotal)} <span className="text-[11px] font-normal text-muted-foreground">{t("dash.referenceEstimate")} · {prices?.source} · {new Date(prices!.fetchedAt).toLocaleTimeString(locale === "zh" ? "zh-CN" : "en-US")}</span></p>
+              ) : null}
+            </>
+          )}
+          {assetsError && <p role="alert" className="mt-2 text-xs text-destructive">{assetsError}</p>}
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            {usdTotal !== null ? t("dash.assetsUsdNote") : t("dash.assetsNoPriceNote")}
+          </p>
+        </CardContent>
+      </Card>
 
+      <div className="grid grid-cols-2 gap-3">
+        <Card className="border-none border border-border/70 bg-card shadow-sm"><CardContent className="p-4"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{t("dash.myGroups")}</span><Users className="h-4 w-4 text-primary" /></div><p className="mt-2 text-2xl font-bold">{groupRows.length}</p><p className="mt-1 text-[11px] text-muted-foreground">{t("dash.statVerified", { count: groupRows.filter(group => group.sourceStatus === "chain-confirmed").length })}{chainOnly ? t("dash.statChainSuffix", { count: chainOnly }) : ""}</p></CardContent></Card>
+        <Card className="border-none bg-gradient-to-br from-primary/5 to-blue-500/10 shadow-sm"><CardContent className="p-4"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{t("dash.pendingApprovals")}</span><Clock className="h-4 w-4 text-primary" /></div><p className="mt-2 text-2xl font-bold">{pending}</p><p className="mt-1 text-[11px] text-muted-foreground">{t("dash.syncedProposals", { count: verified.length })}</p></CardContent></Card>
+      </div>
       <div className="flex items-center justify-between mb-2">
-        <h2 className="text-xl font-bold">Your Groups</h2>
-        <Button
-          variant="default"
-          size="sm"
-          className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
-          onClick={() => setIsCreateGroupOpen(true)}
-        >
-          <Plus className="h-4 w-4 mr-1" /> New Group
-        </Button>
+        <h2 className="text-xl font-bold">{t("dash.myGroups")}</h2>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            aria-label={t("dash.refreshOrgs")}
+            disabled={discovery.loading || !discovery.address}
+            onClick={discovery.refresh}
+          >
+            {discovery.loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+          </Button>
+          <Button
+            variant="default"
+            size="sm"
+            className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm"
+            onClick={() => setIsCreateGroupOpen(true)}
+          >
+            <Plus className="h-4 w-4 mr-1" /> {t("dash.newGroup")}
+          </Button>
+        </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3 mb-4">
-        <Card className="bg-gradient-to-br from-primary/10 to-purple-500/10 border-none shadow-sm">
-          <CardContent className="p-3 flex flex-col items-center justify-center">
-            <TrendingUp className="h-8 w-8 text-primary mb-1" />
-            <p className="text-lg font-bold">
-              ${totalAssetsUsd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-            </p>
-            <p className="text-xs text-muted-foreground">Total Assets (RPC)</p>
-          </CardContent>
-        </Card>
-        <Card className="bg-gradient-to-br from-amber-500/10 to-orange-500/10 border-none shadow-sm">
-          <CardContent className="p-3 flex flex-col items-center justify-center">
-            <Clock className="h-8 w-8 text-amber-500 mb-1" />
-            <p className="text-lg font-bold">{pendingCount}</p>
-            <p className="text-xs text-muted-foreground">Pending Transactions</p>
-          </CardContent>
-        </Card>
-      </div>
+      {/* Membership discovery is chain state; the local collection is only a
+          notes overlay, so an empty local list never means "no groups". */}
+      {discovery.address && (
+        <p className="text-[11px] text-muted-foreground">
+          {discovery.data
+            ? discovery.data.truncated
+              ? t("dash.discoveryTruncated", { scanned: discovery.data.scannedEvents, found: chainOnly })
+              : t("dash.discoveryChecked", { checked: discovery.data.checked.length, found: chainOnly })
+            : discovery.loading ? t("dash.discoveryChecking") : discoveryFailed ? "" : t("dash.discoveryNotRun")}
+        </p>
+      )}
+      {discoveryFailed && <p role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{t("dash.discoveryFailedNote", { error: discovery.error ?? "" })}</p>}
+      {!discoveryFailed && membershipUnknown > 0 && <p className="rounded-lg bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">{t("dash.membershipUnknownNote", { count: membershipUnknown })}</p>}
+      {discovery.data && discovery.data.failures.length > 0 && <p className="rounded-lg bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-300">{t("dash.discoveryFailuresNote", { count: discovery.data.failures.length })}</p>}
+      {adoptError && <p role="alert" className="rounded-lg bg-destructive/10 p-2 text-xs text-destructive">{adoptError}</p>}
+      {adopted && <p role="status" className="rounded-lg bg-emerald-500/10 p-2 text-xs text-emerald-700 dark:text-emerald-300">{adopted}</p>}
+
+      {!groupRows.length && <div className="rounded-xl border border-dashed bg-muted/20 py-10 text-center"><p className="text-sm font-medium">{discoveryFailed ? t("dash.emptyTitleFailed") : discovery.address ? t("dash.emptyTitleNone") : t("dash.emptyTitleNoAccount")}</p><p className="mt-1 text-xs text-muted-foreground">{discoveryFailed ? t("dash.emptyBodyFailed") : discovery.address ? t("dash.emptyBodyNone") : t("dash.emptyBodyNoAccount")}</p></div>}
 
       <motion.div className="grid gap-3" variants={container} initial="hidden" animate="show">
-        {userGroups.map((g: any) => ({
-            id: g.id,
-            name: g.name,
-            network: g.network || "Sui",
-            members: g.members?.length ?? 0,
-            threshold: g.threshold || 1,
-            color: "from-primary to-purple-500",
-          }
-          )).map((group: any) => (
+        {groupRows.map((group) => (
           <motion.div key={group.id} variants={item}>
             <Card
-              className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
-              onClick={() => setSelectedGroup({ id: group.id, name: group.name })}
+              className="overflow-hidden hover:shadow-md hover:border-primary/40 transition-all duration-200 border border-border bg-card shadow-sm cursor-pointer"
+              onClick={() => router.push(`/groups/${group.id}`)}
             >
-              <div className={`h-1 bg-gradient-to-r ${group.color}`}></div>
+              <div className="h-1 bg-primary"></div>
               <CardHeader className="p-3 pb-0">
                 <div className="flex items-start justify-between">
-                  <div>
-                    <h3 className="font-medium text-sm">{group.name}</h3>
+                  <div className="min-w-0">
+                    <h3 className="font-medium text-sm truncate">{group.name}</h3>
+                    {group.origin === "chain" && <Badge variant="outline" className="my-1 text-[10px]">{t("dash.badgeChainFound")}</Badge>}
+                    {group.origin === "local" && group.sourceStatus === "unverified" && <Badge variant="outline" className="my-1 text-[10px]">{t("dash.badgeLegacyUnverified")}</Badge>}
+                    {group.origin === "local" && group.membership === "not-member" && <Badge variant="outline" className="my-1 border-amber-500/30 text-[10px] text-amber-600 dark:text-amber-300">{t("dash.badgeNotInRoster")}</Badge>}
                     <p className="text-xs text-muted-foreground">{group.network} Network</p>
                   </div>
                 </div>
@@ -184,31 +225,45 @@ export default function Dashboard() {
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="text-xs text-muted-foreground flex items-center">
                     <Users className="h-3 w-3 mr-1" />
-                    {group.members} Members
+                    {t("dash.memberCount", { count: group.memberCount ?? group.members.length })}
                   </div>
                   <div className="font-medium text-sm">
-                    Threshold {group.threshold}
+                    {t("dash.threshold", { value: group.threshold ?? "—" })}
                   </div>
                 </div>
+                {group.myWeight !== null && <p className="mb-1 text-[11px] text-muted-foreground">{t("dash.myWeight", { value: group.myWeight })}</p>}
                 <div className="mt-3 flex items-center justify-between">
                   <div className="flex -space-x-2">
-                    {Array.from({ length: Math.min(group.members, 3) }).map((_, i) => (
-                      <Avatar key={`member-${i}`} className="border-2 border-background h-6 w-6">
-                        <AvatarFallback className="text-xs bg-gradient-to-br from-primary/80 to-purple-500/80 text-white">
-                          {String.fromCharCode(65 + i)}
+                    {group.members.slice(0, 3).map((member, i) => (
+                      <Avatar key={member.address || i} className="border-2 border-background h-6 w-6" title={member.name || member.address}>
+                        <AvatarFallback className="text-xs bg-muted text-foreground font-medium border border-border">
+                          {member.name?.slice(0, 1) || member.address?.replace(/^0x/, "").slice(0, 2).toUpperCase() || <Users className="h-3 w-3" />}
                         </AvatarFallback>
                       </Avatar>
                     ))}
-                    {group.members > 3 && (
+                    {group.members.length === 0 && group.memberCount !== null && group.memberCount > 0 && (
+                      <span className="text-[11px] text-muted-foreground">{t("dash.rosterInDetails")}</span>
+                    )}
+                    {group.members.length > 3 && (
                       <Avatar className="border-2 border-background h-6 w-6">
-                        <AvatarFallback className="text-xs bg-muted">+{group.members - 3}</AvatarFallback>
+                        <AvatarFallback className="text-xs bg-muted">+{group.members.length - 3}</AvatarFallback>
                       </Avatar>
                     )}
                   </div>
                   <Button size="sm" variant="ghost" className="h-7 text-xs text-primary flex items-center gap-1">
-                    View Details <ArrowRight className="h-3 w-3" />
+                    {t("dash.viewDetails")} <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>
+                {group.origin === "chain" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2 h-7 w-full text-xs"
+                    onClick={event => { event.stopPropagation(); adoptGroup(group.orgObjectId) }}
+                  >
+                    {t("dash.adoptGroup")}
+                  </Button>
+                )}
               </CardContent>
             </Card>
           </motion.div>

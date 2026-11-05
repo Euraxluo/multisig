@@ -1,6 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { Input } from "@/components/ui/input";
+import { readDkgSessionLink, saveDkgSessionLink, readQualifiedDealers } from "@/lib/dkg-local-session";
+import { assembleDeviceKey } from "@/lib/dkg-key-package";
+import { savePendingDeviceKey, readPendingDeviceKey, bindDeviceKey, readDeviceKey, saveDealerContribution, readDealerContribution, type BoundDeviceKey } from "@/lib/committee-device-store";
+import { readDkgOrganizationCreation } from "@/lib/dkg-organization";
+import { acknowledgePendingTransaction, getPendingTransaction, TransactionReceiptError, type PendingTransactionReceipt } from "@/lib/pending-transactions";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,17 +21,34 @@ import {
   Sparkles,
   Lock,
   Layers,
-  Inbox,
   Clock,
   ExternalLink,
 } from "lucide-react";
 import { DKGParticipant } from "@/lib/crypto/ceremony";
+import { useI18n } from "@/components/i18n-provider";
 import { GennaroResharingParticipant } from "@/lib/crypto/resharing";
-import { ThresholdSignerNode } from "@/lib/crypto/threshold_signer";
-import { signAndExecuteWithWallet, TESTNET_PACKAGE_ID } from "@/lib/sui-wallet-signer";
-import { sha256 } from "@noble/hashes/sha2.js";
-import { bcs } from "@mysten/sui/bcs";
+import { signWithCommittee, ThresholdSigningError } from "@/lib/crypto/committee-signing";
+import { getCommitteeSession, setCommitteeSession, adoptLiveEpoch } from "@/lib/committee-session";
+import { readLiveOrganization } from "@/lib/group-roster";
+import { signAndExecuteWithWallet, resumePendingTransaction, getTransactionAccount, assertTransactionAccount } from "@/lib/sui-wallet-signer";
+import { proposalClient } from "@/lib/proposal-chain";
+import { MAX_ROSTER_MEMBERS } from "@/lib/group-roster";
+import { computeThresholdApprovalDigest } from "@/lib/vault-client";
+import { errorMessage as describeError } from "@/lib/error-message";
+import { TESTNET_PACKAGE_ID, findCreatedProtocolObject, getActiveAccount, getUserGroups, persistGroupOrganization } from "@/lib/onchain-store";
+import { DKG_ATTESTATION_TYPE_ORIGIN, DKG_ENCRYPTION_KEY_TYPE_ORIGIN, DKG_TYPE_ORIGIN } from "@/lib/dkg-type-origin";
 import { Transaction } from "@mysten/sui/transactions";
+import { isValidSuiAddress, normalizeSuiAddress } from "@mysten/sui/utils";
+import {
+  DKG_STATUS, dkgSessionClient, encodeCommitments, readCommitment, readConfirmation,
+  readGroupKeyAttestation, readMailboxShare, readSession,
+} from "@/lib/dkg-session";
+import { createEncryptionKeyReader, encryptionKeyClient, openShare, sealShare } from "@/lib/dkg-mailbox";
+import { ensureMailboxKey, persistMailboxKey, readMailboxKey } from "@/lib/dkg-mailbox-keys";
+import { bytesToScalar, scalarToBytes32 } from "@/lib/crypto/math";
+import { bytesToHex } from "@/lib/crypto/bytes";
+import { ed25519 } from "@noble/curves/ed25519.js";
+import { verifyShareCommitment, type Point } from "@/lib/crypto/vss";
 
 interface DkgCeremonyDialogProps {
   open: boolean;
@@ -45,17 +68,11 @@ type CeremonyStep =
   | "COMPLETE"
   | "RESHARING_ACTIVE";
 
-export function DkgCeremonyDialog({
-  open,
-  onOpenChange,
-  groupName,
-  groupId = "default",
-  initialMembers,
-  onConvertedSuccess,
-}: DkgCeremonyDialogProps) {
+export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers, onConvertedSuccess }: DkgCeremonyDialogProps) {
+  const { t } = useI18n();
   const [step, setStep] = useState<CeremonyStep>("INIT");
   const [progress, setProgress] = useState(0);
-  const [activeLog, setActiveLog] = useState<string>("等待启动分布式密钥生成 (FROST DKG)...");
+  const [activeLog, setActiveLog] = useState<string>(t("dkg.logWaiting"));
   const [groupPk, setGroupPk] = useState<string>("");
   const [orgObjectId, setOrgObjectId] = useState<string>("");
   const [txDigest, setTxDigest] = useState<string>("");
@@ -71,16 +88,28 @@ export function DkgCeremonyDialog({
   const [deadlineTs, setDeadlineTs] = useState<number | null>(null);
   const [nowTs, setNowTs] = useState<number>(Date.now());
   const [memberSigned, setMemberSigned] = useState<Record<string, boolean>>({});
-  const [isForcing, setIsForcing] = useState(false);
   const [onChainSessionId, setOnChainSessionId] = useState<string | null>(null);
-  const [sessionCreateDigest, setSessionCreateDigest] = useState<string>("");
+  // The dealer's secret polynomial must survive between the commitment phase and
+  // the share phase: re-deriving it would publish commitments for a polynomial
+  // whose shares were never sent, and re-submitting aborts (E_ALREADY_SUBMITTED).
+  // A reload clears this, which is reported instead of silently restarting.
+  const dealerRef = useRef<{ sessionId: string; holder: string; node: DKGParticipant } | null>(null);
+  const generation = useRef(0);
+  const [sessionInput, setSessionInput] = useState("");
+  const [creationInput, setCreationInput] = useState("");
+  const [deviceKey, setDeviceKey] = useState<BoundDeviceKey | null>(null);
+  const [pendingDeviceKey, setPendingDeviceKey] = useState<Awaited<ReturnType<typeof readPendingDeviceKey>>>(null);
+  const [deviceKeyError, setDeviceKeyError] = useState("");
+
+  useEffect(() => {
+    const invalidate = () => { generation.current++; dealerRef.current = null; setDeviceKey(null); setDeviceKeyError(""); };
+    window.addEventListener("sui-account-switched", invalidate);
+    invalidate();
+    return () => { generation.current++; window.removeEventListener("sui-account-switched", invalidate); };
+  }, [groupId]);
 
   // 异步信箱状态
-  const [davidAwakened, setDavidAwakened] = useState(false);
-  const [davidWakeupLog, setDavidWakeupLog] = useState<string>("");
-
   // Resharing 状态
-  const [reshareMembers, setReshareMembers] = useState(initialMembers);
   const [reshareLog, setReshareLog] = useState<string>("");
   const [reshareTxDigest, setReshareTxDigest] = useState<string>("");
   const [suiscanReshareTxUrl, setSuiscanReshareTxUrl] = useState<string>("");
@@ -93,369 +122,828 @@ export function DkgCeremonyDialog({
     return () => window.clearInterval(id)
   }, [deadlineTs])
 
+  // `null` = not checked yet, so the panel never claims deployment from a
+  // local record alone. The mount restore below sets this from a real
+  // `getObject` on the organization.
+  const [orgChainCheck, setOrgChainCheck] = useState<{ state: "pending" | "verified" | "failed"; error?: string }>({ state: "pending" });
+
   // 挂载时尝试从 localStorage 恢复已有 DAO 状态
   useEffect(() => {
     if (typeof window === "undefined" || !groupId) return;
-    try {
-      const saved = localStorage.getItem(`dao_org_${groupId}`);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.orgObjectId && parsed.groupPk) {
-          setOrgObjectId(parsed.orgObjectId);
-          setGroupPk(parsed.groupPk);
-          setTxDigest(parsed.txDigest || "");
-          setSuiscanTxUrl(parsed.suiscanTxUrl || `https://suiscan.xyz/testnet/tx/${parsed.txDigest}`);
-          setSuiscanOrgUrl(parsed.suiscanOrgUrl || `https://suiscan.xyz/testnet/object/${parsed.orgObjectId}`);
-          setEpoch(parsed.epoch || 1);
-          if (parsed.reshareTxDigest) {
-            setReshareTxDigest(parsed.reshareTxDigest);
-            setSuiscanReshareTxUrl(parsed.suiscanReshareTxUrl || `https://suiscan.xyz/testnet/tx/${parsed.reshareTxDigest}`);
-          }
-          setStep("COMPLETE");
-        }
-      }
-    } catch (e) {
-      console.warn("Failed to restore DAO state from localStorage", e);
+    const restore = () => {
+      try {
+        const run = generation.current;
+        const holder = getActiveAccount()?.address;
+        const sessionId = holder && groupId ? readDkgSessionLink(groupId, holder) : null;
+        if (sessionId) void readSession(dkgSessionClient, sessionId).then(session => {
+          if (run !== generation.current) return;
+          setOnChainSessionId(session.sessionId); setSessionInput(session.sessionId);
+          const active = getActiveAccount();
+          if (active) void readPendingDeviceKey(session.sessionId, normAddress(active.address, t("dkg.addrInvalid"))).then(key => { if (run === generation.current) setPendingDeviceKey(key); });
+          setDeadlineTs(Number(session.deadlineTimestampMs));
+        }).catch((error: unknown) => { if (run === generation.current) setActiveLog(describeError(error, t("dkg.restoreReadFailed"))); });
+        const group = getUserGroups().find(value => value.id === groupId)
+        if (!group?.orgObjectId) return
+        const raw = JSON.parse(localStorage.getItem(`dao_org_${groupId}`) || "null")
+        const saved = raw?.orgObjectId === group.orgObjectId ? raw : {}
+        setOrgObjectId(group.orgObjectId)
+        setGroupPk(group.groupPk || "")
+        setTxDigest(group.orgTxDigest || "")
+        setSuiscanTxUrl(group.orgTxDigest ? `https://suiscan.xyz/testnet/tx/${group.orgTxDigest}` : "")
+        setSuiscanOrgUrl(`https://suiscan.xyz/testnet/object/${group.orgObjectId}`)
+        setEpoch(group.epoch || 1)
+        setReshareTxDigest(saved.reshareTxDigest || "")
+        setSuiscanReshareTxUrl(saved.reshareTxDigest ? `https://suiscan.xyz/testnet/tx/${saved.reshareTxDigest}` : "")
+        // Shares live in this tab's module memory rather than localStorage, so a
+        // closed dialog can still see them; a reload cannot.
+        const held = getCommitteeSession(group.orgObjectId)
+        setStoredShares(held?.shares ?? [])
+        setStoredPkBytes(held?.groupPk ?? null)
+        setStep("COMPLETE")
+        setActiveLog(t("dkg.logRestored"));
+        const keyRun = generation.current;
+        if (holder) void readDeviceKey(group.orgObjectId, holder).then(key => {
+          if (keyRun !== generation.current) return;
+          setDeviceKey(key);
+          if (key) setOnChainSessionId(key.sessionId);
+        }).catch((error: unknown) => { if (keyRun === generation.current) setDeviceKeyError(describeError(error, t("dkg.deviceKeyReadFailed"))); });
+        // The COMPLETE panel says "deployed on chain". That is a chain fact, so
+        // it is read from chain rather than inferred from a saved object id.
+        const orgId = group.orgObjectId
+        setOrgChainCheck({ state: "pending" })
+        void readLiveOrganization(proposalClient, orgId).then(live => {
+          setOrgChainCheck({ state: "verified" })
+          setEpoch(Number(live.epoch))
+        }).catch((error: unknown) => {
+          setOrgChainCheck({ state: "failed", error: error instanceof Error ? error.message : t("dkg.orgReadFailed") })
+        })
+      } catch (error) { console.warn("Failed to restore DAO state", error) }
     }
+    setStep("INIT"); setOrgObjectId(""); setGroupPk(""); setTxDigest("")
+    setStoredShares([]); setStoredPkBytes(null)
+    setDeadlineTs(null); setOnChainSessionId(null); setMemberSigned({})
+    restore()
+    window.addEventListener("sui-groups-updated", restore)
+    return () => window.removeEventListener("sui-groups-updated", restore)
   }, [groupId]);
 
-  // 当前钱包在链上 confirm_participant
-  const confirmOnChain = async (sessionId: string) => {
-    const tx = new Transaction()
-    tx.moveCall({
-      target: `${TESTNET_PACKAGE_ID}::dkg_committee::confirm_participant`,
-      typeArguments: [],
-      arguments: [tx.object(sessionId)],
-    })
-    const { digest } = await signAndExecuteWithWallet(tx)
-    const me = initialMembers[0]?.address
-    if (me) setMemberSigned((prev: Record<string, boolean>) => ({ ...prev, [me]: true }))
-    return digest
-  }
+  const loadSession = async () => {
+    const account = getTransactionAccount();
+    const run = generation.current;
+    try {
+      const session = await readSession(dkgSessionClient, normAddress(sessionInput, t("dkg.sessionIdInvalid")));
+      assertTransactionAccount(account);
+      if (run !== generation.current) return;
+      if (!session.participants.includes(account.address)) throw new Error(t("dkg.notOriginalParticipant"));
+      if (groupId) saveDkgSessionLink(groupId, account.address, session.sessionId);
+      dealerRef.current = null;
+      setOnChainSessionId(session.sessionId); setSessionInput(session.sessionId); setDeadlineTs(Number(session.deadlineTimestampMs));
+      setPendingDeviceKey(await readPendingDeviceKey(session.sessionId, account.address));
+      setStep("INIT"); setActiveLog(t("dkg.logSessionLoaded", { status: session.status, threshold: String(session.threshold), participants: session.participants.length }));
+    } catch (error) { setActiveLog(describeError(error, t("dkg.sessionReadFailed"))); }
+  };
 
+  /** Normalizes an address for both PTB arguments and on-chain comparisons. */
+  const normAddress = (value: string, message: string) => {
+    try {
+      const normalized = normalizeSuiAddress(String(value ?? "").trim())
+      if (!isValidSuiAddress(normalized)) throw new Error(message)
+      return normalized
+    } catch {
+      throw new Error(message)
+    }
+  }
+  const shortAddr = (value: string) => `${value.slice(0, 6)}…${value.slice(-4)}`
+
+  // `scalarToBytes32` is little-endian; the peer must decode with the same
+  // helper, so never hand-roll this encoding elsewhere.
+  const shareToBytes = (share: bigint): Uint8Array => scalarToBytes32(share)
+
+  const encryptionKeys = createEncryptionKeyReader(encryptionKeyClient, TESTNET_PACKAGE_ID, DKG_ENCRYPTION_KEY_TYPE_ORIGIN)
+  const readEncryptionKey = (sessionId: string, participant: string) => encryptionKeys.readKey(sessionId, participant)
+
+  // 当前钱包在链上 confirm_participant 由 handleConfirmWithShares 完成：
+  // 它必须先解封并校验收到的份额，才允许确认，单删掉这里的重复调用是刻意的。
+
+  /**
+   * Real turn: every round is a chain transaction, and each participant's
+   * commitment and sealed shares are read back from the session object.
+   *
+   * The previous implementation generated all participants' polynomials in this
+   * one tab, never called `submit_commitment`, and jumped straight to finalize
+   * — which aborts 3002 because the session is still in ROUND_1_COMMITMENTS. It
+   * also returned before reaching that code whenever a session already existed,
+   * so the "finish" click actually just timed the session out. Both are gone:
+   * phases advance only when chain state advances.
+   */
   const handleStartDkg = async () => {
-    // 第一次点击：链上 create_dkg_session（threshold = 已签人数最少要求，deadline = now + 10min）
+    if (!groupId || !getUserGroups().some(group => group.id === groupId)) {
+      setActiveLog(t("dkg.groupMissing"))
+      return
+    }
+    const me = getActiveAccount()
+    if (!me) { setActiveLog(t("dkg.connectWalletFirst")); return }
+
+    // Phase 0: create the session. Nothing else may run until it exists.
     if (!deadlineTs) {
-      setStep("DEPLOYING_ONCHAIN")
-      setProgress(10)
-      setActiveLog("正在创建链上限时 DKG 会话...")
+      setStep("DEPLOYING_ONCHAIN"); setProgress(10)
+      setActiveLog(t("dkg.logCreatingSession"))
       try {
-        const norm = (a: string) => {
-          const h = a.trim().replace(/^0x/i, "").toLowerCase()
-          if (!/^[0-9a-f]+$/.test(h) || h.length < 1 || h.length > 64) throw new Error(`成员地址不合法: ${a}`)
-          return `0x${h.padStart(64, "0")}`
-        }
-        const participants = initialMembers.map((m: any) => norm(m.address))
+        const participants = initialMembers.map((m) => normAddress(m.address, t("dkg.memberAddrInvalid", { address: m.address })))
         const threshold = Math.max(1, Math.min(participants.length, Math.ceil(participants.length * 0.6)))
         const deadlineMs = Date.now() + 10 * 60 * 1000
         const tx = new Transaction()
         tx.moveCall({
           target: `${TESTNET_PACKAGE_ID}::dkg_committee::create_dkg_session`,
           typeArguments: [],
-          arguments: [
-            tx.pure.u64(BigInt(threshold)),
-            tx.pure.vector('address', participants),
-            tx.pure.u64(BigInt(deadlineMs)),
-          ],
+          arguments: [tx.pure.u64(BigInt(threshold)), tx.pure.vector('address', participants), tx.pure.u64(BigInt(deadlineMs))],
         })
         const { digest, createdObjects } = await signAndExecuteWithWallet(tx)
-        const sessionId = createdObjects.find((id: string) => id.length === 64) || ""
-        if (!sessionId) throw new Error("未找到共享 DkgSession 对象")
-        setOnChainSessionId(sessionId)
-        setSessionCreateDigest(digest)
-        setDeadlineTs(deadlineMs)
-        setNowTs(Date.now())
-        // 发起人同时确认
-        await confirmOnChain(sessionId)
-        setStep("INIT")
-        setActiveLog(`链上会话已创建 (${sessionId.slice(0, 10)}...)，等待其他成员在 10 分钟内确认签名。`)
-      } catch (err: any) {
-        setStep("INIT")
-        setActiveLog(`发起失败: ${err.message || String(err)}`)
+        const sessionId = await findCreatedProtocolObject(createdObjects, "dkg_committee", "DkgSession");
+        setOnChainSessionId(sessionId); setSessionInput(sessionId);
+        saveDkgSessionLink(groupId, me.address, sessionId);
+        setDeadlineTs(deadlineMs); setNowTs(Date.now())
+        setStep("INIT"); setProgress(0)
+        setActiveLog(t("dkg.logSessionCreated", { digest: digest.slice(0, 10) }))
+      } catch (err) {
+        setStep("INIT"); setActiveLog(t("dkg.logStartFailed", { error: describeError(err, String(err)) }))
       }
       return
     }
-    // 已发起但未到期 → 取消（链上超时后自然作废）
-    if (nowTs < deadlineTs) {
-      setDeadlineTs(null)
-      setMemberSigned({})
-      setOnChainSessionId(null)
-      setActiveLog("已取消当前限时 DKG（链上会话到期后自动失效）")
+
+    if (!onChainSessionId) { setActiveLog(t("dkg.sessionMissing")); return }
+    if (nowTs >= deadlineTs) {
+      setActiveLog(t("dkg.deadlinePassed"))
       return
     }
-    // 已到期 → 先在链上触发超时清算，然后检查实际确认人数
-    if (onChainSessionId) {
-      try {
+
+    const account = getTransactionAccount();
+    const run = generation.current;
+    const check = () => { assertTransactionAccount(account); if (run !== generation.current) throw new Error(t("dkg.contextSwitched")); };
+    const mine = normAddress(me.address, t("dkg.walletAddrInvalid"));
+
+    try {
+      const session = await readSession(dkgSessionClient, onChainSessionId);
+      check();
+      if (!session.participants.includes(mine)) throw new Error(t("dkg.notParticipant"));
+      const myIndex = BigInt(session.participants.indexOf(mine) + 1);
+      const thresholdN = Number(session.threshold);
+      const nodeCount = session.participants.length;
+
+      // Phase 1: publish this participant's commitment, advancing the session to
+      // ROUND_2_MAILBOX once the threshold of commitments is on chain.
+      if (session.status === DKG_STATUS.ROUND_1_COMMITMENTS) {
+        if (await readCommitment(dkgSessionClient, session, mine)) {
+          setActiveLog(t("dkg.logAlreadyCommitted"))
+          return
+        }
+        setStep("ROUND_1_COMMITMENTS"); setProgress(20)
+        setActiveLog(t("dkg.logRound1"))
+        const node = new DKGParticipant(`M${myIndex}`, myIndex, thresholdN, nodeCount)
+        session.participants.forEach((participant, index) => {
+          if (participant !== mine) node.registerPeerIndex(`M${index + 1}`, BigInt(index + 1))
+        })
+        const previous = await readDealerContribution(session.sessionId, mine);
+        if (previous) throw new Error(t("dkg.dealerContributionExists"));
+        const r1 = node.round1();
+        await saveDealerContribution({ sessionId: session.sessionId, holder: mine, index: myIndex, commitments: r1.commitmentBytes, share: node.evaluateShareForIndex(myIndex) });
+        dealerRef.current = { sessionId: session.sessionId, holder: mine, node };
+        check();
         const tx = new Transaction()
         tx.moveCall({
-          target: `${TESTNET_PACKAGE_ID}::dkg_committee::handle_session_timeout`,
+          target: `${TESTNET_PACKAGE_ID}::dkg_committee::submit_commitment`,
           typeArguments: [],
-          arguments: [tx.object(onChainSessionId)],
+          arguments: [tx.object(onChainSessionId), tx.object("0x6"), tx.pure.vector('u8', Array.from(encodeCommitments(r1.commitmentBytes)))],
         })
-        await signAndExecuteWithWallet(tx)
-      } catch (e: any) {
-        // 若已被人清算，忽略
+        const { digest } = await signAndExecuteWithWallet(tx)
+        setStep("INIT"); setProgress(0)
+        setActiveLog(t("dkg.logCommitted", { digest: digest.slice(0, 10) }))
+        return
       }
-      setActiveLog("限时已到期，转DAO失败：已签名人数不足发起门槛。链上会话已作废。")
-      setStep("INIT")
-      setDeadlineTs(null)
-      setOnChainSessionId(null)
-      return
+
+      // Phase 2: register the mailbox key, then seal every participant's share
+      // to their registered key and deposit it. No plaintext ever leaves memory.
+      if (session.status === DKG_STATUS.ROUND_2_MAILBOX) {
+        if (!(await readCommitment(dkgSessionClient, session, mine))) {
+          setActiveLog(t("dkg.logNotDealer")); return;
+        }
+        const pending = []
+        for (const participant of session.participants) {
+          if (participant === mine) continue
+          if (!(await readMailboxShare(dkgSessionClient, session, DKG_TYPE_ORIGIN, mine, participant))) pending.push(participant)
+        }
+        if (pending.length === 0) { setActiveLog(t("dkg.logAllDeposited")); return }
+        setStep("ROUND_2_SHARES"); setProgress(45)
+        setActiveLog(t("dkg.logRound2", { count: pending.length }))
+        const result = await sealAndDepositShares({ session, mine, myIndex, thresholdN, nodeCount, pending })
+        setStep("INIT"); setProgress(0)
+        setActiveLog(t("dkg.logDeposited", { count: result.deposited, digest: result.digest.slice(0, 10) }) + (result.skipped.length ? t("dkg.logSkippedNoKey", { count: result.skipped.length, list: result.skipped.map(s => shortAddr(s)).join("、") }) : "") + (result.unusable.length ? t("dkg.logUnusableKeys", { count: result.unusable.length, list: result.unusable.join("、") }) : ""))
+        return
+      }
+
+      if (session.status === DKG_STATUS.FINALIZED) {
+        setActiveLog(t("dkg.logAlreadyFinalized"))
+        return
+      }
+      setActiveLog(t("dkg.logStatusStuck", { status: session.status }))
+    } catch (err) {
+      console.error("DKG phase error:", err)
+      setStep("INIT"); setProgress(0)
+      setActiveLog(t("dkg.logPhaseFailed", { error: describeError(err, String(err)) }))
     }
-    try {
-      // Step 1: Round 1
-      setStep("ROUND_1_COMMITMENTS");
-      setProgress(20);
-      setActiveLog("【Round 1】正在初始化本地秘密多项式并广播 Pedersen 承诺...");
+  }
 
-      // 只让"已签名"的成员参与 DKG；不足 3 人时用当前钱包账号作为唯一签名者（threshold=1）
-      const signedMembers = initialMembers.filter((m: any) => memberSigned[m.address])
-      const dkgCount = Math.max(1, signedMembers.length)
-      const thresholdN = dkgCount >= 3 ? 3 : dkgCount
-      const nodes = Array.from({ length: dkgCount }, (_, i) => new DKGParticipant(`M${i}`, i + 1, thresholdN, dkgCount));
+  /**
+   * Seal one share per recipient to their registered P-256 key and deposit them
+   * in a single PTB.
+   *
+   * This uses `deposit_mailbox_share` for each recipient rather than
+   * `submit_async_package`: the commitment was already published in phase 1, and
+   * `submit_async_package` would call `submit_commitment` again, aborting with
+   * E_ALREADY_SUBMITTED (3003). The dealer polynomial therefore has to be the one
+   * retained from phase 1 — a recipient who has not registered a key is
+   * reported, never downgraded to plaintext.
+   */
+  const sealAndDepositShares = async (args: {
+    session: Awaited<ReturnType<typeof readSession>>
+    mine: string; myIndex: bigint; thresholdN: number; nodeCount: number; pending: string[]
+  }) => {
+    const { session, mine, pending } = args
+    const held = dealerRef.current;
+    if (!held || held.sessionId !== session.sessionId || held.holder !== mine) {
+      throw new Error(t("dkg.dealerPolynomialMissing"));
+    }
+    const node = held.node;
+    const ownCommitment = await readCommitment(dkgSessionClient, session, mine);
+    const own = await readDealerContribution(session.sessionId, mine);
+    if (!ownCommitment || !own || bytesToHex(ownCommitment) !== bytesToHex(encodeCommitments(own.commitments))) throw new Error(t("dkg.dealerCommitmentMismatch"));
+    const shares = node.round2();
 
-      const r1Packages = nodes.map((n) => n.round1());
-      nodes.forEach((n) => n.receiveRound1Packages(r1Packages));
+    const recipients: string[] = []
+    const payloads: Uint8Array[] = []
+    const skipped: string[] = []
+    /** Registered but unusable keys: length-valid, not a usable curve point. */
+    const unusable: string[] = []
+    for (const participant of session.participants) {
+      if (participant === mine) continue
+      if (!pending.includes(participant)) continue
+      const key = await readEncryptionKey(session.sessionId, participant)
+      if (!key) { skipped.push(participant); continue }
+      const index = BigInt(session.participants.indexOf(participant) + 1)
+      const share = shares.get(`M${index}`)
+      if (share === undefined) { skipped.push(participant); continue }
+      // `register_encryption_key` only checks the byte length, so a registered
+      // value can be off-curve. WebCrypto then throws on import. Letting that
+      // propagate aborted the whole batch — one bad recipient cost every other
+      // recipient their share. Skip just that one and report it.
+      let sealed: Awaited<ReturnType<typeof sealShare>>
+      try {
+        sealed = await sealShare(shareToBytes(share), key, {
+          sessionId: session.sessionId, sender: mine, recipient: participant, epoch: Number(session.epoch),
+        })
+      } catch (error) {
+        unusable.push(`${shortAddr(participant)}（${error instanceof Error ? error.message : t("dkg.keyUnusableForEncryption")}）`)
+        continue
+      }
+      recipients.push(participant); payloads.push(sealed.bytes)
+    }
+    if (payloads.length === 0) throw new Error(t("dkg.noRecipientsRegistered"))
 
-      // Step 2: Round 2
-      setStep("ROUND_2_SHARES");
-      setProgress(45);
-      setActiveLog("【Round 2】点对点计算私钥分片并校验 Feldman VSS 承诺...");
-
-      const allShares = new Map();
-      nodes.forEach((n) => allShares.set(n.id, n.round2()));
-
-      // Step 3: Finalize and compute PK
-      setStep("COMPUTING_PK");
-      setProgress(70);
-      setActiveLog("【Finalize】门限达成 (3/4)，正在由椭圆曲线标量基点生成 Ed25519 组织群公钥...");
-
-      const results = nodes.map((n) => {
-        const incoming = new Map();
-        nodes.forEach((sender) => incoming.set(sender.id, allShares.get(sender.id).get(n.id)));
-        return n.finalize(incoming);
-      });
-
-      const pkBytes = results[0].groupPublicKey;
-      const pkHex = results[0].groupPublicKeyHex;
-      setGroupPk(pkHex);
-      setStoredPkBytes(pkBytes);
-      setStoredShares(results.map((r) => r.privateShare));
-
-      // Step 4: finalize session + create_organization_from_session
-      setStep("DEPLOYING_ONCHAIN");
-      setProgress(85);
-      setActiveLog("【Sui Testnet PTB】正在 finalize 会话并从会话创建组织...");
-
-      if (!onChainSessionId) throw new Error("链上会话不存在，无法固化");
-      const norm2 = (a: string) => {
-        const h = a.trim().replace(/^0x/i, "").toLowerCase();
-        return `0x${h.padStart(64, "0")}`;
-      };
-      const signedMembersOnly = initialMembers.filter((m: any) => memberSigned[m.address]);
-      const validMembers = signedMembersOnly.map((m: any) => norm2(m.address));
-      const validWeights = signedMembersOnly.map((m: any) => m.weight);
-      const thresholdWeight = Math.max(1, Math.min(validMembers.length, Math.ceil(validMembers.length * 0.6)));
-
-      // finalize_session 需要 FROST 聚合签名：用本地 SDK 聚合的签名
-      // 消息 = b"SESSION_CERT_V1:" || bcs(session_id) || group_pk
-      const { sha256 } = await import("@noble/hashes/sha2.js");
-      const sessionIdBytes = new Uint8Array(32);
-      // session id 是 32 字节 hex
-      const hexNo0x = onChainSessionId.replace(/^0x/, "").padStart(64, "0");
-      for (let i = 0; i < 32; i++) sessionIdBytes[i] = parseInt(hexNo0x.slice(i * 2, i * 2 + 2), 16);
-      const domainBytes = new TextEncoder().encode("SESSION_CERT_V1:");
-      const msgPayload = new Uint8Array([...domainBytes, ...sessionIdBytes, ...pkBytes]);
-      const msgDigest = sha256(msgPayload);
-
-      // 用本地 SDK 的 ThresholdSignerNode 聚合签名（发起人用自己的分片 + 本轮 DKG 的所有分片模拟门限）
-      const signerNodes = results.map((r: any, i: number) => new ThresholdSignerNode(`M${i}`, i + 1, r.privateShare));
-      const nonces = signerNodes.map((sn: any) => sn.generateNonceCommitment());
-      const sigShares = signerNodes.map((sn: any) => sn.computeSignatureShare(msgDigest, pkBytes, nonces));
-      const frostSig = ThresholdSignerNode.aggregateSignature(nonces, sigShares);
-
-      // 调用 v2 固化接口，强校验密码学组织公钥绑定与门限签名
-      const finalizeTx = new Transaction();
-      finalizeTx.moveCall({
-        target: `${TESTNET_PACKAGE_ID}::dkg_committee::finalize_session_v2`,
+    const tx = new Transaction()
+    recipients.forEach((recipient, index) => {
+      tx.moveCall({
+        target: `${TESTNET_PACKAGE_ID}::dkg_committee::deposit_mailbox_share`,
         typeArguments: [],
         arguments: [
-          finalizeTx.object(onChainSessionId),
-          finalizeTx.pure.vector('u8', Array.from(pkBytes)),
-          finalizeTx.pure.vector('u8', Array.from(frostSig)),
+          tx.object(session.sessionId), tx.object("0x6"),
+          tx.pure.address(recipient), tx.pure.vector('u8', Array.from(payloads[index])),
         ],
-      });
-      await signAndExecuteWithWallet(finalizeTx);
+      })
+    })
+    const { digest } = await signAndExecuteWithWallet(tx)
+    return { digest, deposited: payloads.length, skipped, unusable }
+  }
 
-      const createTx = new Transaction();
-      createTx.moveCall({
+  /**
+   * Create (or load) this device's mailbox key and publish its public half on
+   * the session, so other participants can seal shares to it.
+   *
+   * The key is created locally and stored non-extractable; only the public point
+   * goes on chain.
+   */
+  const handleRegisterMailboxKey = async () => {
+    if (!onChainSessionId) { setActiveLog(t("dkg.sessionMissing")); return }
+    const me = getActiveAccount()
+    if (!me) { setActiveLog(t("dkg.connectWallet")); return }
+    const mine = normAddress(me.address, t("dkg.walletAddrInvalid"))
+    try {
+      setActiveLog(t("dkg.logPreparingKey"))
+      const session = await readSession(dkgSessionClient, onChainSessionId)
+      if (session.status !== DKG_STATUS.ROUND_1_COMMITMENTS && session.status !== DKG_STATUS.ROUND_2_MAILBOX) {
+        setActiveLog(t("dkg.logKeyRegistrationClosed", { status: session.status }))
+        return
+      }
+      const onChain = await readEncryptionKey(session.sessionId, mine)
+      if (onChain) {
+        setActiveLog(t("dkg.logKeyAlreadyRegistered"))
+        return
+      }
+      // Pass what was actually read, not `null`: `ensureMailboxKey` refuses on a
+      // mismatch, and `null` silently disabled that guard.
+      const { key, created } = await ensureMailboxKey(session.sessionId, mine, onChain)
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${TESTNET_PACKAGE_ID}::dkg_committee::register_encryption_key`,
+        typeArguments: [],
+        arguments: [tx.object(session.sessionId), tx.object("0x6"), tx.pure.vector('u8', Array.from(key.publicKey))],
+      })
+      const { digest } = await signAndExecuteWithWallet(tx)
+      // Persist only now: a key written before the transaction lands is a key
+      // that can never be used, and would shadow whatever another tab
+      // registered first (registration is once-only on chain).
+      if (created) await persistMailboxKey(session.sessionId, mine, key as Parameters<typeof persistMailboxKey>[2])
+      setActiveLog(t("dkg.logKeyRegistered", { digest: digest.slice(0, 10) }))
+    } catch (err) {
+      console.error("register key error:", err)
+      setActiveLog(t("dkg.logKeyRegisterFailed", { error: describeError(err, String(err)) }))
+    }
+  }
+
+  /**
+   * Verify every dealer in the chain-frozen qualified set, persist this device's
+   * aggregate share locally, then confirm on chain.
+   */
+  const handleConfirmWithShares = async () => {
+    if (!onChainSessionId) { setActiveLog(t("dkg.sessionMissing")); return }
+    const me = getActiveAccount()
+    if (!me) { setActiveLog(t("dkg.connectWallet")); return }
+    const account = getTransactionAccount()
+    const run = generation.current
+    const check = () => { assertTransactionAccount(account); if (run !== generation.current) throw new Error(t("dkg.contextSwitched")); }
+    const mine = normAddress(me.address, t("dkg.walletAddrInvalid"))
+    try {
+      setStep("ROUND_2_SHARES"); setProgress(60)
+      setActiveLog(t("dkg.logReadingDealers"))
+      const session = await readSession(dkgSessionClient, onChainSessionId)
+      check()
+      if (session.status !== DKG_STATUS.ROUND_2_MAILBOX) {
+        setActiveLog(t("dkg.logNotMailboxPhase", { status: session.status }))
+        setStep("INIT"); return
+      }
+      const participantPosition = session.participants.indexOf(mine)
+      if (participantPosition < 0) { setActiveLog(t("dkg.notInParticipants")); return }
+      const myIndex = BigInt(participantPosition + 1)
+
+      const dealers = await readQualifiedDealers(dkgSessionClient, session)
+      check()
+      const dealerSet = new Set(dealers.map(dealer => dealer.address))
+      const localDealer = dealerSet.has(mine) ? await readDealerContribution(session.sessionId, mine) : null
+      if (dealerSet.has(mine) && !localDealer) {
+        throw new Error(t("dkg.dealerLocalMissing"))
+      }
+      const recipients = dealers.filter(dealer => dealer.address !== mine)
+      let privateKey: CryptoKey | null = null
+      if (recipients.length > 0) {
+        const registered = await readEncryptionKey(session.sessionId, mine)
+        if (!registered) {
+          setActiveLog(t("dkg.logKeyNotRegistered"))
+          setStep("INIT"); return
+        }
+        // Opening shares requires this device's non-extractable mailbox key.
+        const local = await readMailboxKey(session.sessionId, mine)
+        if (!local) {
+          setActiveLog(t("dkg.logMailboxKeyMissing"))
+          setStep("INIT"); return
+        }
+        if (local.publicKey.some((byte, index) => byte !== registered[index])) {
+          setActiveLog(t("dkg.logMailboxKeyMismatch"))
+          setStep("INIT"); return
+        }
+        privateKey = local.privateKey
+      }
+
+      const missing: string[] = []
+      const broken: string[] = []
+      const dealerShares: Array<{ address: string; commitments: Uint8Array[]; share: bigint }> = []
+      for (const dealer of dealers) {
+        check()
+        if (dealer.address === mine) {
+          const contribution = localDealer
+          if (!contribution || contribution.sessionId !== session.sessionId || contribution.holder !== mine || contribution.index !== myIndex) {
+            throw new Error(t("dkg.contributionContextMismatch"))
+          }
+          const raw = await readCommitment(dkgSessionClient, session, mine)
+          if (!raw || bytesToHex(raw) !== bytesToHex(encodeCommitments(contribution.commitments))) {
+            throw new Error(t("dkg.contributionFrozenMismatch"))
+          }
+          dealerShares.push({ address: mine, commitments: dealer.commitments, share: contribution.share })
+          continue
+        }
+        const sealed = await readMailboxShare(dkgSessionClient, session, DKG_TYPE_ORIGIN, dealer.address, mine)
+        if (!sealed) { missing.push(dealer.address); continue }
+        let value: bigint
+        try {
+          const share = await openShare(sealed, privateKey!, {
+            sessionId: session.sessionId, sender: dealer.address, recipient: mine, epoch: Number(session.epoch),
+          })
+          value = bytesToScalar(share)
+          const points: Point[] = dealer.commitments.map(bytes => ed25519.Point.fromBytes(bytes))
+          if (!verifyShareCommitment(value, myIndex, points)) throw new Error(t("dkg.shareCommitmentMismatch"))
+        } catch (error) {
+          broken.push(`${shortAddr(dealer.address)}（${error instanceof Error ? error.message : t("dkg.envelopeUnverifiable")}）`)
+          continue
+        }
+        dealerShares.push({ address: dealer.address, commitments: dealer.commitments, share: value })
+      }
+      if (missing.length > 0) {
+        setActiveLog(t("dkg.logMissingShares", { count: missing.length, list: missing.map(shortAddr).join("、") }))
+        setStep("INIT"); return
+      }
+      if (broken.length > 0) {
+        setActiveLog(t("dkg.logBrokenShares", { count: broken.length, list: broken.join("、") }))
+        setStep("INIT"); return
+      }
+      if (dealerShares.length !== dealers.length) throw new Error(t("dkg.sharesIncomplete"))
+
+      const key = assembleDeviceKey({
+        sessionId: session.sessionId, holder: mine, participantAddresses: session.participants,
+        threshold: session.threshold, sessionEpoch: session.epoch, dealers: dealerShares,
+      })
+      check()
+      // The share is LOCAL custody. Persist it before the irreversible on-chain
+      // confirmation so storage failure can never create an unbacked confirmation.
+      await savePendingDeviceKey(key)
+      setPendingDeviceKey(key)
+      check()
+      const alreadyConfirmed = await readConfirmation(dkgSessionClient, session, mine)
+      if (alreadyConfirmed) {
+        setMemberSigned(prev => ({ ...prev, [mine]: true }))
+        setStep("INIT"); setProgress(0)
+        setActiveLog(t("dkg.logAlreadyConfirmed", { dealers: dealers.length }))
+        return
+      }
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${TESTNET_PACKAGE_ID}::dkg_committee::confirm_participant`,
+        typeArguments: [],
+        arguments: [tx.object(session.sessionId), tx.object("0x6")],
+      })
+      check()
+      const { digest } = await signAndExecuteWithWallet(tx)
+      check()
+      setMemberSigned(prev => ({ ...prev, [mine]: true }))
+      setStep("INIT"); setProgress(0)
+      setActiveLog(t("dkg.logConfirmed", { count: dealerShares.length, digest: digest.slice(0, 10) }))
+    } catch (err) {
+      console.error("confirm error:", err)
+      setStep("INIT"); setProgress(0)
+      setActiveLog(t("dkg.logConfirmFailed", { error: describeError(err, String(err)) }))
+    }
+  }
+
+  const createOrRecoverOrganization = async (session: Awaited<ReturnType<typeof readSession>>, allowCreate: boolean) => {
+    if (!groupId) throw new Error(t("dkg.groupMissingUnsafe"));
+    const account = getTransactionAccount();
+    const run = generation.current;
+    const check = () => { assertTransactionAccount(account); if (run !== generation.current) throw new Error(t("dkg.contextSwitched")); };
+    const intent = { account, action: "dkg-organization-create", scope: session.sessionId, network: "testnet" as const, metadata: { sessionId: session.sessionId } };
+    const pending = getPendingTransaction(intent);
+    let digest = creationInput.trim();
+    let receipt: PendingTransactionReceipt | undefined;
+    if (pending) {
+      if (digest && pending.digest && digest !== pending.digest) throw new TransactionReceiptError(t("dkg.digestMismatchPending"), pending);
+      if (digest && !pending.digest) throw new TransactionReceiptError(t("dkg.pendingNoDigest"), pending);
+      digest = pending.digest ?? "";
+      receipt = pending;
+      if (!digest) throw new TransactionReceiptError(t("dkg.pendingUnclearNoDigest"), pending);
+      const recovered = await resumePendingTransaction(pending);
+      check();
+      receipt = recovered.receipt;
+      digest = recovered.digest;
+    } else if (!digest) {
+      if (!allowCreate) throw new Error(t("dkg.finalizedNeedsDigest"));
+      const tx = new Transaction();
+      tx.moveCall({
         target: `${TESTNET_PACKAGE_ID}::cryptographic_org::create_organization_from_session`,
         typeArguments: [],
-        arguments: [
-          createTx.object(onChainSessionId),
-          createTx.pure.u64(BigInt(thresholdWeight)),
-        ],
+        arguments: [tx.object(session.sessionId), tx.pure.u64(session.threshold)],
       });
-      const { digest, createdObjects } = await signAndExecuteWithWallet(createTx);
-      const orgObjectId = createdObjects.find((id: string) => id.startsWith("0x")) || createdObjects[0] || "";
-      if (!orgObjectId) throw new Error("交易 effects 中未找到共享 Organization 对象");
-      const data = { digest, orgObjectId };
-
-      // 持久化到 localStorage
-      const daoRecord = {
-        groupId,
-        orgObjectId: data.orgObjectId,
-        groupPk: pkHex,
-        epoch: 1,
-        txDigest: data.digest,
-        suiscanTxUrl: `https://suiscan.xyz/testnet/tx/${data.digest}`,
-        suiscanOrgUrl: `https://suiscan.xyz/testnet/object/${data.orgObjectId}`,
-        createdAt: Date.now(),
-      };
-      localStorage.setItem(`dao_org_${groupId}`, JSON.stringify(daoRecord));
-
-      setProgress(100);
-      setStep("COMPLETE");
-      setActiveLog("升级成功！链上密码学组织已部署，群公钥与共享对象已固化。");
-
-      if (onConvertedSuccess) {
-        onConvertedSuccess(pkHex, data.orgObjectId, data.digest);
-      }
-    } catch (err: any) {
-      console.error("DKG Ceremony Error:", err);
-      setActiveLog(`升级失败: ${err.message || String(err)}`);
-      setStep("INIT");
-      setProgress(0);
+      setStep("DEPLOYING_ONCHAIN"); setProgress(88);
+      setActiveLog(t("dkg.logCreatingOrg"));
+      const created = await signAndExecuteWithWallet(tx, { action: intent.action, scope: intent.scope, expectedAccount: account, metadata: intent.metadata });
+      check();
+      receipt = created.receipt;
+      digest = created.digest;
     }
+    if (!/^[1-9A-HJ-NP-Za-km-z]{43,44}$/.test(digest)) throw new Error(t("dkg.needFullDigest"));
+    setCreationInput(digest);
+    const live = await readDkgOrganizationCreation(digest, session);
+    check();
+    if (!live.members.some(member => member.address === account.address)) throw new Error(t("dkg.walletNotInRoster"));
+    const pendingKey = await readPendingDeviceKey(session.sessionId, account.address);
+    if (pendingKey) {
+      if (pendingKey.holder !== account.address || pendingKey.sessionId !== session.sessionId || pendingKey.sessionEpoch !== session.epoch) throw new Error(t("dkg.pendingKeyMismatch"));
+      const bound = await bindDeviceKey({ sessionId: session.sessionId, holder: account.address, orgId: live.orgId, epoch: live.epoch, creationDigest: digest, groupPk: live.groupPk });
+      setDeviceKey(bound);
+    } else {
+      const existing = await readDeviceKey(live.orgId, account.address);
+      if (existing && (existing.sessionId !== session.sessionId || existing.creationDigest !== digest || existing.epoch !== live.epoch)) throw new Error(t("dkg.boundKeyMismatch"));
+      setDeviceKey(existing);
+    }
+    persistGroupOrganization(groupId, { orgObjectId: live.orgId, groupPk: `0x${bytesToHex(live.groupPk)}`, epoch: Number(live.epoch), txDigest: digest, createdAt: Date.now(), dkgSessionId: session.sessionId });
+    check();
+    if (receipt && receipt.status === "success") acknowledgePendingTransaction(receipt);
+    setOrgObjectId(live.orgId); setGroupPk(`0x${bytesToHex(live.groupPk)}`); setEpoch(Number(live.epoch));
+    setTxDigest(digest); setSuiscanTxUrl(`https://suiscan.xyz/testnet/tx/${digest}`); setSuiscanOrgUrl(`https://suiscan.xyz/testnet/object/${live.orgId}`);
+    setOrgChainCheck({ state: "verified" }); setStep("COMPLETE"); setProgress(0);
+    onConvertedSuccess?.(`0x${bytesToHex(live.groupPk)}`, live.orgId, digest);
+    setActiveLog(t("dkg.logOrgVerified", { digest: digest.slice(0, 10), org: live.orgId.slice(0, 10) }) + (pendingKey ? t("dkg.logOrgVerifiedBound") : t("dkg.logOrgVerifiedNoKey")));
   };
 
-  const handleDavidWakeup = async () => {
-    setDavidWakeupLog("正在从异步信箱读取 Round 1 承诺与 Round 2 密文分片...");
-    await new Promise((r) => setTimeout(r, 600));
-    setDavidAwakened(true);
-    setDavidWakeupLog("David 成功计算私钥分片，具备完整门限签名资格。");
-  };
+  /**
+   * Attest and finalize the group key, then create the organization.
+   *
+   * Since package v6 the trust anchor is member attestation, not the caller:
+   * `finalize_session` refuses unless `threshold` *confirmed* participants
+   * each wrote the same key into their own `GroupKeyAttestationSlot`. The key
+   * itself is never taken from the finalize caller — the client recomputes
+   * `Σ C_0` from the on-chain commitments and attests that value, so a caller
+   * cannot finalize a key the committee did not deal. The two older entry
+   * points still exist (published functions cannot be removed) but abort 3013.
+   */
+  const handleFinalize = async (createFromFinalized = false) => {
+    if (!onChainSessionId || !groupId) { setActiveLog(t("dkg.sessionOrGroupMissing")); return }
+    const me = getActiveAccount()
+    if (!me) { setActiveLog(t("dkg.connectWallet")); return }
+    try {
+      setStep("COMPUTING_PK"); setProgress(80)
+      setActiveLog(t("dkg.logRecomputing"))
+      let session = await readSession(dkgSessionClient, onChainSessionId)
+      const account = getTransactionAccount();
+      const run = generation.current;
+      const check = () => { assertTransactionAccount(account); if (run !== generation.current) throw new Error(t("dkg.contextSwitched")); };
+      check();
+      const finalizeIntent = { account, action: "dkg-session-finalize", scope: session.sessionId, network: "testnet" as const, metadata: { sessionId: session.sessionId } };
+      let finalizationReceipt: PendingTransactionReceipt | undefined;
+      const pendingFinalize = getPendingTransaction(finalizeIntent);
+      if (pendingFinalize) {
+        const recovered = await resumePendingTransaction(pendingFinalize);
+        check();
+        finalizationReceipt = recovered.receipt;
+        session = await readSession(dkgSessionClient, session.sessionId);
+        check();
+      }
+
+      // The group key is the sum of every dealer's constant commitment term.
+      // Recomputing it from chain data is what each member attests to, and it
+      // is the only value `finalize_session` will accept from a quorum.
+      const recomputeGroupPk = async (): Promise<Uint8Array> => {
+        // Q is frozen when ROUND_2_MAILBOX begins. A participant without a
+        // commitment remains eligible to hold a share, but contributes nothing
+        // to the aggregate key and must not block n>t sessions.
+        const dealers = await readQualifiedDealers(dkgSessionClient, session)
+        const constants = dealers.map(dealer => ed25519.Point.fromBytes(dealer.commitments[0]))
+        let groupPoint = constants[0]
+        for (const point of constants.slice(1)) groupPoint = groupPoint.add(point)
+        return groupPoint.toBytes()
+      }
+
+      if (session.status === DKG_STATUS.FINALIZED) {
+        const finalHex = `0x${bytesToHex(session.finalPublicKey)}`
+        const attestations = await Promise.all(session.participants.map(participant =>
+          readGroupKeyAttestation(dkgSessionClient, session, DKG_ATTESTATION_TYPE_ORIGIN, participant)))
+        check()
+        const vouched = attestations.filter(value =>
+          !!value && value.length === session.finalPublicKey.length
+          && value.every((byte, index) => byte === session.finalPublicKey[index])).length
+        let recomputed: Uint8Array
+        try { recomputed = await recomputeGroupPk() }
+        catch (error) {
+          setGroupPk(finalHex)
+          setStep("COMPLETE")
+          setActiveLog(t("dkg.logFinalizedRecomputeFailed", { vouched, error: error instanceof Error ? error.message : t("dkg.recomputeReadFailed") }))
+          return
+        }
+        const same = recomputed.length === session.finalPublicKey.length
+          && recomputed.every((byte, index) => byte === session.finalPublicKey[index])
+        setGroupPk(finalHex)
+        setStep("COMPLETE")
+        if (!same) {
+          setActiveLog(t("dkg.logFinalizedKeyMismatch", { current: finalHex.slice(0, 12), recomputed: bytesToHex(recomputed).slice(0, 12) }))
+        } else if (vouched >= Number(session.threshold)) {
+          setActiveLog(t("dkg.logFinalizedVerified", { vouched, threshold: String(session.threshold) }))
+        } else {
+          setActiveLog(t("dkg.logFinalizedLowAttestation", { key: finalHex.slice(0, 12), vouched, threshold: String(session.threshold) }))
+        }
+        if (!same) return;
+        if (createFromFinalized || creationInput.trim()) {
+          await createOrRecoverOrganization(session, createFromFinalized);
+          if (finalizationReceipt?.status === "success") acknowledgePendingTransaction(finalizationReceipt);
+          return;
+        }
+        if (!deviceKey) {
+          setActiveLog(t("dkg.logFinalizedNeedsDigestInput"));
+        }
+        return
+      }
+      if (session.status !== DKG_STATUS.ROUND_2_MAILBOX) { setActiveLog(t("dkg.logCannotFinalize", { status: session.status })); setStep("INIT"); return }
+      if (session.confirmationsCount < session.threshold) {
+        setActiveLog(t("dkg.logConfirmationsBelow", { confirmed: String(session.confirmationsCount), threshold: String(session.threshold) })); setStep("INIT"); return
+      }
+
+      const pkBytes = await recomputeGroupPk()
+      check()
+      const pkHex = `0x${bytesToHex(pkBytes)}`
+      setGroupPk(pkHex)
+      setStoredPkBytes(pkBytes)
+
+      // v3 trusts attestations, not the caller. Count confirmed members whose
+      // current on-chain attestation names exactly this key; a member who
+      // vouched for a different key does not count toward this one.
+      const sameKey = (candidate: Uint8Array | null) =>
+        !!candidate && candidate.length === pkBytes.length && candidate.every((byte, index) => byte === pkBytes[index])
+      const attested: string[] = []
+      for (const participant of session.participants) {
+        const value = await readGroupKeyAttestation(dkgSessionClient, session, DKG_ATTESTATION_TYPE_ORIGIN, participant)
+        if (sameKey(value)) attested.push(participant)
+      }
+      const needed = Number(session.threshold)
+
+      if (attested.length >= needed) {
+        const tx = new Transaction()
+        tx.moveCall({
+          target: `${TESTNET_PACKAGE_ID}::dkg_committee::finalize_session`,
+          typeArguments: [],
+          arguments: [
+            tx.object(session.sessionId),
+            tx.pure.vector("u8", Array.from(pkBytes)),
+          ],
+        })
+        let digest: string
+        try {
+          const finalized = await signAndExecuteWithWallet(tx, { action: finalizeIntent.action, scope: finalizeIntent.scope, expectedAccount: account, metadata: finalizeIntent.metadata })
+          digest = finalized.digest
+          finalizationReceipt = finalized.receipt
+        } catch (error) {
+          // 3002 means somebody finalized between our read and our submit; that
+          // is a benign race, not a failure of this key.
+          const message = error instanceof Error ? error.message : String(error)
+          setActiveLog(t("dkg.logFinalizeTxFailed", { message }))
+          setStep("INIT"); return
+        }
+
+        check()
+        const finalized = await readSession(dkgSessionClient, session.sessionId)
+        check()
+        if (finalized.status !== DKG_STATUS.FINALIZED) throw new Error(t("dkg.finalizedNotVisible"))
+        setActiveLog(t("dkg.logFinalizedCreating", { digest: digest.slice(0, 10) }))
+        await createOrRecoverOrganization(finalized, true)
+        if (finalizationReceipt?.status === "success") acknowledgePendingTransaction(finalizationReceipt)
+        return
+      }
+
+      // A duplicated participant makes `attestation_count_for` count the same
+      // slot twice, so a session built that way can never reach its threshold.
+      // The deployed v6 package accepts duplicates; refuse to attest into a
+      // session that can never finalize rather than looping on it forever.
+      const unique = new Set(session.participants)
+      if (unique.size !== session.participants.length) {
+        setActiveLog(t("dkg.logDuplicateParticipants", { total: session.participants.length, unique: unique.size }))
+        setStep("INIT"); return
+      }
+
+      const meNorm = normAddress(me.address, t("dkg.addrInvalidBare"))
+      if (!session.participants.includes(meNorm)) {
+        setActiveLog(t("dkg.logCannotAttestNotParticipant", { attested: attested.length, needed }))
+        setStep("INIT"); return
+      }
+      // The contract refuses an attestation from an unconfirmed member (3011);
+      // reporting it here is a clearer failure than an abort code.
+      const confirmed = await readConfirmation(dkgSessionClient, session, meNorm)
+      if (!confirmed) {
+        setActiveLog(t("dkg.logNotConfirmedCannotAttest"))
+        setStep("INIT"); return
+      }
+
+      const mine = await readGroupKeyAttestation(dkgSessionClient, session, DKG_ATTESTATION_TYPE_ORIGIN, meNorm)
+      if (sameKey(mine)) {
+        setActiveLog(t("dkg.logAlreadyAttested", { attested: attested.length, needed, remaining: needed - attested.length }))
+        setStep("INIT"); return
+      }
+
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${TESTNET_PACKAGE_ID}::dkg_committee::attest_group_key`,
+        typeArguments: [],
+        arguments: [
+          tx.object(session.sessionId),
+          tx.object("0x6"),
+          tx.pure.vector("u8", Array.from(pkBytes)),
+        ],
+      })
+      const { digest } = await signAndExecuteWithWallet(tx)
+      setActiveLog(t("dkg.logAttested", { key: pkHex.slice(0, 12), digest: digest.slice(0, 10), attested: attested.length + 1, needed }))
+      setStep("INIT"); setProgress(0)
+      return
+    } catch (err) {
+      console.error("finalize error:", err)
+      setStep("INIT"); setProgress(0)
+      setActiveLog(t("dkg.logFinalizeFailed", { error: describeError(err, String(err)) }))
+    }
+  }
 
   const handleTriggerResharing = async () => {
     if (isResharingBusy) return;
+    if (!orgObjectId) { setReshareLog(t("dkg.logNoOrgForReshare")); return; }
     setIsResharingBusy(true);
     setStep("RESHARING_ACTIVE");
-    setReshareLog("启动 Gennaro Proactive Secret Resharing，新委员会引入 Eve (@0xEE7E)...");
+    setReshareLog(t("dkg.logReadingRoster"));
 
     try {
-      // 1. 活跃旧成员参与 Resharing
-      const activeOld = [1n, 2n, 3n];
-      const newCommittee = new Map<string, bigint>([
-        ["Alice", 1n],
-        ["Bob", 2n],
-        ["Charlie", 3n],
-        ["David", 4n],
-        ["Eve", 5n],
-      ]);
-
-      const curShares = storedShares.length >= 3 ? storedShares : [11n, 22n, 33n, 44n];
-      const curPkBytes = storedPkBytes || new Uint8Array(32);
-
-      const dealers = [
-        new GennaroResharingParticipant({ id: "Alice", index: 1n, isOldActiveMember: true, isNewMember: true, currentShare: curShares[0], newThreshold: 3 }),
-        new GennaroResharingParticipant({ id: "Bob", index: 2n, isOldActiveMember: true, isNewMember: true, currentShare: curShares[1], newThreshold: 3 }),
-        new GennaroResharingParticipant({ id: "Charlie", index: 3n, isOldActiveMember: true, isNewMember: true, currentShare: curShares[2], newThreshold: 3 }),
-      ];
-
-      const pkgs = dealers.map((d) => d.generateResharePackage(activeOld, newCommittee));
-      const commitments = new Map(pkgs.map((p) => [p.senderId, p.commitments]));
-
-      // 验证重分片后公钥恒定
-      const newShares: bigint[] = [];
-      for (const [id, idx] of newCommittee.entries()) {
-        const node = new GennaroResharingParticipant({
-          id,
-          index: idx,
-          isOldActiveMember: idx !== 5n,
-          isNewMember: true,
-          newThreshold: 3,
-        });
-        const incoming = new Map<string, bigint>();
-        pkgs.forEach((p) => incoming.set(p.senderId, p.subShares.get(id)!));
-        const res = node.finalizeNewShare(incoming, commitments, curPkBytes);
-        newShares.push(res.newPrivateShare);
+      // 1. Refresh live state; all signing inputs come from the chain, never from
+      //    props that may predate a previous change.
+      const live = await readLiveOrganization(proposalClient, orgObjectId);
+      if (live.members.length > Number(MAX_ROSTER_MEMBERS)) throw new Error(t("dkg.rosterTooLarge", { max: MAX_ROSTER_MEMBERS }));
+      const held = getCommitteeSession(live.orgId);
+      const oldShares = held?.shares ?? storedShares;
+      const oldPk = held?.groupPk ?? storedPkBytes;
+      if (oldShares.length < 2 || !oldPk) throw new ThresholdSigningError(t("dkg.noSharesInTab"));
+      if (oldPk.length !== live.groupPk.length || oldPk.some((value, index) => value !== live.groupPk[index])) {
+        throw new ThresholdSigningError(t("dkg.reshareGroupKeyMismatch"));
+      }
+      if (held && held.epoch !== live.epoch) {
+        throw new ThresholdSigningError(t("dkg.reshareEpochMismatch", { held: String(held.epoch), live: String(live.epoch) }));
       }
 
-      setReshareLog("Gennaro 重分片完成，已在指数域验证公钥 100% 恒定。正在生成门限审批签名...");
+      // 2. Refresh every share with a zero-constant polynomial so a leaked old
+      //    share cannot sign for the new epoch. Committee indices stay 1..N and
+      //    match the DKG participant order, not addresses. Reuse this tab's FROST
+      //    threshold; the on-chain weighted threshold is a different number.
+      const threshold = Math.max(2, Math.min(oldShares.length, Number(held?.threshold ?? BigInt(oldShares.length))));
+      const newOf = (id: string, index: bigint, share: bigint) =>
+        new GennaroResharingParticipant({ id, index, isOldActiveMember: true, isNewMember: true, currentShare: share, newThreshold: threshold });
+      const activeOld = oldShares.map((_, index) => BigInt(index + 1));
+      const committee = new Map(oldShares.map((_, index) => [`S${index + 1}`, BigInt(index + 1)]));
+      const dealers = oldShares.map((share, index) => newOf(`S${index + 1}`, BigInt(index + 1), share));
+      const pkgs = dealers.map(dealer => dealer.generateResharePackage(activeOld, committee));
+      const commitments = new Map(pkgs.map(pkg => [pkg.senderId, pkg.commitments]));
+      const refreshed: bigint[] = [];
+      for (const [holder, index] of committee.entries()) {
+        const node = new GennaroResharingParticipant({ id: holder, index, isOldActiveMember: true, isNewMember: true, newThreshold: threshold });
+        const incoming = new Map<string, bigint>();
+        pkgs.forEach(pkg => incoming.set(pkg.senderId, pkg.subShares.get(holder)!));
+        const result = node.finalizeNewShare(incoming, commitments, live.groupPk);
+        refreshed.push(result.newPrivateShare);
+      }
+      if (refreshed.length !== oldShares.length) throw new Error(t("dkg.reshareCountMismatch"));
 
-      // 2. 构造门限推进纪元签名
-      const DOMAIN_THRESHOLD_APPROVAL = new TextEncoder().encode("SUI_ORG_APPROVAL_V1:");
-      const DEFAULT_CHAIN_ID = new TextEncoder().encode("sui-testnet:");
-      const orgIdBytes = bcs.Address.serialize(orgObjectId).toBytes();
-      const currentEpochBytes = bcs.u64().serialize(epoch).toBytes();
-      const nonce = BigInt(epoch);
-      const nonceBytes = bcs.u64().serialize(nonce).toBytes();
-      const nextEpochBytes = bcs.u64().serialize(epoch + 1).toBytes();
+      // 3. Sign the approval digest from the chain's own epoch and chain id.
+      const nonce = live.lastNonce + 1n;
+      const approvalDigest = computeThresholdApprovalDigest(live.chainId, live.orgId, live.epoch, nonce, live.epoch + 1n);
+      const signature = signWithCommittee(
+        { orgId: live.orgId, groupPk: live.groupPk, epoch: live.epoch, threshold: BigInt(threshold), indices: [...committee.values()], shares: refreshed },
+        approvalDigest, { groupPk: live.groupPk, epoch: live.epoch },
+      );
+      setReshareLog(t("dkg.logReshareSigned", { count: signature.signerIndices.length }));
 
-      const approvalPayload = new Uint8Array([
-        ...DOMAIN_THRESHOLD_APPROVAL,
-        ...DEFAULT_CHAIN_ID,
-        ...orgIdBytes,
-        ...currentEpochBytes,
-        ...nonceBytes,
-        ...nextEpochBytes,
-      ]);
-      const approvalDigest = sha256(approvalPayload);
-
-      const signers = [
-        new ThresholdSignerNode("Alice", 1, curShares[0]),
-        new ThresholdSignerNode("Bob", 2, curShares[1]),
-        new ThresholdSignerNode("Charlie", 3, curShares[2]),
-      ];
-
-      const nonces = signers.map((s) => s.generateNonceCommitment());
-      const sigShares = signers.map((s) => s.computeSignatureShare(approvalDigest, curPkBytes, nonces));
-      const frostSignature = ThresholdSignerNode.aggregateSignature(nonces, sigShares);
-
-      setReshareLog("门限签名聚合完毕，正在向链上提交 advance_organization_epoch PTB...");
-
-      // 3. 提交链上 PTB
+      // 4. Fail closed if the deployed package lacks the transition, then submit.
+      try {
+        await proposalClient.getMoveFunction({
+          packageId: TESTNET_PACKAGE_ID, moduleName: "cryptographic_org", name: "advance_organization_epoch",
+          signal: AbortSignal.timeout(20_000),
+        });
+      } catch (cause) {
+        throw new Error(t("dkg.advanceEpochMissing") + (cause instanceof Error ? `（${cause.message}）` : ""));
+      }
       const advanceTx = new Transaction();
       advanceTx.moveCall({
         target: `${TESTNET_PACKAGE_ID}::cryptographic_org::advance_organization_epoch`,
         typeArguments: [],
-        arguments: [
-          advanceTx.object(orgObjectId),
-          advanceTx.pure.u64(BigInt(nonce)),
-          advanceTx.pure.vector('u8', Array.from(frostSignature)),
-        ],
+        arguments: [advanceTx.object(live.orgId), advanceTx.pure.u64(nonce), advanceTx.pure.vector('u8', Array.from(signature.signature))],
       });
       const { digest: advDigest } = await signAndExecuteWithWallet(advanceTx);
-      const resData = { success: true, digest: advDigest };
 
-      const nextEpoch = epoch + 1;
+      const nextEpoch = Number(live.epoch + 1n);
+      setStoredShares(refreshed);
+      setCommitteeSession({
+        orgId: live.orgId, groupPk: live.groupPk, epoch: live.epoch + 1n,
+        threshold: BigInt(threshold), indices: [...committee.values()], shares: refreshed,
+      });
+      adoptLiveEpoch(live.orgId, { groupPk: live.groupPk, epoch: live.epoch + 1n });
       setEpoch(nextEpoch);
-      setReshareTxDigest(resData.digest);
-      setSuiscanReshareTxUrl(`https://suiscan.xyz/testnet/tx/${resData.digest}`);
-      setStoredShares(newShares);
+      setReshareTxDigest(advDigest);
+      setSuiscanReshareTxUrl(`https://suiscan.xyz/testnet/tx/${advDigest}`);
 
-      setReshareMembers([
-        ...initialMembers,
-        { name: "Eve (新加入)", address: "0xee7e...a001", weight: 2 },
-      ]);
-
-      // 更新 localStorage
       const saved = localStorage.getItem(`dao_org_${groupId}`);
       const curData = saved ? JSON.parse(saved) : {};
-      localStorage.setItem(
-        `dao_org_${groupId}`,
-        JSON.stringify({
-          ...curData,
-          epoch: nextEpoch,
-          reshareTxDigest: resData.digest,
-          suiscanReshareTxUrl: `https://suiscan.xyz/testnet/tx/${resData.digest}`,
-        })
-      );
+      localStorage.setItem(`dao_org_${groupId}`, JSON.stringify({
+        ...curData, epoch: nextEpoch, reshareTxDigest: advDigest, suiscanReshareTxUrl: `https://suiscan.xyz/testnet/tx/${advDigest}`,
+      }));
 
-      setReshareLog(`换届成功！链上纪元更新至 Epoch ${nextEpoch}，组织主公钥及合约对象恒定不变。`);
-    } catch (e: any) {
-      console.error("Resharing Error:", e);
-      setReshareLog(`换届失败: ${e.message || String(e)}`);
+      setReshareLog(t("dkg.logReshareSuccess", { epoch: nextEpoch }));
+    } catch (error) {
+      console.error("Resharing Error:", error);
+      setReshareLog(t("dkg.logReshareFailed", { error: error instanceof Error ? error.message : String(error) }));
     } finally {
       setIsResharingBusy(false);
     }
@@ -473,15 +961,15 @@ export function DkgCeremonyDialog({
               </div>
               <div>
                 <DialogTitle className="text-sm font-semibold">
-                  升级为链上组织 (DAO)
+                  {t("dkg.title")}
                 </DialogTitle>
                 <p className="text-xs text-muted-foreground mt-0.5">
-                  成员确认即可完成升级，无需同时在线
+                  {t("dkg.subtitle")}
                 </p>
               </div>
             </div>
             <Badge variant="outline" className="text-xs">
-              {step === "INIT" ? "可升级" : step === "COMPLETE" ? `已就绪 (Epoch ${epoch})` : "升级中"}
+              {step === "INIT" ? t("dkg.badgeUpgradable") : step === "COMPLETE" ? (orgChainCheck.state === "verified" ? t("dkg.badgeReady", { epoch }) : orgChainCheck.state === "pending" ? t("dkg.badgeVerifying") : t("dkg.badgeLocalUnverified")) : t("dkg.badgeUpgrading")}
             </Badge>
           </div>
         </div>
@@ -492,7 +980,7 @@ export function DkgCeremonyDialog({
           {step !== "INIT" && step !== "COMPLETE" && step !== "RESHARING_ACTIVE" && (
             <div className="space-y-1.5">
               <div className="flex justify-between text-xs text-muted-foreground">
-                <span>升级进度</span>
+                <span>{t("dkg.progressLabel")}</span>
                 <span className="font-semibold text-primary">{progress}%</span>
               </div>
               <Progress value={progress} className="h-1.5" />
@@ -503,7 +991,7 @@ export function DkgCeremonyDialog({
           <div className="p-2.5 bg-muted/30 rounded-xl border border-border/40 text-xs space-y-1">
             <div className="flex items-center text-primary space-x-1.5 font-medium">
               <Cpu className="h-3.5 w-3.5" />
-              <span>当前状态</span>
+              <span>{t("dkg.currentStatus")}</span>
             </div>
             <p className="text-muted-foreground pl-5 break-all">{activeLog}</p>
           </div>
@@ -514,29 +1002,42 @@ export function DkgCeremonyDialog({
               <div className="p-3.5 rounded-xl border border-primary/20 bg-primary/5 space-y-2">
                 <div className="flex items-center space-x-2 text-primary font-medium text-xs">
                   <ShieldCheck className="h-4 w-4" />
-                  <span>为什么必须 100% 全异步 (Zero Simultaneous Online)？</span>
+                  <span>{t("dkg.whyAsyncTitle")}</span>
                 </div>
                 <ul className="text-xs text-muted-foreground space-y-1.5 list-disc list-inside">
                   <li>
-                    <strong>真实世界痛点</strong>：移动端用户随时可能离线、息屏或处于不同时区，无法维持同时在线长连接；
+                    <strong>{t("dkg.why1Label")}</strong>{t("dkg.why1Body")}
                   </li>
                   <li>
-                    <strong>单阶段投递 (Single-Shot)</strong>：成员打开 App 一次性广播承诺并存入各成员信箱，操作完毕即可退出；
+                    <strong>{t("dkg.why2Label")}</strong>{t("dkg.why2Body")}
                   </li>
                   <li>
-                    <strong>门限容错 (3/4 Quorum)</strong>：只要累计确认数达到门限，无需等待全员，组织立即固化生效；
+                    <strong>{t("dkg.why3Label")}</strong>{t("dkg.why3Body")}
                   </li>
                   <li>
-                    <strong>全异步治理</strong>：后续国库提案与门限签名也是成员在各自时间签署，由 Relayer 一键执行！
+                    <strong>{t("dkg.why4Label")}</strong>{t("dkg.why4Body")}
                   </li>
                 </ul>
+              </div>
+
+              <div className="space-y-1.5 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+                <label htmlFor="dkg-session-id" className="text-xs font-medium">{t("dkg.importSessionLabel")}</label>
+                <div className="flex gap-2">
+                  <Input id="dkg-session-id" aria-label={t("dkg.sessionInputAria")} value={sessionInput} onChange={event => setSessionInput(event.target.value)} placeholder="0x…" className="h-8 min-w-0 font-mono text-[11px]" />
+                  <Button type="button" variant="outline" size="sm" onClick={() => void loadSession()} className="h-8 shrink-0">{t("dkg.importReadonlyBtn")}</Button>
+                </div>
+                {onChainSessionId && <p className="break-all text-[10px] text-muted-foreground">{t("dkg.currentSessionPrefix")}{onChainSessionId}</p>}
+                {deviceKeyError && <p role="alert" className="break-all text-[10px] text-amber-700 dark:text-amber-300">{t("dkg.deviceKeyErrorPrefix")}{deviceKeyError}</p>}
+                {deviceKey && <p role="status" className="text-[10px] text-emerald-700 dark:text-emerald-300">{t("dkg.deviceKeyHeld", { index: deviceKey.index.toString(), threshold: deviceKey.threshold.toString() })}</p>}
+                {pendingDeviceKey && <p role="status" className="text-[10px] text-amber-700 dark:text-amber-300">{t("dkg.deviceKeyPending", { index: pendingDeviceKey.index.toString(), threshold: pendingDeviceKey.threshold.toString() })}</p>}
+                <p className="text-[10px] text-muted-foreground">{t("dkg.importNote")}</p>
               </div>
 
               {/* 参与成员列表 */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span className="font-medium">群成员状态：</span>
-                  <span className="text-[11px] text-primary">3/4 成员同意即可升级</span>
+                  <span className="font-medium">{t("dkg.memberStatus")}</span>
+                  <span className="text-[11px] text-primary">{t("dkg.thresholdNote")}</span>
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   {initialMembers.map((m, idx) => {
@@ -552,13 +1053,13 @@ export function DkgCeremonyDialog({
                         </Avatar>
                         <div className="truncate flex-1">
                           <div className="flex items-center space-x-1">
-                            <span className="font-medium truncate">{m.name || m.address || "成员"}</span>
+                            <span className="font-medium truncate">{m.name || m.address || t("dkg.member")}</span>
                             <Badge variant="outline" className={`text-[9px] px-1 py-0 h-4 ${memberSigned[m.address] ? "border-primary/40 text-primary" : "border-muted text-muted-foreground"}`}>
-                              {memberSigned[m.address] ? "已签名" : deadlineTs ? "待签名" : "待确认"}
+                              {memberSigned[m.address] ? t("dkg.signed") : deadlineTs ? t("dkg.awaitingSignature") : t("dkg.awaitingConfirm")}
                             </Badge>
                           </div>
                           <span className="text-muted-foreground text-[10px]">
-                            权重: {m.weight}
+                            {t("dkg.weightPrefix")}{m.weight}
                           </span>
                         </div>
                       </div>
@@ -574,23 +1075,66 @@ export function DkgCeremonyDialog({
                     : "border-amber-500/40 bg-amber-500/10"
                 }`}>
                   <p className={`font-medium mb-1 ${nowTs >= deadlineTs ? "text-red-600 dark:text-red-400" : "text-amber-600 dark:text-amber-400"}`}>
-                    {nowTs >= deadlineTs ? "限时已到期" : "限时 DKG 进行中"}
+                    {nowTs >= deadlineTs ? t("dkg.deadlineExpired") : t("dkg.deadlineRunning")}
                   </p>
                   <p className="text-muted-foreground">
                     {nowTs >= deadlineTs ? (
-                      <>已过签名时限。若已签名人数 ≥ 发起门槛（{Math.max(1, Math.min(3, initialMembers.length))}），可点"完成转DAO"；否则转DAO失败。</>
+                      <>{t("dkg.deadlineExpiredBody")}</>
                     ) : (
-                      <>剩余 {Math.max(0, Math.ceil((deadlineTs - nowTs) / 1000))}s。到期时若已签名人数不足发起门槛，转DAO将失败。</>
+                      <>{t("dkg.deadlineRemaining", { seconds: Math.max(0, Math.ceil((deadlineTs - nowTs) / 1000)) })}</>
                     )}
                   </p>
                 </div>
               )}
-              <Button onClick={handleStartDkg} className="w-full mt-2">
-                <Sparkles className="h-4 w-4 mr-2" />
-                {deadlineTs
-                  ? (nowTs >= deadlineTs ? "完成转DAO（按已签名人数固化）" : "取消并重新发起")
-                  : "发起限时 DKG（10 分钟）"}
-              </Button>
+              {!deadlineTs
+                ? <Button onClick={handleStartDkg} className="w-full mt-2">
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    {t("dkg.startBtn")}
+                  </Button>
+                : <div className="space-y-1.5 pt-1">
+                    {/* Each button drives exactly one chain phase. Nothing here
+                        skips ahead: a later phase stays disabled until the chain
+                        state it needs is actually present. */}
+                    <Button onClick={handleStartDkg} className="w-full" disabled={nowTs >= deadlineTs}>
+                      <Cpu className="h-3.5 w-3.5 mr-2" />
+                      {t("dkg.step1")}
+                    </Button>
+                    <Button onClick={handleRegisterMailboxKey} variant="outline" className="w-full" disabled={nowTs >= deadlineTs}>
+                      <Lock className="h-3.5 w-3.5 mr-2" />
+                      {t("dkg.step2")}
+                    </Button>
+                    <Button onClick={handleStartDkg} variant="outline" className="w-full" disabled={nowTs >= deadlineTs}>
+                      <Network className="h-3.5 w-3.5 mr-2" />
+                      {t("dkg.step3")}
+                    </Button>
+                    <Button onClick={handleConfirmWithShares} variant="outline" className="w-full" disabled={nowTs >= deadlineTs}>
+                      <CheckCircle2 className="h-3.5 w-3.5 mr-2" />
+                      {t("dkg.step4")}
+                    </Button>
+                    {/* Finalization is NOT time-gated on chain: members attest
+                        before the deadline, but `finalize_session` has no
+                        clock check, so anyone may land an already-attested key
+                        afterwards. Disabling this after the deadline would
+                        strand a session that already has its quorum. */}
+                    <Button onClick={() => void handleFinalize()} variant="outline" className="w-full">
+                      <Layers className="h-3.5 w-3.5 mr-2" />
+                      {t("dkg.step5")}
+                    </Button>
+                    <div className="space-y-1.5 rounded-lg border border-border/50 bg-muted/20 p-2.5">
+                      <label htmlFor="dkg-creation-digest" className="text-[11px] font-medium">{t("dkg.digestInputLabel")}</label>
+                      <Input id="dkg-creation-digest" aria-label={t("dkg.digestInputAria")} value={creationInput} onChange={event => setCreationInput(event.target.value.trim())} placeholder={t("dkg.digestPlaceholder")} className="h-8 font-mono text-[11px]" />
+                      <Button type="button" variant="outline" size="sm" className="h-8 w-full" onClick={() => void handleFinalize()} disabled={!creationInput.trim()}>
+                        {t("dkg.digestVerifyBtn")}
+                      </Button>
+                      {sessionInput && <Button type="button" variant="outline" size="sm" className="h-8 w-full" onClick={() => void handleFinalize(true)}>
+                        {t("dkg.continueCreateBtn")}
+                      </Button>}
+                      <p className="text-[10px] text-muted-foreground">{t("dkg.digestNote")}</p>
+                    </div>
+                    {nowTs >= deadlineTs && <p className="text-[11px] text-muted-foreground">
+                      {t("dkg.afterDeadlineNote")}
+                    </p>}
+                  </div>}
             </div>
           )}
 
@@ -605,10 +1149,10 @@ export function DkgCeremonyDialog({
               </div>
               <div>
                 <p className="font-semibold text-sm">
-                  正在同步成员确认...
+                  {t("dkg.syncing")}
                 </p>
                 <p className="text-xs text-muted-foreground mt-1 max-w-sm">
-                  成员确认已同步，组织合约部署中...
+                  {t("dkg.syncingBody")}
                 </p>
               </div>
             </div>
@@ -619,25 +1163,26 @@ export function DkgCeremonyDialog({
             <div className="space-y-3">
               <div className="p-3.5 rounded-xl border border-emerald-500/30 bg-emerald-500/5 space-y-2.5">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2 text-emerald-600 dark:text-emerald-400 font-medium text-sm">
-                    <CheckCircle2 className="h-4 w-4" />
-                    <span>组织已成功部署在链上</span>
+                  <div className={`flex items-center space-x-2 font-medium text-sm ${orgChainCheck.state === "verified" ? "text-emerald-600 dark:text-emerald-400" : "text-amber-700 dark:text-amber-300"}`}>
+                    {orgChainCheck.state === "verified" ? <CheckCircle2 className="h-4 w-4" /> : <Clock className="h-4 w-4" />}
+                    <span>{orgChainCheck.state === "verified" ? t("dkg.orgVerified") : orgChainCheck.state === "pending" ? t("dkg.orgVerifying") : t("dkg.orgUnverified")}</span>
                   </div>
                   <Badge variant="outline" className="text-[10px] border-emerald-500/40 text-emerald-600 dark:text-emerald-400">
-                    Epoch {epoch}
+                    {orgChainCheck.state === "verified" ? t("dkg.epochN", { epoch }) : t("dkg.epochUnverified")}
                   </Badge>
                 </div>
+                {orgChainCheck.state === "failed" && <p role="alert" className="text-[11px] text-amber-700 dark:text-amber-300">{t("dkg.orgReadFailedPrefix")}{orgChainCheck.error}{t("dkg.orgReadFailedSuffix")}</p>}
 
                 <div className="space-y-2 text-xs">
                   <div>
-                    <span className="text-muted-foreground">组织公钥 (Ed25519 Group PK):</span>
+                    <span className="text-muted-foreground">{t("dkg.groupPkLabel")}</span>
                     <div className="p-2 bg-background rounded-lg border border-border/40 font-mono text-[11px] truncate select-all mt-0.5">
                       {groupPk}
                     </div>
                   </div>
                   <div>
                     <div className="flex items-center justify-between">
-                      <span className="text-muted-foreground">链上共享对象 ID:</span>
+                      <span className="text-muted-foreground">{t("dkg.orgIdLabel")}</span>
                       {suiscanOrgUrl && (
                         <a
                           href={suiscanOrgUrl}
@@ -645,7 +1190,7 @@ export function DkgCeremonyDialog({
                           rel="noopener noreferrer"
                           className="text-[11px] text-primary flex items-center hover:underline"
                         >
-                          Suiscan 查看 <ExternalLink className="h-3 w-3 ml-0.5" />
+                          {t("dkg.viewOnSuiscan")}<ExternalLink className="h-3 w-3 ml-0.5" />
                         </a>
                       )}
                     </div>
@@ -656,7 +1201,7 @@ export function DkgCeremonyDialog({
                   {txDigest && (
                     <div>
                       <div className="flex items-center justify-between">
-                        <span className="text-muted-foreground">部署交易哈希:</span>
+                        <span className="text-muted-foreground">{t("dkg.deployTxDigestLabel")}</span>
                         {suiscanTxUrl && (
                           <a
                             href={suiscanTxUrl}
@@ -664,7 +1209,7 @@ export function DkgCeremonyDialog({
                             rel="noopener noreferrer"
                             className="text-[11px] text-primary flex items-center hover:underline"
                           >
-                            Suiscan 交易 <ExternalLink className="h-3 w-3 ml-0.5" />
+                            {t("dkg.suiscanTx")} <ExternalLink className="h-3 w-3 ml-0.5" />
                           </a>
                         )}
                       </div>
@@ -676,43 +1221,22 @@ export function DkgCeremonyDialog({
                 </div>
               </div>
 
-              {/* 成员同步卡片 */}
+              {/* One signing share belongs to this device; threshold signing requires other devices. */}
               <div className="p-3 rounded-xl border border-border/50 bg-muted/20 space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-1.5 text-xs font-semibold">
-                    <Inbox className="h-3.5 w-3.5 text-primary" />
-                    <span>离线成员同步</span>
+                    <Lock className="h-3.5 w-3.5 text-primary" />
+                    <span>{t("dkg.deviceShareTitle")}</span>
                   </div>
-                  <Badge variant={davidAwakened ? "outline" : "secondary"} className={`text-[10px] ${davidAwakened ? "border-emerald-500/40 text-emerald-500" : ""}`}>
-                    {davidAwakened ? "已同步" : "待同步"}
+                  <Badge variant={deviceKey ? "outline" : "secondary"} className={`text-[10px] ${deviceKey ? "border-emerald-500/40 text-emerald-500" : ""}`}>
+                    {deviceKey ? t("dkg.shareCount", { threshold: deviceKey.threshold.toString() }) : t("dkg.shareNotRestored")}
                   </Badge>
                 </div>
-
                 <p className="text-xs text-muted-foreground">
-                  {davidAwakened
-                    ? "离线成员 David 现已同步，具备完整签名权限！"
-                    : "多数成员已确认，无需等待全员在线即可开始治理。"}
+                  {deviceKey
+                    ? t("dkg.shareBound", { epoch: deviceKey.epoch.toString(), index: deviceKey.index.toString() })
+                    : deviceKeyError || t("dkg.shareMissing")}
                 </p>
-
-                {davidWakeupLog && (
-                  <p className="text-xs font-mono text-primary bg-primary/10 p-2 rounded-lg">
-                    {davidWakeupLog}
-                  </p>
-                )}
-
-                {!davidAwakened && (
-                  <div className="flex justify-end pt-0.5">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={handleDavidWakeup}
-                      className="text-xs"
-                    >
-                      <Clock className="h-3 w-3 mr-1" />
-                      同步 David 成员状态
-                    </Button>
-                  </div>
-                )}
               </div>
 
               {/* 动态成员调整 (Resharing) */}
@@ -720,14 +1244,14 @@ export function DkgCeremonyDialog({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-1.5 text-xs font-semibold">
                     <Layers className="h-3.5 w-3.5 text-primary" />
-                    <span>动态换届重分片 (Gennaro Resharing)</span>
+                    <span>{t("dkg.reshareTitle")}</span>
                   </div>
                   <Badge variant="secondary" className="text-[10px]">
-                    地址恒定 · 纪元递增
+                    {t("dkg.reshareBadge")}
                   </Badge>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  引入新成员 Eve 时，经多项式刷新生成全新分片，链上共享对象与组织公钥严格保持恒定。
+                  {t("dkg.reshareBody")}
                 </p>
 
                 {reshareLog && (
@@ -738,7 +1262,7 @@ export function DkgCeremonyDialog({
 
                 {reshareTxDigest && suiscanReshareTxUrl && (
                   <div className="flex items-center justify-between p-2 rounded-lg bg-background border border-border/40 text-[11px]">
-                    <span className="text-muted-foreground">换届交易:</span>
+                    <span className="text-muted-foreground">{t("dkg.reshareTxLabel")}</span>
                     <a
                       href={suiscanReshareTxUrl}
                       target="_blank"
@@ -760,13 +1284,13 @@ export function DkgCeremonyDialog({
                     className="text-xs border-primary/30 text-primary"
                   >
                     <RefreshCw className={`h-3 w-3 mr-1 ${isResharingBusy ? "animate-spin" : ""}`} />
-                    {isResharingBusy ? "换届执行中..." : "换届重分片 (加 Eve)"}
+                    {isResharingBusy ? t("dkg.reshareBusy") : t("dkg.reshareBtn")}
                   </Button>
                 </div>
               </div>
 
               <Button onClick={() => onOpenChange(false)} className="w-full">
-                完成并返回群组
+                {t("dkg.doneBtn")}
               </Button>
             </div>
           )}

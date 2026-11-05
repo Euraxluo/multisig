@@ -15,6 +15,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { X, Plus, Users, Search, QrCode, Check, AtSign, Wallet } from "lucide-react"
 import { motion, AnimatePresence } from "framer-motion"
+import { QrAddressScanner } from "@/components/qr-address-scanner"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import {
   DropdownMenu,
@@ -27,24 +28,18 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Slider } from "@/components/ui/slider"
 
-import { getCachedDevAccounts } from "@/lib/dev-keystore"
+import { getActiveAccount } from "@/lib/onchain-store"
+import { getFollowing, getIdentityByAddress, identityConfigured } from "@/lib/identity-client"
+import { useI18n } from "@/components/i18n-provider"
 
 interface CreateGroupDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
 }
 
-const defaultRecentContacts = [
-  { id: "1", name: "Agent-Alice (理事长)", address: "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4", type: "wallet" as const },
-  { id: "2", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
-  { id: "3", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", type: "wallet" as const },
-  { id: "4", name: "Sui Community Treasury", address: "0x0000000000000000000000000000000000000000000000000000000000000002", type: "wallet" as const },
-]
-
-const historicalParticipants = [
-  { id: "h1", name: "Agent-Bob (审计员)", address: "0x83fb785f1da119aea4e0faa19d1466b33899e14ea730af6425ec7d5557cb5a36", type: "wallet" as const },
-  { id: "h2", name: "Agent-Carol (执行官)", address: "0x5e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f", type: "wallet" as const },
-]
+interface Contact { id: string; name: string; address: string; type: "wallet" | "email" }
+const defaultRecentContacts: Contact[] = []
+const historicalParticipants: Contact[] = []
 
 interface Member {
   id: string
@@ -55,6 +50,7 @@ interface Member {
 }
 
 export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps) {
+  const { t } = useI18n()
   const [recentContacts, setRecentContacts] = useState(defaultRecentContacts)
   const [members, setMembers] = useState<Member[]>([{ id: "1", address: "", weight: 1 }])
   const [step, setStep] = useState(1)
@@ -65,18 +61,23 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   const [totalWeight, setTotalWeight] = useState(1)
   const [groupTitle, setGroupTitle] = useState("")
 
+  const [contactsError, setContactsError] = useState("")
   useEffect(() => {
-    const devAccs = getCachedDevAccounts()
-    if (devAccs.length > 0) {
-      setRecentContacts(
-        devAccs.map((a, i) => ({
-          id: String(i + 1),
-          name: a.name,
-          address: a.address,
-          type: "wallet" as const,
-        }))
-      )
+    let generation = 0
+    const load = async () => {
+      const run = ++generation
+      setRecentContacts([]); setContactsError("")
+      const address = getActiveAccount()?.address
+      if (!open || !address || !identityConfigured()) return
+      try {
+        const profile = await getIdentityByAddress(address)
+        const list = profile ? await getFollowing(profile) : []
+        if (run === generation && getActiveAccount()?.address === address) setRecentContacts(list.map(person => ({ id: person.id, name: person.displayName || `${person.label}.id`, address: person.address, type: "wallet" as const })))
+      } catch (error) { if (run === generation) setContactsError(error instanceof Error ? error.message : t("groups.readContactsFailed")) }
     }
+    void load()
+    window.addEventListener("sui-account-switched", load); window.addEventListener("storage", load)
+    return () => { generation++; window.removeEventListener("sui-account-switched", load); window.removeEventListener("storage", load) }
   }, [open])
 
   // Reset state when dialog opens/closes
@@ -144,27 +145,11 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
     })
   }
 
-  const handleQrScan = (result: string) => {
-    // 真实的扫码结果或有效 Sui 测试网地址
-    const validAddress = result?.startsWith("0x") ? result : "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
-
-    // Find an empty member slot or add a new one
+  const handleQrScan = (validAddress: string) => {
     const emptyMember = members.find((p) => !p.address)
-
-    if (emptyMember) {
-      updateMember(emptyMember.id, { address: validAddress, type: "wallet" })
-    } else {
-      setMembers([
-        ...members,
-        {
-          id: Date.now().toString(),
-          address: validAddress,
-          weight: 1,
-          type: "wallet" as const,
-        },
-      ])
-    }
-
+    if (emptyMember) updateMember(emptyMember.id, { address: validAddress, type: "wallet" })
+    else setMembers([...members, { id: Date.now().toString(), address: validAddress, weight: 1, type: "wallet" }])
+    setContactsError("")
     setShowQrScanner(false)
   }
 
@@ -193,10 +178,10 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
       const newGroups = JSON.parse(localStorage.getItem("user_groups") || "[]")
       newGroups.push({
         id: `grp_${Date.now()}`,
-        name: groupTitle.trim() || "未命名群组",
+        name: groupTitle.trim() || t("groups.unnamedGroup"),
         description: "",
         network: "Sui",
-        members: members.map((m, i) => ({ ...m, weight: m.weight || 1 })),
+        members: members.map((m) => ({ ...m, weight: m.weight || 1 })),
         threshold,
         totalWeight,
         createdAt: new Date().toISOString(),
@@ -232,28 +217,36 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
       <DialogContent className="sm:max-w-[425px] p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-4 pb-0">
           <DialogTitle>Create Multi-Signature Group</DialogTitle>
-          <DialogDescription>Create a new multi-signature group to manage assets together.</DialogDescription>
+          <DialogDescription>{t("groups.createLocalDraftDesc")}</DialogDescription>
+          {contactsError && <p role="alert" className="text-xs text-destructive">{contactsError}</p>}
         </DialogHeader>
 
         <div className="relative overflow-hidden">
           <div className="flex justify-between px-4 pt-4">
             {[1, 2, 3].map((i) => (
-              <div key={i} className="flex flex-col items-center" onClick={() => i < step && setStep(i)}>
+              <button
+                key={i}
+                type="button"
+                disabled={i >= step}
+                onClick={() => i < step && setStep(i)}
+                aria-current={i === step ? "step" : undefined}
+                aria-label={t("groups.stepLabel", { step: i, name: ["Details", "Members", "Review"][i - 1] ?? "" })}
+                className="flex flex-col items-center rounded-md disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
                 <div
                   className={`h-8 w-8 rounded-full flex items-center justify-center text-sm ${
                     i < step
                       ? "bg-primary text-primary-foreground"
                       : i === step
                         ? "bg-primary/20 text-primary border-2 border-primary"
-                        : "bg-muted text-muted-foreground"
-                  }`}
+                        : "bg-muted text-muted-foreground"}`}
                 >
                   {i}
                 </div>
                 <div className="text-xs mt-1 text-muted-foreground">
                   {i === 1 ? "Details" : i === 2 ? "Members" : "Review"}
                 </div>
-              </div>
+              </button>
             ))}
             <div className="absolute top-[28px] left-[68px] w-[120px] h-[2px] bg-muted">
               <div className={`h-full bg-primary transition-all ${step > 1 ? "w-full" : "w-0"}`}></div>
@@ -340,6 +333,15 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent className="w-64 p-1">
+                            <div className="px-1 pb-1">
+                              <Input
+                                value={searchTerm}
+                                onChange={(event) => setSearchTerm(event.target.value)}
+                                placeholder={t("groups.searchContacts")}
+                                aria-label={t("groups.searchContacts")}
+                                className="h-7 text-xs"
+                              />
+                            </div>
                             <DropdownMenuLabel className="text-xs px-2 py-1.5 font-medium text-muted-foreground">
                               Recent Contacts
                             </DropdownMenuLabel>
@@ -436,26 +438,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                       </div>
                     </div>
 
-                    {/* QR Scanner Modal (simplified for demo) */}
-                    {showQrScanner && (
-                      <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-                        <div className="bg-background rounded-lg p-4 max-w-sm w-full">
-                          <h3 className="font-medium mb-2">Scan QR Code</h3>
-                          <div className="border-2 border-dashed border-muted-foreground rounded-lg h-48 flex items-center justify-center mb-4">
-                            <div className="text-center">
-                              <QrCode className="h-12 w-12 mx-auto mb-2 text-muted-foreground" />
-                              <p className="text-sm text-muted-foreground">Position QR code in this area</p>
-                            </div>
-                          </div>
-                          <div className="flex justify-between">
-                            <Button variant="outline" onClick={() => setShowQrScanner(false)}>
-                              Cancel
-                            </Button>
-                            <Button onClick={() => handleQrScan("")}>Simulate Scan</Button>
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    <QrAddressScanner open={showQrScanner} onOpenChange={setShowQrScanner} onAddress={handleQrScan} />
 
                     {/* Member Tags */}
                     <div className="flex flex-wrap gap-2 mb-3">
@@ -658,7 +641,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                   <div className="rounded-lg border p-3 space-y-2">
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Group Name</span>
-                      <span className="text-xs font-medium">{groupTitle || "未命名群组"}</span>
+                      <span className="text-xs font-medium">{groupTitle || t("groups.unnamedGroup")}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-xs text-muted-foreground">Network</span>
@@ -685,7 +668,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                     <div className="rounded-lg border p-3 max-h-[150px] overflow-y-auto">
                       {members
                         .filter((p) => p.address)
-                        .map((member, index) => (
+                        .map((member) => (
                           <div key={member.id} className="flex justify-between py-1 border-b last:border-0">
                             <div className="flex items-center text-xs truncate max-w-[180px]">
                               <Avatar className="h-5 w-5 mr-1.5">
