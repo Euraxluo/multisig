@@ -1,6 +1,22 @@
 "use client"
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog"
+
+/**
+ * The `/groups/[id]` route renders this view standalone (no Radix Dialog
+ * ancestor), while the dashboard opens it inside `GroupDetailsDialog`. Radix's
+ * `DialogTitle` throws outside a Dialog context, so the header picks the
+ * wrapper by mount context: the dialog variant keeps the accessible name
+ * Radix requires, the page variant renders the same visible header.
+ */
+function DialogAwareHeader({ isDialog, className, children }: { isDialog: boolean; className?: string; children: React.ReactNode }) {
+  if (!isDialog) return <div className={className}>{children}</div>
+  return (
+    <DialogHeader className={className}>
+      <DialogTitle className="flex items-center justify-between">{children}</DialogTitle>
+    </DialogHeader>
+  )
+}
 import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
@@ -982,16 +998,14 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
               on their own; black/45 lifts the worst endpoint above 5:1 in both
               themes without changing the gradient the user chose. */}
           <div className="absolute inset-0 bg-black/45" aria-hidden />
-          <DialogHeader className="relative text-white">
-            <DialogTitle className="flex items-center justify-between">
-              <span className="text-xl font-bold">{group.name}</span>
-              <Badge variant="outline" className="bg-white/20 text-white border-white/40">
-                {group.network}
-              </Badge>
-            </DialogTitle>
+          <DialogAwareHeader isDialog={isDialog} className="relative text-white">
+            <span className="text-xl font-bold">{group.name}</span>
+            <Badge variant="outline" className="bg-white/20 text-white border-white/40">
+              {group.network}
+            </Badge>
             <p className="text-white/80 text-xs mt-1 truncate">{group.description}</p>
             <p className="text-white/80 text-xs">{realGroupData.sourceStatus === "chain-confirmed" ? t("groups.orgVerifiedBadge") : t("groups.localRecordBadge")}</p>
-          </DialogHeader>
+          </DialogAwareHeader>
         </div>
 
         <div className="p-4 space-y-4 overflow-y-auto">
@@ -1047,56 +1061,60 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
           </div>
 
           <Tabs defaultValue="chat" value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="flex w-full items-center gap-1.5 p-1.5 bg-muted/60 rounded-xl overflow-x-auto scrollbar-none text-xs md:text-sm font-medium">
+            {/* Tabs must never rely on horizontal scrolling: the scrollbar is
+                hidden on mobile (scrollbar-none), so clipped tabs are
+                undiscoverable and unreachable by tap. Letting the list wrap
+                keeps every tab visible and tappable at any width. */}
+            <TabsList className="flex w-full flex-wrap items-center gap-1.5 p-1.5 bg-muted/60 rounded-xl text-xs md:text-sm font-medium">
               <TabsTrigger
                 value="chat"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5 font-medium"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5 font-medium"
               >
-                <MessageSquare className="h-3 w-3 mr-0.5 text-primary" />
+                <MessageSquare className="hidden sm:block h-3 w-3 mr-0.5 text-primary" />
                 {t("groups.tabChat")}</TabsTrigger>
               <TabsTrigger
                 value="members"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
               >
-                <Users className="h-3 w-3 mr-0.5" />
+                <Users className="hidden sm:block h-3 w-3 mr-0.5" />
                 {t("groups.membersLabel")}</TabsTrigger>
               <TabsTrigger
                 value="agents"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
               >
-                <Bot className="h-3 w-3 mr-0.5 text-purple-500" />
+                <Bot className="hidden sm:block h-3 w-3 mr-0.5 text-purple-500" />
                 AI
               </TabsTrigger>
               <TabsTrigger
                 value="files"
-                className="rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm px-1 font-medium"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm font-medium"
               >
-                <HardDrive className="h-3 w-3 mr-0.5 text-cyan-500" />
+                <HardDrive className="hidden sm:block h-3 w-3 mr-0.5 text-cyan-500" />
                 {t("groups.tabFiles")}</TabsTrigger>
               <TabsTrigger
                 value="transactions"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
               >
-                <Share2 className="h-3 w-3 mr-0.5" />
+                <Share2 className="hidden sm:block h-3 w-3 mr-0.5" />
                 Tx
               </TabsTrigger>
               <TabsTrigger
                 value="receive"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
               >
-                <QrCode className="h-3 w-3 mr-0.5" />
+                <QrCode className="hidden sm:block h-3 w-3 mr-0.5" />
                 {t("groups.tabPayments")}</TabsTrigger>
               <TabsTrigger
                 value="yield"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
               >
-                <Sprout className="h-3 w-3 mr-0.5 text-emerald-500" />
+                <Sprout className="hidden sm:block h-3 w-3 mr-0.5 text-emerald-500" />
                 {t("groups.tabYield")}</TabsTrigger>
               <TabsTrigger
                 value="custody"
-                className="flex-1 min-w-[70px] md:min-w-[80px] py-2 px-2.5 rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
+                className="flex-1 min-w-0 py-1.5 px-1 sm:py-2 sm:px-2.5 sm:min-w-[70px] md:min-w-[80px] rounded-lg data-[state=active]:bg-background data-[state=active]:text-foreground data-[state=active]:shadow-sm transition-all flex items-center justify-center gap-1.5"
               >
-                <Landmark className="h-3 w-3 mr-0.5 text-amber-500" />
+                <Landmark className="hidden sm:block h-3 w-3 mr-0.5 text-amber-500" />
                 {t("groups.tabCustody")}</TabsTrigger>
             </TabsList>
 

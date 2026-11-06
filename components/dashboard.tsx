@@ -220,8 +220,7 @@ export default function Dashboard() {
                     <p className="text-xs text-muted-foreground">{group.network} Network</p>
                   </div>
                 </div>
-              </CardHeader>
-              <CardContent className="p-3">
+              </CardHeader>              <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="text-xs text-muted-foreground flex items-center">
                     <Users className="h-3 w-3 mr-1" />
@@ -250,7 +249,13 @@ export default function Dashboard() {
                       </Avatar>
                     )}
                   </div>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs text-primary flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs text-primary flex items-center gap-1"
+                    aria-haspopup="dialog"
+                    onClick={event => { event.stopPropagation(); setSelectedGroup({ id: group.id, name: group.name }) }}
+                  >
                     {t("dash.viewDetails")} <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>

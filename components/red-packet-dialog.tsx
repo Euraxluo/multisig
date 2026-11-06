@@ -11,6 +11,7 @@ import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Gift, Coins, Sparkles, Crown, Clock } from "lucide-react"
 import { motion } from "framer-motion"
 import { useI18n } from "@/components/i18n-provider"
+import { useReducedMotion } from "@/hooks/use-reduced-motion"
 
 export interface ClaimRecord {
   id: string
@@ -73,6 +74,7 @@ export function RedPacketDialog({
   onRefundPacket,
 }: RedPacketDialogProps) {
   const { t } = useI18n()
+  const reduceMotion = useReducedMotion()
   // Create mode form state
   const [packetType, setPacketType] = useState<"LUCKY_RANDOM" | "EQUAL">("LUCKY_RANDOM")
   const [totalAmount, setTotalAmount] = useState("10.0")
@@ -294,11 +296,12 @@ export function RedPacketDialog({
                 {!packetData?.claimedByUser && (packetData?.remainingCount ?? 0) > 0 && !expired && !packetData?.refunded && (
                   <motion.button
                     id="btn-open-red-packet"
-                    whileHover={{ scale: 1.05 }}
-                    whileTap={{ scale: 0.95 }}
+                    whileHover={reduceMotion ? undefined : { scale: 1.05 }}
+                    whileTap={reduceMotion ? undefined : { scale: 0.95 }}
                     animate={isOpening ? { rotate: 360, transition: { repeat: Infinity, duration: 0.6 } } : {}}
                     onClick={handleOpenClick}
                     disabled={isOpening}
+                    aria-label={t("payments.rpOpen")}
                     className="mt-6 w-16 h-16 rounded-full bg-gradient-to-b from-amber-300 to-amber-500 text-red-900 font-extrabold text-xl shadow-xl shadow-black/30 border-2 border-amber-200 flex items-center justify-center cursor-pointer hover:shadow-amber-400/40 transition-all select-none"
                   >
                     {isOpening ? "..." : t("payments.rpOpenGlyph")}
