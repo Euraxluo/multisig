@@ -206,8 +206,17 @@ export default function Dashboard() {
         {groupRows.map((group) => (
           <motion.div key={group.id} variants={item}>
             <Card
-              className="overflow-hidden hover:shadow-md hover:border-primary/40 transition-all duration-200 border border-border bg-card shadow-sm cursor-pointer"
+              className="overflow-hidden hover:shadow-md hover:border-primary/40 transition-all duration-200 border border-border bg-card shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              role="button"
+              tabIndex={0}
+              aria-label={group.name}
               onClick={() => router.push(`/groups/${group.id}`)}
+              onKeyDown={(event) => {
+                if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) {
+                  event.preventDefault()
+                  router.push(`/groups/${group.id}`)
+                }
+              }}
             >
               <div className="h-1 bg-primary"></div>
               <CardHeader className="p-3 pb-0">
