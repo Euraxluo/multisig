@@ -18,6 +18,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { normalizeSuiAddress } from "@mysten/sui/utils"
 import { getProposals } from "@/lib/onchain-store"
 import { buildProposalNotifications, readNotificationKeys, unreadCount } from "@/lib/notifications"
+import { useReducedMotion } from "@/hooks/use-reduced-motion"
 
 interface MobileNavbarProps {
   activeTab: string
@@ -26,6 +27,7 @@ interface MobileNavbarProps {
 
 export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
   const { t, locale, setLocale } = useI18n()
+  const reduceMotion = useReducedMotion()
   const [isWalletOpen, setIsWalletOpen] = useState(false)
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null)
   const [isCreateOpen, setIsCreateOpen] = useState(false)
@@ -98,8 +100,8 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
         <div className="flex items-center space-x-2">
           <motion.h1
             className="text-base font-bold text-primary"
-            initial={{ opacity: 0, x: -10 }}
-            animate={{ opacity: 1, x: 0 }}
+            initial={reduceMotion ? false : { opacity: 0, x: -10 }}
+            animate={reduceMotion ? undefined : { opacity: 1, x: 0 }}
           >
             MultiSig
           </motion.h1>
@@ -108,7 +110,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
           <Button variant="ghost" size="icon" aria-label={unread > 0 ? t("shell.notificationsWithUnread", { count: unread }) : t("shell.notifications")} onClick={() => setIsNotificationsOpen(true)} className="h-8 w-8 relative text-muted-foreground hover:text-foreground">
             <Bell className="h-4 w-4" />
             {unread > 0 && (
-              <span className="absolute right-1 top-1 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-primary px-0.5 text-[9px] font-semibold leading-none text-primary-foreground">
+              <span aria-hidden="true" className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
                 {unread > 9 ? "9+" : unread}
               </span>
             )}
@@ -189,7 +191,10 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
       </div>
 
       {/* Bottom Nav: Mobile fixed bottom, Desktop floating dock */}
-      <div className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur-md border-t border-border/40 flex justify-around py-1 px-2 pb-[max(0.25rem,env(safe-area-inset-bottom,0px))] md:max-w-lg md:left-1/2 md:-translate-x-1/2 md:bottom-3 md:rounded-2xl md:border md:shadow-lg">
+      <nav
+        aria-label={t("shell.primaryNav")}
+        className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur-md border-t border-border/40 flex justify-around py-1 px-2 pb-[max(0.25rem,env(safe-area-inset-bottom,0px))] md:max-w-lg md:left-1/2 md:-translate-x-1/2 md:bottom-3 md:rounded-2xl md:border md:shadow-lg"
+      >
         <NavButton
           icon={<FileText className="h-5 w-5" />}
           label={t("shell.tabPending")}
@@ -220,7 +225,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
           isActive={activeTab === "profile"}
           onClick={() => setActiveTab("profile")}
         />
-      </div>
+      </nav>
 
       <ConnectWalletDialog
         open={isWalletOpen}
@@ -257,23 +262,33 @@ interface NavButtonProps {
 }
 
 function NavButton({ icon, label, isActive, onClick }: NavButtonProps) {
+  const reduceMotion = useReducedMotion()
   return (
     <motion.button
-      className={`flex min-w-0 flex-1 flex-col items-center justify-center py-2 px-1 rounded-xl relative ${
+      type="button"
+      aria-current={isActive ? "page" : undefined}
+      className={`flex min-h-11 flex-1 flex-col items-center justify-center py-2 px-1 rounded-xl relative ${
         isActive ? "text-primary" : "text-muted-foreground"
       }`}
       onClick={onClick}
-      whileTap={{ scale: 0.95 }}
+      whileTap={reduceMotion ? undefined : { scale: 0.95 }}
     >
       {icon}
       <span className="text-xs mt-1">{label}</span>
       {isActive && (
         <motion.div
-          layoutId="activeTab"
+          layoutId={reduceMotion ? undefined : "activeTab"}
           className="absolute inset-0 bg-primary/10 rounded-xl -z-10"
           transition={{ type: "spring", duration: 0.5 }}
         />
       )}
+      {/* Non-color active cue: a filled dot under the label, per WCAG 1.4.1. */}
+      <span
+        aria-hidden="true"
+        className={`absolute bottom-0.5 h-1 w-1 rounded-full transition-opacity ${
+          isActive ? "bg-primary opacity-100" : "opacity-0"
+        }`}
+      />
     </motion.button>
   )
 }

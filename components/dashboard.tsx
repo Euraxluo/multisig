@@ -206,8 +206,17 @@ export default function Dashboard() {
         {groupRows.map((group) => (
           <motion.div key={group.id} variants={item}>
             <Card
-              className="overflow-hidden hover:shadow-md hover:border-primary/40 transition-all duration-200 border border-border bg-card shadow-sm cursor-pointer"
+              className="overflow-hidden hover:shadow-md hover:border-primary/40 transition-all duration-200 border border-border bg-card shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              role="button"
+              tabIndex={0}
+              aria-label={group.name}
               onClick={() => router.push(`/groups/${group.id}`)}
+              onKeyDown={(event) => {
+                if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) {
+                  event.preventDefault()
+                  router.push(`/groups/${group.id}`)
+                }
+              }}
             >
               <div className="h-1 bg-primary"></div>
               <CardHeader className="p-3 pb-0">
@@ -250,7 +259,13 @@ export default function Dashboard() {
                       </Avatar>
                     )}
                   </div>
-                  <Button size="sm" variant="ghost" className="h-7 text-xs text-primary flex items-center gap-1">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-7 text-xs text-primary flex items-center gap-1"
+                    aria-haspopup="dialog"
+                    onClick={event => { event.stopPropagation(); setSelectedGroup({ id: group.id, name: group.name }) }}
+                  >
                     {t("dash.viewDetails")} <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>

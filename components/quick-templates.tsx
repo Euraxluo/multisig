@@ -138,8 +138,17 @@ export function QuickTemplates({ groupId }: QuickTemplatesProps) {
           {templates.map((template) => (
             <motion.div key={template.id} variants={item}>
               <Card
-                className="cursor-pointer hover:shadow-md transition-all duration-200 border-none shadow-sm"
+                className="cursor-pointer hover:shadow-md transition-all duration-200 border-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                role="button"
+                tabIndex={0}
+                aria-label={template.name}
                 onClick={() => applyTemplate(template)}
+                onKeyDown={(event) => {
+                  if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) {
+                    event.preventDefault()
+                    applyTemplate(template)
+                  }
+                }}
               >
                 <CardContent className="p-3">
                   <div className="flex items-center justify-between">

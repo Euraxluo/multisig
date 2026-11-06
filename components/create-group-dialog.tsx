@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Slider } from "@/components/ui/slider"
 
+import { isValidSuiAddress, normalizeSuiAddress } from "@mysten/sui/utils"
 import { getActiveAccount } from "@/lib/onchain-store"
 import { getFollowing, getIdentityByAddress, identityConfigured } from "@/lib/identity-client"
 import { useI18n } from "@/components/i18n-provider"
@@ -60,6 +61,9 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
   const [threshold, setThreshold] = useState(2)
   const [totalWeight, setTotalWeight] = useState(1)
   const [groupTitle, setGroupTitle] = useState("")
+  const [groupDescription, setGroupDescription] = useState("")
+  const [membersError, setMembersError] = useState("")
+  const [saveNotice, setSaveNotice] = useState<{ kind: "success" | "error"; text: string } | null>(null)
 
   const [contactsError, setContactsError] = useState("")
   useEffect(() => {
@@ -90,6 +94,10 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
         setShowQrScanner(false)
         setThreshold(2)
         setTotalWeight(1)
+        setGroupTitle("")
+        setGroupDescription("")
+        setMembersError("")
+        setSaveNotice(null)
       }, 300)
     }
   }, [open])
@@ -168,20 +176,46 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
     setStep(step - 1)
   }
 
+  /** A filled member row must hold a valid Sui address or a local email note. */
+  const validateMembers = (rows: Member[]): string => {
+    const filled = rows.filter((m) => m.address.trim())
+    if (!filled.length) return t("groups.createGroupMemberNeeded")
+    const seen = new Set<string>()
+    for (const member of filled) {
+      const value = member.address.trim()
+      if (!value.includes("@")) {
+        if (!isValidSuiAddress(value) || BigInt(normalizeSuiAddress(value)) === 0n) {
+          return t("groups.createGroupInvalidAddress", { address: value })
+        }
+        const key = normalizeSuiAddress(value)
+        if (seen.has(key)) return t("groups.createGroupDuplicateAddress", { address: value })
+        seen.add(key)
+      } else if (seen.has(value)) {
+        return t("groups.createGroupDuplicateAddress", { address: value })
+      } else {
+        seen.add(value)
+      }
+    }
+    return ""
+  }
+
   const handleCreateGroup = () => {
     // v0 shell 的 Create Group 按钮原本是 type="submit" 但没有 <form> 包裹，点击无效。
     // 这里保留 UI，不改外壳结构，直接把"建群"映射为本地新建群组（不上链，上链由 Convert to DAO 负责）。
-    if (!members.every((m) => m.address)) {
+    const error = validateMembers(members)
+    if (error) {
+      setMembersError(error)
       return
     }
+    setMembersError("")
     try {
       const newGroups = JSON.parse(localStorage.getItem("user_groups") || "[]")
       newGroups.push({
         id: `grp_${Date.now()}`,
         name: groupTitle.trim() || t("groups.unnamedGroup"),
-        description: "",
+        description: groupDescription.trim(),
         network: "Sui",
-        members: members.map((m) => ({ ...m, weight: m.weight || 1 })),
+        members: members.filter((m) => m.address.trim()).map((m) => ({ ...m, address: m.address.trim(), weight: m.weight || 1 })),
         threshold,
         totalWeight,
         createdAt: new Date().toISOString(),
@@ -189,9 +223,11 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
       localStorage.setItem("user_groups", JSON.stringify(newGroups))
       window.dispatchEvent(new CustomEvent("sui-groups-updated", { detail: newGroups }))
       window.dispatchEvent(new Event("storage"))
-      onOpenChange(false)
+      setSaveNotice({ kind: "success", text: t("groups.createGroupSaved") })
+      setTimeout(() => onOpenChange(false), 600)
     } catch (e) {
       console.warn("Failed to save group to localStorage", e)
+      setSaveNotice({ kind: "error", text: t("groups.createGroupSaveFailed") })
     }
   }
 
@@ -216,7 +252,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-[425px] p-0 gap-0 overflow-hidden">
         <DialogHeader className="p-4 pb-0">
-          <DialogTitle>Create Multi-Signature Group</DialogTitle>
+          <DialogTitle>{t("groups.createGroupTitle")}</DialogTitle>
           <DialogDescription>{t("groups.createLocalDraftDesc")}</DialogDescription>
           {contactsError && <p role="alert" className="text-xs text-destructive">{contactsError}</p>}
         </DialogHeader>
@@ -230,7 +266,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                 disabled={i >= step}
                 onClick={() => i < step && setStep(i)}
                 aria-current={i === step ? "step" : undefined}
-                aria-label={t("groups.stepLabel", { step: i, name: ["Details", "Members", "Review"][i - 1] ?? "" })}
+                aria-label={t("groups.stepLabel", { step: i, name: [t("groups.createGroupStepDetails"), t("groups.createGroupStepMembers"), t("groups.createGroupStepReview")][i - 1] ?? "" })}
                 className="flex flex-col items-center rounded-md disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
               >
                 <div
@@ -244,7 +280,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                   {i}
                 </div>
                 <div className="text-xs mt-1 text-muted-foreground">
-                  {i === 1 ? "Details" : i === 2 ? "Members" : "Review"}
+                  {i === 1 ? t("groups.createGroupStepDetails") : i === 2 ? t("groups.createGroupStepMembers") : t("groups.createGroupStepReview")}
                 </div>
               </button>
             ))}
@@ -269,28 +305,31 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                 <div className="space-y-3">
                   <div className="space-y-1">
                     <Label htmlFor="title" className="text-xs font-medium">
-                      Group Name
+                      {t("groups.createGroupNameLabel")}
                     </Label>
-                    <Input id="title" value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} placeholder="Team Treasury, DAO Fund, etc." />
+                    <Input id="title" value={groupTitle} onChange={(e) => setGroupTitle(e.target.value)} placeholder={t("groups.createGroupNamePlaceholder")} />
                   </div>
 
                   <div className="space-y-1">
                     <Label htmlFor="description" className="text-xs font-medium">
-                      Description (Optional)
+                      {t("groups.createGroupDescLabel")}
                     </Label>
                     <Textarea
                       id="description"
-                      placeholder="Add details about this group"
+                      value={groupDescription}
+                      onChange={(e) => setGroupDescription(e.target.value)}
+                      placeholder={t("groups.createGroupDescPlaceholder")}
                       className="resize-none h-20"
                     />
                   </div>
 
                   <div className="space-y-1">
                     <Label htmlFor="network" className="text-xs font-medium">
-                      Network
+                      {t("groups.createGroupNetworkLabel")}
                     </Label>
                     <select
                       id="network"
+                      defaultValue="sui"
                       className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <option value="sui">Sui</option>
@@ -298,6 +337,9 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                       <option value="solana">Solana</option>
                       <option value="polygon">Polygon</option>
                     </select>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {t("groups.createGroupNetworkSuiOnly")}
+                    </p>
                   </div>
                 </div>
               </motion.div>
@@ -317,7 +359,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                     <div className="flex items-center justify-between">
                       <Label className="text-xs font-medium flex items-center">
                         <Users className="h-4 w-4 mr-1.5" />
-                        Group Members
+                        {t("groups.createGroupMembersLabel")}
                       </Label>
                       <div className="flex space-x-1">
                         <DropdownMenu>
@@ -327,7 +369,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                               variant="outline"
                               size="sm"
                               className="h-7 text-xs"
-                              title="Search Contacts"
+                              title={t("groups.createGroupSearchContactsTitle")}
+                              aria-label={t("groups.createGroupSearchContactsTitle")}
                             >
                               <Search className="h-3 w-3" />
                             </Button>
@@ -343,7 +386,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                               />
                             </div>
                             <DropdownMenuLabel className="text-xs px-2 py-1.5 font-medium text-muted-foreground">
-                              Recent Contacts
+                              {t("groups.createGroupSearchContactsTitle")}
                             </DropdownMenuLabel>
                             <DropdownMenuSeparator className="my-1" />
                             <div className="max-h-[200px] overflow-y-auto">
@@ -379,7 +422,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                                 <>
                                   <DropdownMenuSeparator className="my-1" />
                                   <DropdownMenuLabel className="text-xs px-2 py-1.5 font-medium text-muted-foreground">
-                                    From Previous Transactions
+                                    {t("groups.createGroupFromPastTx")}
                                   </DropdownMenuLabel>
                                   <DropdownMenuGroup>
                                     {filteredHistorical.map((contact) => (
@@ -420,7 +463,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                           size="sm"
                           onClick={() => setShowQrScanner(true)}
                           className="h-7 text-xs"
-                          title="Scan QR Code"
+                          title={t("groups.createGroupScanQrTitle")}
+                          aria-label={t("groups.createGroupScanQrTitle")}
                         >
                           <QrCode className="h-3 w-3" />
                         </Button>
@@ -431,7 +475,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                           size="sm"
                           onClick={addMember}
                           className="h-7 text-xs"
-                          title="Add Manually"
+                          title={t("groups.createGroupAddManuallyTitle")}
+                          aria-label={t("groups.createGroupAddManuallyTitle")}
                         >
                           <Plus className="h-3 w-3" />
                         </Button>
@@ -439,6 +484,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                     </div>
 
                     <QrAddressScanner open={showQrScanner} onOpenChange={setShowQrScanner} onAddress={handleQrScan} />
+
+                    {membersError && <p role="alert" className="text-xs text-destructive">{membersError}</p>}
 
                     {/* Member Tags */}
                     <div className="flex flex-wrap gap-2 mb-3">
@@ -465,6 +512,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                             <button
                               className="ml-1 rounded-full hover:bg-background p-0.5 opacity-70 group-hover:opacity-100"
                               onClick={() => removeMember(member.id)}
+                              title={t("groups.createGroupRemoveMemberTitle")}
+                              aria-label={`${t("groups.createGroupRemoveMemberTitle")}: ${member.name || member.address}`}
                             >
                               <X className="h-3 w-3" />
                             </button>
@@ -477,7 +526,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                       {members.filter((p) => !p.address).length === 0 && (
                         <div className="relative">
                           <Input
-                            placeholder="Add wallet address or email"
+                            placeholder={t("groups.createGroupAddPlaceholder")}
+                            aria-label={t("groups.createGroupAddPlaceholder")}
                             value={currentInput}
                             onChange={(e) => setCurrentInput(e.target.value)}
                             className="pl-9"
@@ -509,6 +559,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                               variant="ghost"
                               size="sm"
                               className="absolute right-2 top-1.5 h-6 w-6 p-0"
+                              aria-label={t("groups.createGroupAddManuallyTitle")}
                               onClick={() => {
                                 setMembers([
                                   ...members,
@@ -534,7 +585,8 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                           <div key={member.id} className="flex items-center gap-2">
                             <div className="relative flex-1">
                               <Input
-                                placeholder="Wallet address or Email"
+                                placeholder={t("groups.createGroupMemberPlaceholder")}
+                                aria-label={t("groups.createGroupMemberPlaceholder")}
                                 value={member.address}
                                 onChange={(e) => updateMember(member.id, { address: e.target.value })}
                                 className="pl-9"
@@ -555,6 +607,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                                 size="icon"
                                 onClick={() => removeMember(member.id)}
                                 className="h-7 w-7"
+                                aria-label={t("groups.createGroupRemoveMemberTitle")}
                               >
                                 <X className="h-3 w-3" />
                               </Button>
@@ -565,7 +618,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
 
                     {/* Member Weights */}
                     <div className="mt-6 space-y-3">
-                      <Label className="text-xs font-medium">Member Weights</Label>
+                      <Label className="text-xs font-medium">{t("groups.createGroupWeightsLabel")}</Label>
                       {members
                         .filter((p) => p.address)
                         .map((member) => (
@@ -606,7 +659,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                     {/* Threshold Setting */}
                     <div className="mt-6 space-y-2">
                       <div className="flex items-center justify-between">
-                        <Label className="text-xs font-medium">Approval Threshold</Label>
+                        <Label className="text-xs font-medium">{t("groups.createGroupThresholdLabel")}</Label>
                         <span className="text-xs font-medium">
                           {threshold} of {totalWeight} ({Math.round((threshold / totalWeight) * 100)}%)
                         </span>
@@ -620,7 +673,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                         onValueChange={(value) => setThreshold(value[0])}
                       />
                       <p className="text-xs text-muted-foreground mt-1">
-                        Transactions require at least {threshold} weight units to be approved
+                        {t("groups.createGroupThresholdHint", { threshold })}
                       </p>
                     </div>
                   </div>
@@ -640,23 +693,23 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                 <div className="space-y-3">
                   <div className="rounded-lg border p-3 space-y-2">
                     <div className="flex justify-between">
-                      <span className="text-xs text-muted-foreground">Group Name</span>
-                      <span className="text-xs font-medium">{groupTitle || t("groups.unnamedGroup")}</span>
+                      <span className="text-xs text-muted-foreground">{t("groups.createGroupReviewName")}</span>
+                      <span className="text-xs font-medium">{groupTitle.trim() || t("groups.unnamedGroup")}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-xs text-muted-foreground">Network</span>
+                      <span className="text-xs text-muted-foreground">{t("groups.createGroupReviewNetwork")}</span>
                       <span className="text-xs font-medium">Sui</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-xs text-muted-foreground">Members</span>
-                      <span className="text-xs font-medium">{members.filter((p) => p.address).length} people</span>
+                      <span className="text-xs text-muted-foreground">{t("groups.createGroupReviewMembers")}</span>
+                      <span className="text-xs font-medium">{t("groups.createGroupMemberCount", { count: members.filter((p) => p.address.trim()).length })}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-xs text-muted-foreground">Total Weight</span>
-                      <span className="text-xs font-medium">{totalWeight} units</span>
+                      <span className="text-xs text-muted-foreground">{t("groups.createGroupReviewTotalWeight")}</span>
+                      <span className="text-xs font-medium">{t("groups.createGroupWeightUnits", { count: totalWeight })}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-xs text-muted-foreground">Threshold</span>
+                      <span className="text-xs text-muted-foreground">{t("groups.createGroupReviewThreshold")}</span>
                       <span className="text-xs font-medium">
                         {threshold} ({Math.round((threshold / totalWeight) * 100)}%)
                       </span>
@@ -664,10 +717,10 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                   </div>
 
                   <div className="space-y-1">
-                    <Label className="text-xs font-medium">Members</Label>
+                    <Label className="text-xs font-medium">{t("groups.createGroupMembersLabel")}</Label>
                     <div className="rounded-lg border p-3 max-h-[150px] overflow-y-auto">
                       {members
-                        .filter((p) => p.address)
+                        .filter((p) => p.address.trim())
                         .map((member) => (
                           <div key={member.id} className="flex justify-between py-1 border-b last:border-0">
                             <div className="flex items-center text-xs truncate max-w-[180px]">
@@ -685,7 +738,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                               </Avatar>
                               <span className="truncate">{member.name || member.address}</span>
                             </div>
-                            <span className="text-xs font-medium">Weight: {member.weight}</span>
+                            <span className="text-xs font-medium">{t("groups.createGroupMemberWeight", { weight: member.weight })}</span>
                           </div>
                         ))}
                     </div>
@@ -693,10 +746,12 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
 
                   <div className="rounded-lg border p-3 bg-accent/30">
                     <p className="text-xs">
-                      This will create a new multi-signature wallet on the Sui blockchain. All members will receive an
-                      invitation link to join this group.
+                      {t("groups.createGroupLocalOnly")}
                     </p>
                   </div>
+                  {groupDescription.trim() && (
+                    <p className="text-[11px] text-muted-foreground">{t("groups.createGroupDescSaved")}</p>
+                  )}
                 </div>
               </motion.div>
             )}
@@ -704,14 +759,24 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
         </div>
 
         <DialogFooter className="p-4 pt-2">
+          {saveNotice && (
+            <p
+              role={saveNotice.kind === "error" ? "alert" : "status"}
+              className={`w-full text-xs ${
+                saveNotice.kind === "error" ? "text-destructive" : "text-emerald-600 dark:text-emerald-400"
+              }`}
+            >
+              {saveNotice.text}
+            </p>
+          )}
           {step > 1 ? (
             <div className="flex w-full justify-between">
               <Button type="button" variant="outline" onClick={prevStep} size="sm">
-                Back
+                {t("common.back")}
               </Button>
               {step < 3 ? (
                 <Button type="button" onClick={nextStep} size="sm">
-                  Next
+                  {t("groups.createGroupNext")}
                 </Button>
               ) : (
                 <Button
@@ -720,13 +785,13 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                   size="sm"
                   className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
                 >
-                  Create Group
+                  {t("groups.createGroupAction")}
                 </Button>
               )}
             </div>
           ) : (
             <Button type="button" onClick={nextStep} className="w-full">
-              Next
+              {t("groups.createGroupNext")}
             </Button>
           )}
         </DialogFooter>

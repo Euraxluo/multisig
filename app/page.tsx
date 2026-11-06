@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import Dashboard from "@/components/dashboard"
 import Payments from "@/components/payments"
 import PendingWork from "@/components/pending-work"
@@ -19,14 +19,33 @@ import { ErrorBoundary } from "@/components/error-boundary"
 import { clearLegacyDevKeys } from "@/lib/dev-keystore"
 import { useI18n } from "@/components/i18n-provider"
 
+/** First-level tabs live in the URL so refresh/back/share keep the position. */
+const TAB_IDS = ["pending", "payments", "dashboard", "agent", "profile"] as const
+
+function tabFromSearch(): string {
+  const requested = new URLSearchParams(window.location.search).get("tab")?.trim()
+  return (TAB_IDS as readonly string[]).includes(requested ?? "") ? (requested as string) : "pending"
+}
+
 export default function Home() {
   const { t } = useI18n()
-  const [activeTab, setActiveTab] = useState("pending")
+  const [activeTab, setActiveTabState] = useState("pending")
   const [mounted, setMounted] = useState(false)
   const [sharedPerson, setSharedPerson] = useState("")
   const [sharedGroup, setSharedGroup] = useState("")
   const [sharedVote, setSharedVote] = useState("")
   const [sharedTreasury, setSharedTreasury] = useState<{ id: string; orgId: string } | null>(null)
+
+  // Tab changes write ?tab= via history.pushState, so the browser back button
+  // returns to the previous tab without a client-side router dependency.
+  const setActiveTab = useCallback((tab: string) => {
+    setActiveTabState(tab)
+    if (typeof window === "undefined") return
+    const url = new URL(window.location.href)
+    if (tab === "pending") url.searchParams.delete("tab")
+    else url.searchParams.set("tab", tab)
+    window.history.pushState({}, "", url)
+  }, [])
 
   useEffect(() => {
     clearLegacyDevKeys()
@@ -41,10 +60,15 @@ export default function Home() {
     else if (person) setSharedPerson(person)
     else if (group) setSharedGroup(group)
     else if (vote) { setSharedVote(vote); setActiveTab("pending") }
+    else setActiveTab(tabFromSearch())
     startOnlineIndexer(4000)
+    const onPopState = () => setActiveTabState(tabFromSearch())
+    window.addEventListener("popstate", onPopState)
     return () => {
       stopOnlineIndexer()
+      window.removeEventListener("popstate", onPopState)
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   if (!mounted) return null

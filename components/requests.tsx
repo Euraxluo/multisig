@@ -91,8 +91,17 @@ export default function Requests() {
                 {receivedRequests.map((request) => (
                   <motion.div key={request.id} variants={item}>
                     <Card
-                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
+                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={request.title}
                       onClick={() => setSelectedBill(request.id)}
+                      onKeyDown={(event) => {
+                        if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) {
+                          event.preventDefault()
+                          setSelectedBill(request.id)
+                        }
+                      }}
                     >
                       <div className={`h-1 bg-gradient-to-r ${request.color}`}></div>
                       <CardHeader className="p-3 pb-0">
@@ -138,8 +147,17 @@ export default function Requests() {
                 {sentRequests.map((request) => (
                   <motion.div key={request.id} variants={item}>
                     <Card
-                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm"
+                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                      role="button"
+                      tabIndex={0}
+                      aria-label={request.title}
                       onClick={() => setSelectedBill(request.id)}
+                      onKeyDown={(event) => {
+                        if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) {
+                          event.preventDefault()
+                          setSelectedBill(request.id)
+                        }
+                      }}
                     >
                       <div className={`h-1 bg-gradient-to-r ${request.color}`}></div>
                       <CardHeader className="p-3 pb-0">
