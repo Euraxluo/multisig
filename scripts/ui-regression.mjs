@@ -91,6 +91,22 @@ async function markOnboarded(context) {
 }
 
 try {
+  // P0-3: the pending tab is the default landing tab. A first-time visitor
+  // without a wallet session must get a dismissible prompt with a working
+  // connect entry, not a bare empty list.
+  await scenario("unconnected-pending-tab-shows-connect-prompt", async page => {
+    const prompt = page.locator("#pending-connect-title")
+    await prompt.waitFor()
+    const connect = page.getByRole("button", { name: "连接钱包", exact: true })
+    await connect.click()
+    await page.getByRole("dialog").waitFor()
+    await page.keyboard.press("Escape")
+    await page.getByRole("dialog").waitFor({ state: "hidden" })
+    // Dismissing must keep the lists reachable and stay dismissed.
+    await page.getByRole("button", { name: "暂不连接，继续浏览", exact: true }).click()
+    await prompt.waitFor({ state: "hidden" })
+  })
+
   await scenario("profile-navigation", async page => {
     await page.getByRole("button", { name: "我的", exact: true }).click()
     await page.getByText("钱包地址与二维码", { exact: true }).waitFor()
