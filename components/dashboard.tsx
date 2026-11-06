@@ -229,7 +229,8 @@ export default function Dashboard() {
                     <p className="text-xs text-muted-foreground">{group.network} Network</p>
                   </div>
                 </div>
-              </CardHeader>              <CardContent className="p-3">
+              </CardHeader>
+              <CardContent className="p-3">
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="text-xs text-muted-foreground flex items-center">
                     <Users className="h-3 w-3 mr-1" />
