@@ -10,6 +10,7 @@ import { MobileNavbar } from "@/components/mobile-navbar"
 import { FirstRunDialog } from "@/components/first-run-dialog"
 import { motion, AnimatePresence } from "framer-motion"
 import { startOnlineIndexer, stopOnlineIndexer } from "@/lib/online-indexer"
+import { useReducedMotion } from "@/hooks/use-reduced-motion"
 import { IdentityPanel } from "@/components/identity-panel"
 import { GroupDetailsDialog } from "@/components/group-details-dialog"
 import { VoteDetailsDialog } from "@/components/vote-details-dialog"
@@ -21,6 +22,7 @@ import { useI18n } from "@/components/i18n-provider"
 
 export default function Home() {
   const { t } = useI18n()
+  const reduceMotion = useReducedMotion()
   const [activeTab, setActiveTab] = useState("pending")
   const [mounted, setMounted] = useState(false)
   const [sharedPerson, setSharedPerson] = useState("")
@@ -58,9 +60,9 @@ export default function Home() {
           {activeTab === "dashboard" && (
             <motion.div
               key="dashboard"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
+              initial={reduceMotion ? false : { opacity: 0, y: 20 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
               <ErrorBoundary label={t("shell.boundaryDashboard")}><Dashboard /></ErrorBoundary>
@@ -69,9 +71,9 @@ export default function Home() {
           {activeTab === "agent" && (
             <motion.div
               key="agent"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
+              initial={reduceMotion ? false : { opacity: 0, y: 20 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
               <ErrorBoundary label={t("shell.boundaryAgent")}><AgentGuard /></ErrorBoundary>
@@ -80,9 +82,9 @@ export default function Home() {
           {activeTab === "payments" && (
             <motion.div
               key="payments"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
+              initial={reduceMotion ? false : { opacity: 0, y: 20 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
               <ErrorBoundary label={t("shell.boundaryPayments")}><Payments onShowProfile={() => setActiveTab("profile")} /></ErrorBoundary>
@@ -91,9 +93,9 @@ export default function Home() {
           {activeTab === "pending" && (
             <motion.div
               key="pending"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
+              initial={reduceMotion ? false : { opacity: 0, y: 20 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
               <ErrorBoundary label={t("shell.boundaryPending")}><PendingWork /></ErrorBoundary>
@@ -102,9 +104,9 @@ export default function Home() {
           {activeTab === "profile" && (
             <motion.div
               key="profile"
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
+              initial={reduceMotion ? false : { opacity: 0, y: 20 }}
+              animate={reduceMotion ? undefined : { opacity: 1, y: 0 }}
+              exit={reduceMotion ? undefined : { opacity: 0, y: -20 }}
               transition={{ duration: 0.3 }}
             >
               <ErrorBoundary label={t("shell.boundaryProfile")}><Profile onShowGroups={() => setActiveTab("dashboard")} /></ErrorBoundary>
