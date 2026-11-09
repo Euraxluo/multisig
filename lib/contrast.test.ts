@@ -100,6 +100,10 @@ const PAIRS: Pair[] = [
   { label: "destructive button label", fg: t => t["destructive-foreground"], bg: t => t.destructive, min: 4.5 },
   { label: "input border", fg: t => t.input, bg: t => t.background, min: 3 },
   { label: "focus ring", fg: t => t.ring, bg: t => t.background, min: 3 },
+  { label: "apple primary label on canvas", fg: t => t["label-primary"], bg: t => t["surface-canvas"], min: 4.5 },
+  { label: "apple primary label on card", fg: t => t["label-primary"], bg: t => t["surface-card"], min: 4.5 },
+  { label: "apple secondary label on canvas", fg: t => t["label-secondary"], bg: t => t["surface-canvas"], min: 4.5 },
+  { label: "apple secondary label on card", fg: t => t["label-secondary"], bg: t => t["surface-card"], min: 4.5 },
 ]
 
 for (const [theme, table] of [["light", light], ["dark", dark]] as const) {

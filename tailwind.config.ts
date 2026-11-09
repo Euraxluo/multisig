@@ -10,7 +10,55 @@ const config: Config = {
   ],
   theme: {
   	extend: {
+  		fontFamily: {
+  			sans: [
+  				'-apple-system',
+  				'BlinkMacSystemFont',
+  				'"SF Pro Text"',
+  				'"SF Pro Display"',
+  				'"PingFang SC"',
+  				'system-ui',
+  				'sans-serif'
+  			],
+  			display: [
+  				'"SF Pro Display"',
+  				'-apple-system',
+  				'BlinkMacSystemFont',
+  				'"PingFang SC"',
+  				'sans-serif'
+  			],
+  			mono: ['"SF Mono"', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace']
+  		},
+  		letterSpacing: {
+  			tighter: '-0.04em',
+  			tight: '-0.02em',
+  			normal: '0',
+  			wide: '0.02em'
+  		},
   		colors: {
+  			apple: {
+  				blue: '#007AFF',
+  				green: '#34C759',
+  				indigo: '#5856D6',
+  				orange: '#FF9500',
+  				pink: '#FF2D55',
+  				purple: '#AF52DE',
+  				red: '#FF3B30',
+  				teal: '#5AC8FA',
+  				yellow: '#FFCC00'
+  			},
+  			surface: {
+  				canvas: 'hsl(var(--surface-canvas) / <alpha-value>)',
+  				card: 'hsl(var(--surface-card) / <alpha-value>)',
+  				secondary: 'hsl(var(--surface-secondary) / <alpha-value>)'
+  			},
+  			label: {
+  				primary: 'hsl(var(--label-primary) / <alpha-value>)',
+  				secondary: 'hsl(var(--label-secondary) / <alpha-value>)',
+  				tertiary: 'hsl(var(--label-tertiary) / <alpha-value>)',
+  				quaternary: 'hsl(var(--label-quaternary) / <alpha-value>)'
+  			},
+  			separator: 'hsl(var(--separator) / <alpha-value>)',
   			background: 'hsl(var(--background))',
   			foreground: 'hsl(var(--foreground))',
   			card: {
@@ -63,9 +111,17 @@ const config: Config = {
   			}
   		},
   		borderRadius: {
+  			'3xl': '1.25rem',
+  			'2xl': '1rem',
+  			xl: '0.75rem',
   			lg: 'var(--radius)',
   			md: 'calc(var(--radius) - 2px)',
   			sm: 'calc(var(--radius) - 4px)'
+  		},
+  		transitionTimingFunction: {
+  			'apple-spring': 'cubic-bezier(0.175, 0.885, 0.32, 1.1)',
+  			'apple-ease': 'cubic-bezier(0.25, 1, 0.5, 1)',
+  			'apple-smooth': 'cubic-bezier(0.32, 0.72, 0, 1)'
   		},
   		keyframes: {
   			'accordion-down': {
