@@ -88,8 +88,17 @@ export function QuickActions({ groupId }: QuickActionsProps) {
           {quickActions.map((action, index) => (
             <motion.div key={index} variants={item}>
               <Card
-                className="cursor-pointer hover:shadow-md transition-all duration-200 border-none"
+                className="cursor-pointer hover:shadow-md transition-all duration-200 border-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                role="button"
+                tabIndex={0}
+                aria-label={action.title}
                 onClick={action.onClick}
+                onKeyDown={(event) => {
+                  if (event.target === event.currentTarget && ["Enter", " "].includes(event.key)) {
+                    event.preventDefault()
+                    action.onClick()
+                  }
+                }}
               >
                 <CardContent className="p-3 flex flex-col items-center justify-center">
                   <div
