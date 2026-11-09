@@ -250,15 +250,15 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[425px] p-0 gap-0 overflow-hidden">
-        <DialogHeader className="p-4 pb-0">
-          <DialogTitle>{t("groups.createGroupTitle")}</DialogTitle>
-          <DialogDescription>{t("groups.createLocalDraftDesc")}</DialogDescription>
+      <DialogContent className="sm:max-w-[440px] p-0 gap-0 overflow-hidden rounded-3xl">
+        <DialogHeader className="p-5 pb-0">
+          <DialogTitle className="text-lg font-bold">{t("groups.createGroupTitle")}</DialogTitle>
+          <DialogDescription className="text-xs text-muted-foreground">{t("groups.createLocalDraftDesc")}</DialogDescription>
           {contactsError && <p role="alert" className="text-xs text-destructive">{contactsError}</p>}
         </DialogHeader>
 
         <div className="relative overflow-hidden">
-          <div className="flex justify-between px-4 pt-4">
+          <div className="flex justify-between px-6 pt-4">
             {[1, 2, 3].map((i) => (
               <button
                 key={i}
@@ -267,28 +267,28 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                 onClick={() => i < step && setStep(i)}
                 aria-current={i === step ? "step" : undefined}
                 aria-label={t("groups.stepLabel", { step: i, name: [t("groups.createGroupStepDetails"), t("groups.createGroupStepMembers"), t("groups.createGroupStepReview")][i - 1] ?? "" })}
-                className="flex flex-col items-center rounded-md disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="flex flex-col items-center rounded-xl disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 <div
-                  className={`h-8 w-8 rounded-full flex items-center justify-center text-sm ${
+                  className={`h-8 w-8 rounded-full flex items-center justify-center text-xs font-semibold transition-all ${
                     i < step
-                      ? "bg-primary text-primary-foreground"
+                      ? "bg-primary text-primary-foreground shadow-sm"
                       : i === step
-                        ? "bg-primary/20 text-primary border-2 border-primary"
+                        ? "bg-primary/15 text-primary border-2 border-primary"
                         : "bg-muted text-muted-foreground"}`}
                 >
                   {i}
                 </div>
-                <div className="text-xs mt-1 text-muted-foreground">
+                <div className="text-xs mt-1 text-muted-foreground font-medium">
                   {i === 1 ? t("groups.createGroupStepDetails") : i === 2 ? t("groups.createGroupStepMembers") : t("groups.createGroupStepReview")}
                 </div>
               </button>
             ))}
-            <div className="absolute top-[28px] left-[68px] w-[120px] h-[2px] bg-muted">
-              <div className={`h-full bg-primary transition-all ${step > 1 ? "w-full" : "w-0"}`}></div>
+            <div className="absolute top-[28px] left-[78px] w-[110px] h-[2px] bg-muted">
+              <div className={`h-full bg-primary transition-all duration-300 ${step > 1 ? "w-full" : "w-0"}`}></div>
             </div>
-            <div className="absolute top-[28px] right-[68px] w-[120px] h-[2px] bg-muted">
-              <div className={`h-full bg-primary transition-all ${step > 2 ? "w-full" : "w-0"}`}></div>
+            <div className="absolute top-[28px] right-[78px] w-[110px] h-[2px] bg-muted">
+              <div className={`h-full bg-primary transition-all duration-300 ${step > 2 ? "w-full" : "w-0"}`}></div>
             </div>
           </div>
 
@@ -783,7 +783,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
                   type="button"
                   onClick={handleCreateGroup}
                   size="sm"
-                  className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90"
+                  className="rounded-xl active:scale-[0.98] transition-all shadow-sm"
                 >
                   {t("groups.createGroupAction")}
                 </Button>

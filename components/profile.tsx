@@ -155,13 +155,15 @@ export default function Profile({ onShowGroups }: { onShowGroups?: () => void })
 
   return <div className="space-y-4">
     <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
-      <Card className="overflow-hidden border-none shadow-sm">
-        <div className="relative h-24 bg-gradient-to-r from-primary to-purple-500"><div className="absolute -right-6 -top-12 h-40 w-40 rounded-full border-[24px] border-white/10" /></div>
+      <Card className="overflow-hidden rounded-2xl border border-border/40 bg-card shadow-sm">
+        <div className="relative h-24 bg-primary/10 border-b border-border/30">
+          <div className="absolute -right-6 -top-12 h-40 w-40 rounded-full border-[24px] border-primary/5" />
+        </div>
         <CardContent className="relative p-4 pt-0">
           <div className="flex items-start justify-between gap-3">
             <Avatar className="-mt-8 h-16 w-16 border-4 border-background shadow-md">
               {profile && safeAvatar(profile.avatarUrl) && <AvatarImage src={profile.avatarUrl} referrerPolicy="no-referrer" className="object-cover" alt={t("profile.avatarAlt")} />}
-              <AvatarFallback className="bg-gradient-to-br from-primary to-purple-500 text-xl font-semibold text-white">{address ? name.slice(0, 1).toUpperCase() : <Wallet className="h-6 w-6" />}</AvatarFallback>
+              <AvatarFallback className="bg-primary/15 text-primary text-xl font-semibold">{address ? name.slice(0, 1).toUpperCase() : <Wallet className="h-6 w-6" />}</AvatarFallback>
             </Avatar>
             <Badge variant="outline" className="mt-3 border-primary/25 text-primary">{t("profile.personalAccount")}</Badge>
           </div>

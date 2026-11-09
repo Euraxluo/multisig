@@ -1801,7 +1801,7 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
                       <Button
                         size="sm"
                         onClick={() => setIsCreateTxOpen(true)}
-                        className="bg-gradient-to-r from-primary to-purple-500 hover:from-primary/90 hover:to-purple-500/90 text-xs"
+                        className="bg-primary text-primary-foreground hover:bg-primary/90 text-xs shadow-sm font-medium rounded-xl"
                       >
                         <Plus className="h-3.5 w-3.5 mr-1" /> {t("groups.newTransferProposal")}</Button>
                     </div>

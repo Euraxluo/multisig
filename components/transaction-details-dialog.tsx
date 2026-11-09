@@ -383,7 +383,7 @@ export function TransactionDetailsDialog({ open, onOpenChange, transactionId, gr
                     </div>
                     <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                       <div
-                        className="h-full bg-gradient-to-r from-primary to-purple-500 transition-all duration-300"
+                        className="h-full bg-primary transition-all duration-300"
                         style={{
                           width: `${proposal.chainSyncedAt && proposal.requiredApprovals > 0 ? Math.min(100, (proposal.approvals / proposal.requiredApprovals) * 100) : 0}%`,
                         }}

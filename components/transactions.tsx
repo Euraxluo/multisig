@@ -172,7 +172,7 @@ export default function Transactions() {
                   pendingTransactions.map((tx) => (
                     <motion.div key={tx.id} variants={item}>
                       <Card
-                        className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm cursor-pointer"
+                        className="overflow-hidden rounded-2xl border border-border/60 bg-surface-card hover:border-primary/40 hover:shadow-md active:scale-[0.99] transition-all duration-200 shadow-sm cursor-pointer"
                         role="button"
                         tabIndex={0}
                         onClick={() => setSelectedTx({ id: tx.id, groupId: tx.groupId })}
@@ -183,26 +183,25 @@ export default function Transactions() {
                           }
                         }}
                       >
-                        <div className={`h-1 bg-gradient-to-r ${tx.color}`}></div>
-                        <CardHeader className="p-3 pb-0">
+                        <CardHeader className="p-4 pb-0">
                           <div className="flex items-start justify-between">
                             <div>
-                              <h3 className="font-medium text-sm">{tx.title}</h3>
-                              {tx.sourceStatus === "unverified" && <Badge variant="outline" className="my-1 text-[10px]">{t("tx.badgeLegacyUnverified")}</Badge>}
+                              <h3 className="font-semibold text-sm text-label-primary">{tx.title}</h3>
+                              {tx.sourceStatus === "unverified" && <Badge variant="outline" className="my-1 text-[10px] rounded-full">{t("tx.badgeLegacyUnverified")}</Badge>}
                               <p className="text-xs text-muted-foreground">{tx.groupName}</p>
                             </div>
                             <div className="flex space-x-2">
                               {getSpecialBadge(tx)}
                               <Badge
                                 variant={tx.status === "approved" ? "secondary" : "default"}
-                                className={`text-xs ${tx.status === "approved" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : ""}`}
+                                className={`text-xs rounded-full ${tx.status === "approved" ? "bg-emerald-500/10 text-emerald-600 border-emerald-500/20" : ""}`}
                               >
                                 {tx.status === "approved" ? t("tx.readyToExecute") : t("tx.awaitingApproval")}
                               </Badge>
                             </div>
                           </div>
                         </CardHeader>
-                        <CardContent className="p-3 pt-2">
+                        <CardContent className="p-4 pt-2">
                           <div className="flex items-center justify-between mb-1.5">
                             <div className="flex items-center text-xs text-muted-foreground">
                               {getTransactionIcon(tx)}
@@ -274,7 +273,7 @@ export default function Transactions() {
                 {completedTransactions.map((tx) => (
                   <motion.div key={tx.id} variants={item}>
                     <Card
-                      className="overflow-hidden hover:shadow-md transition-all duration-300 border-none shadow-sm cursor-pointer"
+                      className="overflow-hidden rounded-2xl border border-border/60 bg-surface-card hover:border-primary/40 hover:shadow-md active:scale-[0.99] transition-all duration-200 shadow-sm cursor-pointer"
                       role="button"
                       tabIndex={0}
                       onClick={() => setSelectedTx({ id: tx.id, groupId: tx.groupId })}
@@ -285,11 +284,10 @@ export default function Transactions() {
                         }
                       }}
                     >
-                      <div className={`h-1 bg-gradient-to-r ${tx.color}`}></div>
-                      <CardHeader className="p-3 pb-0">
+                      <CardHeader className="p-4 pb-0">
                         <div className="flex items-start justify-between">
                           <div>
-                            <h3 className="font-medium text-sm">{tx.title}</h3>
+                            <h3 className="font-semibold text-sm text-label-primary">{tx.title}</h3>
                             <p className="text-xs text-muted-foreground">{tx.groupName}</p>
                           </div>
                           <div className="flex space-x-2">
@@ -298,16 +296,16 @@ export default function Transactions() {
                                 row may claim the settlement outcome; otherwise the
                                 row says the outcome is unverified. */}
                             {tx.chainSyncedAt ? (
-                              <Badge variant={tx.status === "executed" ? "outline" : "destructive"} className="text-xs">
+                              <Badge variant={tx.status === "executed" ? "outline" : "destructive"} className="text-xs rounded-full">
                                 {tx.status === "executed" ? t("tx.executed") : t("tx.rejected")}
                               </Badge>
                             ) : (
-                              <Badge variant="outline" className="text-xs text-amber-700 dark:text-amber-300">{t("tx.localOutcomeUnverified")}</Badge>
+                              <Badge variant="outline" className="text-xs rounded-full text-amber-700 dark:text-amber-300">{t("tx.localOutcomeUnverified")}</Badge>
                             )}
                           </div>
                         </div>
                       </CardHeader>
-                      <CardContent className="p-3 pt-2">
+                      <CardContent className="p-4 pt-2">
                         <div className="flex items-center justify-between mb-1.5">
                           <div className="flex items-center text-xs text-muted-foreground">
                             {getTransactionIcon(tx)}

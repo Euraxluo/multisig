@@ -149,32 +149,32 @@ export function IdentityPanel({ target, onProfileLoaded }: { target?: string; on
   }
 
   const disabled = !!pending || loading
-  return <Card className="overflow-hidden border-primary/20 shadow-sm">
-    <CardHeader className="pb-3">
+  return <Card className="overflow-hidden rounded-2xl border border-border/60 bg-surface-card shadow-sm">
+    <CardHeader className="p-4 pb-3">
       <div className="flex items-center justify-between gap-2">
-        <h2 className="font-semibold">{t("misc.id.title")}</h2>
-        <div className="flex items-center gap-2"><Badge variant="outline">{t("misc.id.nsBadge")}</Badge><Button size="icon" variant="ghost" aria-label={t("misc.id.refreshAria")} disabled={!!pending || loading} onClick={() => setRevision(value => value + 1)}><RefreshCw className="h-4 w-4" /></Button></div>
+        <h2 className="font-semibold text-label-primary">{t("misc.id.title")}</h2>
+        <div className="flex items-center gap-2"><Badge variant="outline" className="rounded-full">{t("misc.id.nsBadge")}</Badge><Button size="icon" variant="ghost" aria-label={t("misc.id.refreshAria")} disabled={!!pending || loading} onClick={() => setRevision(value => value + 1)} className="rounded-full touch-target-expand"><RefreshCw className="h-4 w-4" /></Button></div>
       </div>
       <p className="text-xs text-muted-foreground">{t("misc.id.intro")}</p>
     </CardHeader>
-    <CardContent className="space-y-4">
+    <CardContent className="p-4 pt-0 space-y-4">
       {!target && <div className="grid grid-cols-2 gap-2">
-        <Button variant="outline" size="sm" className="rounded-lg" onClick={() => {
+        <Button variant="outline" size="sm" className="rounded-xl active:scale-[0.98]" onClick={() => {
           if (me) { setDmPeer(undefined); setDmOpen(true) }
           else setError(!address ? t("misc.id.dmInboxErrorNoWallet") : !configured ? t("misc.id.dmInboxErrorNoProtocol") : t("misc.id.dmInboxErrorNoIdentity"))
         }}><MessageSquare className="mr-1.5 h-4 w-4" />{t("misc.id.dmInbox")}</Button>
-        <Button variant="outline" size="sm" className="rounded-lg" onClick={() => {
+        <Button variant="outline" size="sm" className="rounded-xl active:scale-[0.98]" onClick={() => {
           if (me) { browse(""); document.getElementById("identity-following")?.scrollIntoView({ behavior: "smooth", block: "center" }) }
           else setError(!address ? t("misc.id.followsErrorNoWallet") : t("misc.id.followsErrorNoIdentity"))
         }}><Users className="mr-1.5 h-4 w-4" />{t("misc.id.myFollows")}</Button>
       </div>}
-      {!configured && <p className="rounded-lg bg-muted p-3 text-sm">{t("misc.id.notConfiguredNotice")}</p>}
+      {!configured && <p className="rounded-xl bg-muted/60 p-3 text-sm">{t("misc.id.notConfiguredNotice")}</p>}
       <>
         <form className="flex gap-2" onSubmit={e => { e.preventDefault(); if (lookup.trim()) browse(lookup) }}>
-          <Input aria-label={t("misc.id.lookupAria")} placeholder={t("misc.id.lookupPlaceholder")} value={lookup} onChange={e => setLookup(e.target.value)} disabled={!!pending} />
-          <Button type="submit" size="icon" aria-label={t("misc.id.searchAria")} disabled={disabled || !lookup.trim()}><Search className="h-4 w-4" /></Button>
+          <Input className="rounded-xl" aria-label={t("misc.id.lookupAria")} placeholder={t("misc.id.lookupPlaceholder")} value={lookup} onChange={e => setLookup(e.target.value)} disabled={!!pending} />
+          <Button type="submit" size="icon" className="rounded-xl active:scale-95 touch-target-expand" aria-label={t("misc.id.searchAria")} disabled={disabled || !lookup.trim()}><Search className="h-4 w-4" /></Button>
         </form>
-        {selectedTarget && <Button size="sm" variant="ghost" disabled={!!pending} onClick={() => { setLookup(""); browse("") }}>{t("misc.id.backToMine")}</Button>}
+        {selectedTarget && <Button size="sm" variant="ghost" className="rounded-xl active:scale-95" disabled={!!pending} onClick={() => { setLookup(""); browse("") }}>{t("misc.id.backToMine")}</Button>}
         {error && <p role="alert" className="break-words rounded-lg bg-destructive/10 p-3 text-sm text-destructive">{error}</p>}
         {notice && <p role="status" className="text-sm text-emerald-600">{notice}</p>}
         {(loading || !accountReady) && <p role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t("misc.id.loadingIdentity")}</p>}
@@ -213,7 +213,7 @@ export function IdentityPanel({ target, onProfileLoaded }: { target?: string; on
           </div>}
           <section id="identity-following" className="scroll-mt-20 space-y-2">
             <h3 className="flex items-center gap-1 text-sm font-medium"><Users className="h-4 w-4" />{own ? t("misc.id.myFollows") : t("misc.id.followingTitleOther")} · {viewed.followingCount}</h3>
-            {detailsLoading ? <p className="text-xs text-muted-foreground">{t("misc.id.loadingFollows")}</p> : following.length ? following.map(({ profile, mutual }) => <div key={profile.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 p-2">
+            {detailsLoading ? <p className="text-xs text-muted-foreground">{t("misc.id.loadingFollows")}</p> : following.length ? following.map(({ profile, mutual }) => <div key={profile.id} className="flex items-center justify-between gap-2 rounded-xl bg-surface-secondary/60 p-2.5 hover:bg-surface-secondary transition-colors">
               <button type="button" disabled={disabled} onClick={() => { setLookup(profile.address); browse(profile.address) }} className="flex min-w-0 items-center gap-2 truncate text-left text-sm text-primary"><IdentityAvatar profile={profile} size="sm" /><span className="truncate">{profile.displayName || `${profile.label}.id`}</span></button>
               <div className="flex shrink-0 items-center gap-1">{mutual && <Badge variant="secondary">{t("misc.id.mutual")}</Badge>}{me && profile.id !== me.id && <Button variant="ghost" size="sm" disabled={disabled} onClick={() => { setDmPeer(profile); setDmOpen(true) }}>{t("misc.id.dm")}</Button>}</div>
             </div>) : <p className="text-xs text-muted-foreground">{detailsError ? t("misc.id.followsFailed") : t("misc.id.noFollows")}</p>}
@@ -221,7 +221,7 @@ export function IdentityPanel({ target, onProfileLoaded }: { target?: string; on
           </section>
           <section id="identity-followers" className="scroll-mt-20 space-y-2">
             <h3 className="flex items-center gap-1 text-sm font-medium"><Users className="h-4 w-4" />{own ? t("misc.id.followersTitleMine") : t("misc.id.followersTitleOther")}{followers && <> · {followers.followers.length}{followers.truncated ? "+" : ""}</>}</h3>
-            {detailsLoading ? <p className="text-xs text-muted-foreground">{t("misc.id.rebuildingFollowers")}</p> : followers && followers.followers.length ? followers.followers.map(({ profile, mutual }) => <div key={profile.id} className="flex items-center justify-between gap-2 rounded-lg bg-muted/40 p-2">
+            {detailsLoading ? <p className="text-xs text-muted-foreground">{t("misc.id.rebuildingFollowers")}</p> : followers && followers.followers.length ? followers.followers.map(({ profile, mutual }) => <div key={profile.id} className="flex items-center justify-between gap-2 rounded-xl bg-surface-secondary/60 p-2.5 hover:bg-surface-secondary transition-colors">
               <button type="button" disabled={disabled} onClick={() => { setLookup(profile.address); browse(profile.address) }} className="flex min-w-0 items-center gap-2 truncate text-left text-sm text-primary"><IdentityAvatar profile={profile} size="sm" /><span className="truncate">{profile.displayName || `${profile.label}.id`}</span></button>
               <div className="flex shrink-0 items-center gap-1">{mutual && <Badge variant="secondary">{t("misc.id.mutual")}</Badge>}{me && profile.id !== me.id && <Button variant="ghost" size="sm" disabled={disabled} onClick={() => { setDmPeer(profile); setDmOpen(true) }}>{t("misc.id.dm")}</Button>}</div>
             </div>) : <p className="text-xs text-muted-foreground">{detailsError ? t("misc.id.followersFailed") : t("misc.id.noFollowers")}</p>}

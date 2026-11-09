@@ -126,11 +126,13 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-4">
-      <Card className="border-none bg-gradient-to-br from-primary/10 via-primary/5 to-emerald-500/10 shadow-sm">
-        <CardContent className="p-4">
+      <Card className="rounded-2xl border border-border/60 bg-surface-card shadow-sm overflow-hidden">
+        <CardContent className="p-5">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span>{t("dash.assetsTitle")}</span>
-            <TrendingUp className="h-4 w-4 text-primary" />
+            <span className="font-medium text-label-secondary">{t("dash.assetsTitle")}</span>
+            <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+              <TrendingUp className="h-3.5 w-3.5" />
+            </div>
           </div>
           {assetsLoading ? (
             <p className="mt-2 flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t("dash.assetsLoading")}</p>
@@ -138,8 +140,11 @@ export default function Dashboard() {
             <p className="mt-2 text-sm text-muted-foreground">{t("dash.assetsConnectFirst")}</p>
           ) : (
             <>
-              <p className="mt-2 truncate font-mono text-2xl font-bold tracking-tight">
-                {assets[0]?.balance ?? (assetsError ? t("dash.readFailed") : "—")} <span className="text-sm font-medium text-muted-foreground">{assets[0]?.symbol ?? (assetsError ? "" : "SUI")}</span>
+              <p className="mt-2 truncate font-mono text-3xl font-bold tracking-tight text-label-primary">
+                {assets[0]?.balance ?? (assetsError ? t("dash.readFailed") : "—")}{" "}
+                <span className="text-base font-semibold text-label-secondary">
+                  {assets[0]?.symbol ?? (assetsError ? "" : "SUI")}
+                </span>
               </p>
               <p className="mt-1 text-[11px] text-muted-foreground">
                 {assets.length > 1 ? t("dash.assetsMulti", { count: assets.length, rest: assets.length - 1 }) : t("dash.assetsRpcNote")}
@@ -157,8 +162,30 @@ export default function Dashboard() {
       </Card>
 
       <div className="grid grid-cols-2 gap-3">
-        <Card className="border-none border border-border/70 bg-card shadow-sm"><CardContent className="p-4"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{t("dash.myGroups")}</span><Users className="h-4 w-4 text-primary" /></div><p className="mt-2 text-2xl font-bold">{groupRows.length}</p><p className="mt-1 text-[11px] text-muted-foreground">{t("dash.statVerified", { count: groupRows.filter(group => group.sourceStatus === "chain-confirmed").length })}{chainOnly ? t("dash.statChainSuffix", { count: chainOnly }) : ""}</p></CardContent></Card>
-        <Card className="border-none bg-gradient-to-br from-primary/5 to-blue-500/10 shadow-sm"><CardContent className="p-4"><div className="flex items-center justify-between text-xs text-muted-foreground"><span>{t("dash.pendingApprovals")}</span><Clock className="h-4 w-4 text-primary" /></div><p className="mt-2 text-2xl font-bold">{pending}</p><p className="mt-1 text-[11px] text-muted-foreground">{t("dash.syncedProposals", { count: verified.length })}</p></CardContent></Card>
+        <Card className="rounded-2xl border border-border/60 bg-surface-card shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="font-medium text-label-secondary">{t("dash.myGroups")}</span>
+              <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+                <Users className="h-3.5 w-3.5" />
+              </div>
+            </div>
+            <p className="mt-2 text-2xl font-bold tracking-tight text-label-primary">{groupRows.length}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{t("dash.statVerified", { count: groupRows.filter(group => group.sourceStatus === "chain-confirmed").length })}{chainOnly ? t("dash.statChainSuffix", { count: chainOnly }) : ""}</p>
+          </CardContent>
+        </Card>
+        <Card className="rounded-2xl border border-border/60 bg-surface-card shadow-sm">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span className="font-medium text-label-secondary">{t("dash.pendingApprovals")}</span>
+              <div className="h-7 w-7 rounded-full bg-amber-500/10 flex items-center justify-center text-amber-600 dark:text-amber-400">
+                <Clock className="h-3.5 w-3.5" />
+              </div>
+            </div>
+            <p className="mt-2 text-2xl font-bold tracking-tight text-label-primary">{pending}</p>
+            <p className="mt-1 text-[11px] text-muted-foreground">{t("dash.syncedProposals", { count: verified.length })}</p>
+          </CardContent>
+        </Card>
       </div>
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-xl font-bold">{t("dash.myGroups")}</h2>
@@ -206,7 +233,7 @@ export default function Dashboard() {
         {groupRows.map((group) => (
           <motion.div key={group.id} variants={item}>
             <Card
-              className="overflow-hidden hover:shadow-md hover:border-primary/40 transition-all duration-200 border border-border bg-card shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              className="overflow-hidden rounded-2xl border border-border/60 bg-surface-card shadow-sm hover:shadow-md hover:border-primary/40 transition-all duration-200 cursor-pointer active:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               role="button"
               tabIndex={0}
               aria-label={group.name}
@@ -218,25 +245,24 @@ export default function Dashboard() {
                 }
               }}
             >
-              <div className="h-1 bg-primary"></div>
-              <CardHeader className="p-3 pb-0">
+              <CardHeader className="p-4 pb-0">
                 <div className="flex items-start justify-between">
                   <div className="min-w-0">
-                    <h3 className="font-medium text-sm truncate">{group.name}</h3>
-                    {group.origin === "chain" && <Badge variant="outline" className="my-1 text-[10px]">{t("dash.badgeChainFound")}</Badge>}
+                    <h3 className="font-semibold text-sm truncate text-label-primary">{group.name}</h3>
+                    {group.origin === "chain" && <Badge variant="outline" className="my-1 text-[10px] bg-primary/5 text-primary border-primary/20">{t("dash.badgeChainFound")}</Badge>}
                     {group.origin === "local" && group.sourceStatus === "unverified" && <Badge variant="outline" className="my-1 text-[10px]">{t("dash.badgeLegacyUnverified")}</Badge>}
                     {group.origin === "local" && group.membership === "not-member" && <Badge variant="outline" className="my-1 border-amber-500/30 text-[10px] text-amber-600 dark:text-amber-300">{t("dash.badgeNotInRoster")}</Badge>}
                     <p className="text-xs text-muted-foreground">{group.network} Network</p>
                   </div>
                 </div>
               </CardHeader>
-              <CardContent className="p-3">
+              <CardContent className="p-4 pt-2">
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="text-xs text-muted-foreground flex items-center">
-                    <Users className="h-3 w-3 mr-1" />
+                    <Users className="h-3.5 w-3.5 mr-1 text-primary/70" />
                     {t("dash.memberCount", { count: group.memberCount ?? group.members.length })}
                   </div>
-                  <div className="font-medium text-sm">
+                  <div className="font-medium text-sm text-label-primary">
                     {t("dash.threshold", { value: group.threshold ?? "—" })}
                   </div>
                 </div>
@@ -262,18 +288,18 @@ export default function Dashboard() {
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="h-7 text-xs text-primary flex items-center gap-1"
+                    className="h-7 text-xs text-primary flex items-center gap-1 rounded-lg active:scale-95 transition-all"
                     aria-haspopup="dialog"
                     onClick={event => { event.stopPropagation(); setSelectedGroup({ id: group.id, name: group.name }) }}
                   >
-                    {t("dash.viewDetails")} <ArrowRight className="h-4 w-4" />
+                    {t("dash.viewDetails")} <ArrowRight className="h-3.5 w-3.5" />
                   </Button>
                 </div>
                 {group.origin === "chain" && (
                   <Button
                     size="sm"
                     variant="outline"
-                    className="mt-2 h-7 w-full text-xs"
+                    className="mt-2.5 h-7 w-full text-xs rounded-lg active:scale-[0.98]"
                     onClick={event => { event.stopPropagation(); adoptGroup(group.orgObjectId) }}
                   >
                     {t("dash.adoptGroup")}

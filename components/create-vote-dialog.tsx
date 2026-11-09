@@ -944,7 +944,7 @@ export function CreateVoteDialog({ open, onOpenChange, draftId, initialVoteId, i
               ) : (
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" size="sm" variant="outline" onClick={handleCreateVote}>{t("voting.saveDraft")}</Button>
-                  <Button type="button" size="sm" disabled={publishing || !!published || recovery.blocked} onClick={() => void handlePublishVote()} className="bg-gradient-to-r from-primary to-purple-500">{publishing ? t("voting.waitingSignatureConfirm") : published ? t("voting.publishedLabel") : t("voting.publishVote")}</Button>
+                  <Button type="button" size="sm" disabled={publishing || !!published || recovery.blocked} onClick={() => void handlePublishVote()}>{publishing ? t("voting.waitingSignatureConfirm") : published ? t("voting.publishedLabel") : t("voting.publishVote")}</Button>
                 </div>
               )}
             </div>

@@ -36,21 +36,26 @@ export default function Payments({ onShowProfile }: { onShowProfile?: () => void
   }, [address])
 
   return <div className="space-y-4">
-    <Card className="overflow-hidden border-none bg-gradient-to-br from-primary/10 via-primary/5 to-purple-500/10 shadow-sm">
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between gap-3"><h2 className="text-sm font-medium text-muted-foreground">{t("payments.payWalletTitle")}</h2><Wallet className="h-4 w-4 text-primary" /></div>
+    <Card className="rounded-2xl border border-border/60 bg-surface-card shadow-sm overflow-hidden">
+      <CardContent className="p-5">
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-xs font-medium text-label-secondary">{t("payments.payWalletTitle")}</h2>
+          <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center text-primary">
+            <Wallet className="h-3.5 w-3.5" />
+          </div>
+        </div>
         <div className="mt-2 flex items-end justify-between gap-3">
           <div className="min-w-0 flex-1">
-            <p className="break-all text-2xl font-bold tracking-tight">
+            <p className="break-all text-3xl font-bold tracking-tight text-label-primary">
               {loading ? <Loader2 className="my-1 h-6 w-6 animate-spin" aria-label={t("payments.payLoadingBalance")} /> : address ? balance || "—" : t("payments.payConnectWallet")}
-              {balance && <span className="ml-2 text-sm font-medium text-muted-foreground">SUI</span>}
+              {balance && <span className="ml-2 text-base font-semibold text-label-secondary">SUI</span>}
             </p>
             <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">
               {address ? `${address.slice(0, 8)}…${address.slice(-6)}` : t("payments.payConnectHint")}
             </p>
           </div>
           {address ? (
-            <Button size="sm" variant="ghost" className="shrink-0 text-primary" onClick={onShowProfile}>
+            <Button size="sm" variant="ghost" className="shrink-0 text-primary rounded-xl active:scale-95 transition-all" onClick={onShowProfile}>
               {t("payments.payViewAssets")}<ArrowUpRight className="ml-1 h-4 w-4" />
             </Button>
           ) : null}

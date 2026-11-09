@@ -75,15 +75,15 @@ export function InvoiceDrafts() {
       {storageError && <p role="alert" className="text-xs text-destructive">{storageError}</p>}
 
       {invoices.length === 0 ? (
-        <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+        <p className="rounded-2xl border border-dashed border-border/60 p-6 text-center text-sm text-muted-foreground bg-muted/20">
           {t("payments.invDraftsEmpty")}
         </p>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-2.5">
           {invoices.map((invoice) => (
-            <Card key={invoice.invoiceNumber} className="border-none shadow-sm">
-              <CardContent className="flex items-center gap-3 p-3">
-                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <Card key={invoice.invoiceNumber} className="rounded-2xl border border-border/60 bg-surface-card hover:border-primary/40 hover:shadow-sm transition-all shadow-sm">
+              <CardContent className="flex items-center gap-3 p-3.5">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
                   <FileText className="h-4 w-4" />
                 </div>
                 <button
@@ -91,24 +91,24 @@ export function InvoiceDrafts() {
                   className="min-w-0 flex-1 text-left"
                   onClick={() => open(invoice)}
                 >
-                  <p className="truncate text-sm font-medium">#{invoice.invoiceNumber}</p>
+                  <p className="truncate text-sm font-semibold text-label-primary">#{invoice.invoiceNumber}</p>
                   <p className="truncate text-xs text-muted-foreground">
                     {invoice.recipient || t("payments.invNoRecipient")}
                     {invoice.dueDate ? t("payments.invDueSuffix", { date: new Date(invoice.dueDate).toLocaleDateString() }) : ""}
                   </p>
                 </button>
                 <div className="shrink-0 text-right">
-                  <p className="text-sm font-medium">{invoice.total} {invoice.token}</p>
-                  <Badge variant="outline" className="mt-1 text-[10px]">{invoice.paymentUri ? t("payments.invBadgeDraft") : t("payments.invBadgeNoLink")}</Badge>
+                  <p className="text-sm font-semibold text-label-primary">{invoice.total} {invoice.token}</p>
+                  <Badge variant="outline" className="mt-1 text-[10px] rounded-full">{invoice.paymentUri ? t("payments.invBadgeDraft") : t("payments.invBadgeNoLink")}</Badge>
                 </div>
                 <div className="flex shrink-0 items-center gap-1">
-                  <Button variant="ghost" size="icon" className="h-8 w-8" aria-label={t("payments.invEditLabel", { number: invoice.invoiceNumber })} onClick={() => open(invoice)}>
+                  <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full active:scale-95 touch-target-expand" aria-label={t("payments.invEditLabel", { number: invoice.invoiceNumber })} onClick={() => open(invoice)}>
                     <Pencil className="h-3.5 w-3.5" />
                   </Button>
                   <Button
                     variant={confirmingDelete === invoice.invoiceNumber ? "destructive" : "ghost"}
                     size="icon"
-                    className="h-8 w-8"
+                    className="h-8 w-8 rounded-full active:scale-95 touch-target-expand"
                     aria-label={confirmingDelete === invoice.invoiceNumber ? t("payments.invConfirmDeleteLabel", { number: invoice.invoiceNumber }) : t("payments.invDeleteLabel", { number: invoice.invoiceNumber })}
                     onClick={() => remove(invoice.invoiceNumber)}
                   >

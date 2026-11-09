@@ -14,7 +14,7 @@ import { NotificationsDialog } from "@/components/notifications-dialog"
 import { TemplateManagerDialog } from "@/components/template-manager-dialog"
 import { CreateVoteDialog } from "@/components/create-vote-dialog"
 import { motion } from "framer-motion"
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { normalizeSuiAddress } from "@mysten/sui/utils"
 import { getProposals } from "@/lib/onchain-store"
 import { buildProposalNotifications, readNotificationKeys, unreadCount } from "@/lib/notifications"
@@ -93,21 +93,29 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
     <>
       {/* Top Navbar: Mobile-first full width, Desktop centered card */}
       <div
-        className={`fixed top-0 left-0 right-0 z-40 flex h-14 items-center justify-between px-4 transition-all duration-200 md:max-w-2xl md:left-1/2 md:-translate-x-1/2 md:top-2 md:rounded-2xl md:border md:border-border/50 ${
-          scrolled ? "bg-background/95 backdrop-blur-md shadow-sm" : "bg-background/90 backdrop-blur-sm"
+        className={`fixed top-0 left-0 right-0 z-40 flex h-14 items-center justify-between px-4 transition-all duration-200 md:max-w-3xl lg:max-w-4xl md:left-1/2 md:-translate-x-1/2 md:top-3 md:rounded-2xl md:border ${
+          scrolled
+            ? "bg-background/85 backdrop-blur-xl saturate-180 border-border/60 shadow-sm"
+            : "bg-background/70 backdrop-blur-lg saturate-180 border-border/40"
         }`}
       >
         <div className="flex items-center space-x-2">
           <motion.h1
-            className="text-base font-bold text-primary"
+            className="text-base font-bold tracking-tight text-foreground"
             initial={reduceMotion ? false : { opacity: 0, x: -10 }}
             animate={reduceMotion ? undefined : { opacity: 1, x: 0 }}
           >
-            MultiSig
+            Multi<span className="text-primary font-bold">Sig</span>
           </motion.h1>
         </div>
         <div className="flex items-center space-x-1.5">
-          <Button variant="ghost" size="icon" aria-label={unread > 0 ? t("shell.notificationsWithUnread", { count: unread }) : t("shell.notifications")} onClick={() => setIsNotificationsOpen(true)} className="h-8 w-8 relative text-muted-foreground hover:text-foreground">
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={unread > 0 ? t("shell.notificationsWithUnread", { count: unread }) : t("shell.notifications")}
+            onClick={() => setIsNotificationsOpen(true)}
+            className="h-8 w-8 relative text-muted-foreground hover:text-foreground touch-target-expand rounded-full active:scale-95 transition-all"
+          >
             <Bell className="h-4 w-4" />
             {unread > 0 && (
               <span aria-hidden="true" className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold leading-none text-primary-foreground">
@@ -121,33 +129,44 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
                 variant="default"
                 size="icon"
                 aria-label={t("shell.menuCreate")}
-                className="h-8 w-8 rounded-full bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 shadow-sm"
+                className="h-8 w-8 rounded-full bg-primary hover:bg-primary/90 text-primary-foreground shadow-sm active:scale-95 transition-all touch-target-expand"
               >
                 <Plus className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onClick={() => setActiveTab("agent")}>
-                <Bot className="h-4 w-4 mr-2 text-primary" />
-                {t("shell.menuAgents")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setIsCreateOpen(true)}>
-                <Users className="h-4 w-4 mr-2" />
+            <DropdownMenuContent align="end" className="w-48 rounded-xl p-1 shadow-lg border-border/60 bg-popover/95 backdrop-blur-md">
+              <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground px-2 py-1">
+                {locale === "zh" ? "协同组织" : "Organization"}
+              </DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => setIsCreateOpen(true)} className="rounded-lg">
+                <Users className="h-4 w-4 mr-2 text-primary" />
                 {t("shell.menuNewGroup")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setIsPaymentOpen(true)}>
-                <Send className="h-4 w-4 mr-2" />
-                {t("shell.menuPersonalTransfer")}
-              </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setIsCreateTxOpen(true)}>
+              <DropdownMenuItem onClick={() => setIsCreateTxOpen(true)} className="rounded-lg">
                 <FileText className="h-4 w-4 mr-2" />
                 {t("shell.menuGroupProposal")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setIsCreateVoteOpen(true)}>
+              <DropdownMenuItem onClick={() => setIsCreateVoteOpen(true)} className="rounded-lg">
                 <Vote className="h-4 w-4 mr-2" />
                 {t("shell.menuNewVote")}
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setIsTemplateManagerOpen(true)}>
+              <DropdownMenuSeparator className="my-1 opacity-60" />
+              <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground px-2 py-1">
+                {locale === "zh" ? "资金流转" : "Transfers"}
+              </DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => setIsPaymentOpen(true)} className="rounded-lg">
+                <Send className="h-4 w-4 mr-2" />
+                {t("shell.menuPersonalTransfer")}
+              </DropdownMenuItem>
+              <DropdownMenuSeparator className="my-1 opacity-60" />
+              <DropdownMenuLabel className="text-[11px] font-medium text-muted-foreground px-2 py-1">
+                {locale === "zh" ? "工具与拓展" : "Tools"}
+              </DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => setActiveTab("agent")} className="rounded-lg">
+                <Bot className="h-4 w-4 mr-2 text-primary" />
+                {t("shell.menuAgents")}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsTemplateManagerOpen(true)} className="rounded-lg">
                 <Save className="h-4 w-4 mr-2" />
                 {t("shell.menuTemplates")}
               </DropdownMenuItem>
@@ -159,7 +178,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
             variant="outline"
             size="sm"
             onClick={() => setIsWalletOpen(true)}
-            className="h-8 px-2.5 text-xs gap-1.5 border-border/80 bg-muted/30 hover:bg-muted/60 transition-all rounded-full"
+            className="h-8 px-2.5 text-xs gap-1.5 border-border/60 bg-muted/40 hover:bg-muted/70 text-foreground active:scale-[0.98] transition-all rounded-full touch-target-expand"
           >
             {currentUser ? (
               <span className="flex items-center gap-1.5 text-xs font-medium">
@@ -182,7 +201,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
             size="sm"
             aria-label={t("shell.switchLanguage")}
             onClick={() => setLocale(locale === "zh" ? "en" : "zh")}
-            className="h-8 px-2 text-xs font-semibold border-border/80 bg-muted/30 hover:bg-muted/60 rounded-full"
+            className="h-8 px-2 text-xs font-semibold border-border/60 bg-muted/40 hover:bg-muted/70 text-foreground active:scale-[0.98] rounded-full touch-target-expand"
           >
             <Languages className="h-3.5 w-3.5 text-primary" />
             {locale === "zh" ? "EN" : "中"}
@@ -193,7 +212,7 @@ export function MobileNavbar({ activeTab, setActiveTab }: MobileNavbarProps) {
       {/* Bottom Nav: Mobile fixed bottom, Desktop floating dock */}
       <nav
         aria-label={t("shell.primaryNav")}
-        className="fixed bottom-0 left-0 right-0 z-40 bg-background/95 backdrop-blur-md border-t border-border/40 flex justify-around py-1 px-2 pb-[max(0.25rem,env(safe-area-inset-bottom,0px))] md:max-w-lg md:left-1/2 md:-translate-x-1/2 md:bottom-3 md:rounded-2xl md:border md:shadow-lg"
+        className="fixed bottom-0 left-0 right-0 z-40 bg-background/85 backdrop-blur-xl saturate-180 border-t border-border/40 flex justify-around py-1 px-2 pb-[max(0.25rem,env(safe-area-inset-bottom,0px))] md:max-w-md md:left-1/2 md:-translate-x-1/2 md:bottom-4 md:rounded-2xl md:border md:shadow-lg"
       >
         <NavButton
           icon={<FileText className="h-5 w-5" />}

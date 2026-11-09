@@ -30,37 +30,37 @@ export function QuickActions({ groupId }: QuickActionsProps) {
     {
       title: groupId ? t("dash.qaNewProposal") : t("dash.qaTransfer"),
       icon: <Send className="h-4 w-4" />,
-      color: "bg-blue-500",
+      color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
       onClick: () => setIsCreateTransactionOpen(true),
     },
     {
       title: t("dash.qaRequest"),
       icon: <ArrowUpRight className="h-4 w-4" />,
-      color: "bg-emerald-500",
+      color: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
       onClick: () => setIsPaymentRequestOpen(true),
     },
     {
       title: t("dash.qaScheduled"),
       icon: <CalendarClock className="h-4 w-4" />,
-      color: "bg-amber-500",
+      color: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
       onClick: () => setIsPaymentSchedulerOpen(true),
     },
     {
       title: t("dash.qaStream"),
       icon: <Waves className="h-4 w-4" />,
-      color: "bg-violet-500",
+      color: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
       onClick: () => setIsStreamPaymentOpen(true),
     },
     {
       title: t("dash.qaInvoice"),
       icon: <Receipt className="h-4 w-4" />,
-      color: "bg-rose-500",
+      color: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
       onClick: () => setIsInvoiceGeneratorOpen(true),
     },
     {
       title: t("dash.qaTemplates"),
       icon: <FileText className="h-4 w-4" />,
-      color: "bg-primary",
+      color: "bg-primary/10 text-primary",
       onClick: () => setIsTemplateManagerOpen(true),
     },
   ]
@@ -88,7 +88,7 @@ export function QuickActions({ groupId }: QuickActionsProps) {
           {quickActions.map((action, index) => (
             <motion.div key={index} variants={item}>
               <Card
-                className="cursor-pointer hover:shadow-md transition-all duration-200 border-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                className="cursor-pointer hover:shadow-sm active:scale-[0.96] transition-all duration-150 rounded-2xl border border-border/60 bg-surface-card focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 role="button"
                 tabIndex={0}
                 aria-label={action.title}
@@ -100,13 +100,13 @@ export function QuickActions({ groupId }: QuickActionsProps) {
                   }
                 }}
               >
-                <CardContent className="p-3 flex flex-col items-center justify-center">
+                <CardContent className="p-3.5 flex flex-col items-center justify-center">
                   <div
-                    className={`h-8 w-8 rounded-full bg-gradient-to-br ${action.color} flex items-center justify-center text-white mb-2`}
+                    className={`h-10 w-10 rounded-2xl ${action.color} flex items-center justify-center mb-2 shadow-xs transition-transform`}
                   >
                     {action.icon}
                   </div>
-                  <span className="text-xs font-medium">{action.title}</span>
+                  <span className="text-xs font-medium text-label-primary text-center">{action.title}</span>
                 </CardContent>
               </Card>
             </motion.div>
