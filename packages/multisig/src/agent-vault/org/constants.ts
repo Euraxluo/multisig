@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x088870b092be097230b02eeb4787df34ef6848ba92edf0bd9afcae6e3218585f';
+export const AGENT_VAULT_PACKAGE_ID = '0xef671151bb0da2198d1addcbeabc03e8e24513ebe0bb357ff217c7ea613cfb0f';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -35,8 +35,10 @@ export const MODULES = {
 export const DOMAINS = {
   PROPOSAL: 'SUI_ORG_PROPOSAL_V1:',
   THRESHOLD_APPROVAL: 'SUI_ORG_APPROVAL_V1:',
-  KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V1:',
+  KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V2:',
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
+  POP: 'SUI_ORG_POP_V1:',
+  TREASURY_TRANSFER: 'SUI_ORG_TREASURY_TRANSFER_V1:',
 } as const;
 
 /** 组织绑定的链标识（DEFAULT_CHAIN_ID 固化 sui-testnet:；mainnet 走 create_organization_with_chain_id）。 */
@@ -88,6 +90,7 @@ export const ORG_ERRORS: Readonly<Record<number, string>> = {
   1007: 'E_SESSION_NOT_FINALIZED',
   1008: 'E_THRESHOLD_EXCEEDS_SIGNERS',
   1009: 'E_THRESHOLD_BELOW_KEY',
+  1010: 'E_INVALID_POP',
 };
 
 /**
@@ -98,6 +101,7 @@ export const ORG_NAMED_ERRORS: Readonly<Record<number, { name: string; message: 
   1: { name: 'EInvalidRoster', message: 'Roster must contain 1 to 128 distinct nonzero addresses with matching positive weights, and cover the current roster exactly.' },
   2: { name: 'EUnreachableThreshold', message: 'Threshold weight must be positive and must not exceed the sum of the roster weights.' },
   3: { name: 'ENoRosterChange', message: 'The supplied roster and threshold are identical to the stored organization.' },
+  4: { name: 'EKeySignerRemoved', message: 'Removing a key signer from the roster requires rotating the group key first.' },
 };
 
 /** agent_vault::vault 数字错误码（2001–2011 与合约常量逐一对齐）。 */
@@ -113,6 +117,14 @@ export const VAULT_ERRORS: Readonly<Record<number, string>> = {
   2009: 'E_AGENT_LIMIT_REACHED',
   2010: 'E_AGENT_ALREADY_SPAWNED',
   2011: 'E_INVALID_SERVICE_HASH',
+  2012: 'E_EXCEEDS_AGENT_BUDGET_CAP',
+  2013: 'E_EXCEEDS_EPOCH_OUTFLOW',
+  2014: 'E_ZERO_RECIPIENT',
+};
+
+/** asynchronous_proposal 数字错误码（2701 门限签名校验失败，与合约逐一对齐）。 */
+export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
+  2701: 'E_THRESHOLD_SIGNATURE_INVALID',
 };
 
 /** dkg_committee 数字错误码（3013 死桩已删除，不在表内）。 */
@@ -261,5 +273,6 @@ export function explainAbort(substatus: string): string | null {
     return `red_packet ${RED_PACKET_ERRORS[code].name} (${code}): ${RED_PACKET_ERRORS[code].message}`;
   }
   if (module === 'vault' && VAULT_ERRORS[code]) return `vault ${VAULT_ERRORS[code]} (${code})`;
+  if (module === 'asynchronous_proposal' && ASYNC_PROPOSAL_ERRORS[code]) return `asynchronous_proposal ${ASYNC_PROPOSAL_ERRORS[code]} (${code})`;
   return `${module} error ${code} (未注册)`;
 }

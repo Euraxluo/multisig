@@ -73,10 +73,22 @@ export function buildRotateGroupKeyPTB(
     orgId: string;
     nonce: number | bigint;
     newGroupPk: Uint8Array;
+    newSigners: string[];
+    popSignature: Uint8Array;
     frostSignature: Uint8Array;
   },
 ): Transaction {
   if (input.newGroupPk.length !== 32) throw new Error(`newGroupPk 必须 32 字节，实际 ${input.newGroupPk.length}`);
+  const signers = [...input.newSigners];
+  const seen = new Set<string>();
+  for (const s of signers) {
+    const c = s.toLowerCase();
+    if (seen.has(c)) throw new Error(`newSigners 重复: ${s}`);
+    seen.add(c);
+  }
+  if (signers.length === 0 || signers.length > LIMITS.MAX_ROSTER_MEMBERS) {
+    throw new Error(`newSigners 数量须在 1..${LIMITS.MAX_ROSTER_MEMBERS}，实际 ${signers.length}`);
+  }
   const tx = new Transaction();
   tx.moveCall({
     target: `${pkg(input)}::cryptographic_org::rotate_group_key`,
@@ -84,7 +96,60 @@ export function buildRotateGroupKeyPTB(
       tx.object(input.orgId),
       tx.pure.u64(checkedU64(input.nonce)),
       tx.pure.vector('u8', Array.from(input.newGroupPk)),
+      tx.pure.vector('address', signers),
+      tx.pure.vector('u8', Array.from(input.popSignature)),
       tx.pure.vector('u8', Array.from(input.frostSignature)),
+    ],
+  });
+  return tx;
+}
+
+/** 创建组织（PoP：群私钥对 computeCreatePopDigest 的 ed25519 签名）。 */
+export function buildCreateOrganizationPTB(
+  input: GovernanceTarget & {
+    groupPk: Uint8Array;
+    thresholdWeight: number | bigint;
+    members: string[];
+    weights: Array<number | bigint>;
+    popSignature: Uint8Array;
+  },
+): Transaction {
+  if (input.groupPk.length !== 32) throw new Error(`groupPk 必须 32 字节，实际 ${input.groupPk.length}`);
+  if (input.members.length !== input.weights.length) throw new Error('名册与权重长度不一致');
+  if (input.members.length === 0) throw new Error('名册不能为空');
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pkg(input)}::cryptographic_org::create_organization`,
+    arguments: [
+      tx.pure.vector('u8', Array.from(input.groupPk)),
+      tx.pure.u64(checkedU64(input.thresholdWeight)),
+      tx.pure.vector('address', input.members),
+      tx.pure.vector('u64', input.weights.map((w) => checkedU64(w))),
+      tx.pure.vector('u8', Array.from(input.popSignature)),
+    ],
+  });
+  return tx;
+}
+
+/** Master 设置金库流出策略（默认全 0 = 拒绝一切 agent 花费，直到显式放宽）。 */
+export function buildSetOutflowPolicyPTB(
+  input: GovernanceTarget & {
+    coinType: string;
+    masterCapId: string;
+    vaultId: string;
+    maxEpochOutflow: number | bigint;
+    maxAgentBudget: number | bigint;
+  },
+): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pkg(input)}::vault::set_outflow_policy`,
+    typeArguments: [input.coinType],
+    arguments: [
+      tx.object(input.masterCapId),
+      tx.object(input.vaultId),
+      tx.pure.u64(checkedU64(input.maxEpochOutflow)),
+      tx.pure.u64(checkedU64(input.maxAgentBudget)),
     ],
   });
   return tx;

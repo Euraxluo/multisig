@@ -98,7 +98,7 @@ async function runDemo() {
   console.log(`  ✓ 签名节点计算并交换部分签名份额 z_i = r_i + c * λ_i * s_i`);
 
   // 聚合签名
-  const finalSignature = ThresholdSignerNode.aggregateSignature(nonceCommitments, sigShares);
+  const finalSignature = ThresholdSignerNode.aggregateSignature(proposalMsg, groupPkBytes, nonceCommitments, sigShares);
   console.log(`  ✓ 聚合生成标准 64 字节 Ed25519 签名:`);
   console.log(`    0x${Buffer.from(finalSignature).toString('hex')}`);
 
@@ -198,7 +198,7 @@ async function runDemo() {
 
   const newNonces = newSigners.map((s) => s.generateNonceCommitment());
   const newSigShares = newSigners.map((s) => s.computeSignatureShare(newProposal, groupPkBytes, newNonces));
-  const newFinalSig = ThresholdSignerNode.aggregateSignature(newNonces, newSigShares);
+  const newFinalSig = ThresholdSignerNode.aggregateSignature(newProposal, groupPkBytes, newNonces, newSigShares);
 
   const isNewSigValid = ThresholdSignerNode.verifyThresholdSignature(newFinalSig, newProposal, groupPkBytes);
   console.log(`  ✓ 包含新成员 Eve 的门限聚合签名: 0x${Buffer.from(newFinalSig).toString('hex')}`);
@@ -309,10 +309,9 @@ async function runAsyncDemo() {
 
   const nonces = signers.map((s) => s.generateNonceCommitment());
   const sigShares = signers.map((s) => s.computeSignatureShare(proposalMsg, finalized.groupPublicKey, nonces));
-  const finalSig = ThresholdSignerNode.aggregateSignature(nonces, sigShares);
-
-  const isValid = ThresholdSignerNode.verifyThresholdSignature(finalSig, proposalMsg, finalized.groupPublicKey);
+  const finalSig = ThresholdSignerNode.aggregateSignature(proposalMsg, finalized.groupPublicKey, nonces, sigShares);
   console.log(`  ✓ 门限聚合 Ed25519 签名: 0x${Buffer.from(finalSig).toString('hex').slice(0, 32)}... (64 bytes)`);
+  const isValid = ThresholdSignerNode.verifyThresholdSignature(finalSig, proposalMsg, finalized.groupPublicKey);
   console.log(`  ${GREEN}${BOLD}★ Sui 链上验签仿真结果: ${isValid ? 'PASS (签名合法且有效!)' : 'FAIL'}${RESET}`);
 
   console.log(`\n${CYAN}${BOLD}╔══════════════════════════════════════════════════════════════════════════╗
@@ -420,7 +419,7 @@ async function runFullyAsyncDemo() {
 
   const nonces = signers.map((s) => s.generateNonceCommitment());
   const sigShares = signers.map((s) => s.computeSignatureShare(proposalMsg, charlieFinal.groupPublicKey, nonces));
-  const finalSig = ThresholdSignerNode.aggregateSignature(nonces, sigShares);
+  const finalSig = ThresholdSignerNode.aggregateSignature(proposalMsg, charlieFinal.groupPublicKey, nonces, sigShares);
 
   const isValid = ThresholdSignerNode.verifyThresholdSignature(finalSig, proposalMsg, charlieFinal.groupPublicKey);
   console.log(`  ✓ 自动化 Keeper/Relayer 聚合签名上链执行: 0x${Buffer.from(finalSig).toString('hex').slice(0, 32)}...`);

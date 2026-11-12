@@ -61,22 +61,92 @@ export function computeThresholdApprovalDigest(input: {
   );
 }
 
-/** H(DOMAIN_KEY_ROTATION || … || new_group_pk)，rotate_group_key 用。 */
+/**
+ * H(DOMAIN_KEY_ROTATION_V2 || … || new_group_pk || bcs(new_signers))，rotate_group_key 用。
+ * V2 绑定新公钥 + 新签名者名单：签名不可重放到不同的 signer 集合。
+ */
 export function computeKeyRotationDigest(input: {
   chainId: Uint8Array | string;
   orgId: string;
   epochVersion: number | bigint;
   nonce: number | bigint;
   newGroupPk: Uint8Array;
+  newSigners: string[];
 }): Uint8Array {
   return sha256(
     concat(
-      utf8('SUI_ORG_KEY_ROTATION_V1:'),
+      utf8('SUI_ORG_KEY_ROTATION_V2:'),
       chainBytes(input.chainId),
       requireAddress(input.orgId, 'orgId'),
       u64le(input.epochVersion),
       u64le(input.nonce),
       requireDigest32(input.newGroupPk, 'newGroupPk'),
+      bcsVectorAddress(input.newSigners),
+    ),
+  );
+}
+
+/** H(DOMAIN_POP || chain_id || group_pk || bcs(members) || bcs(weights) || bcs(threshold))，创建组织 PoP。 */
+export function computeCreatePopDigest(input: {
+  chainId: Uint8Array | string;
+  groupPk: Uint8Array;
+  members: string[];
+  weights: Array<number | bigint>;
+  thresholdWeight: number | bigint;
+}): Uint8Array {
+  if (input.members.length !== input.weights.length) {
+    throw new Error(`名册与权重长度不一致: ${input.members.length} vs ${input.weights.length}`);
+  }
+  return sha256(
+    concat(
+      utf8('SUI_ORG_POP_V1:'),
+      chainBytes(input.chainId),
+      requireDigest32(input.groupPk, 'groupPk'),
+      bcsVectorAddress(input.members),
+      bcsVectorU64(input.weights),
+      u64le(input.thresholdWeight),
+    ),
+  );
+}
+
+/** H(DOMAIN_POP || chain_id || bcs(org_id) || bcs(new_epoch) || new_group_pk)，轮换 PoP（新公钥自证持有私钥）。 */
+export function computeRotatePopDigest(input: {
+  chainId: Uint8Array | string;
+  orgId: string;
+  newEpochVersion: number | bigint;
+  newGroupPk: Uint8Array;
+}): Uint8Array {
+  return sha256(
+    concat(
+      utf8('SUI_ORG_POP_V1:'),
+      chainBytes(input.chainId),
+      requireAddress(input.orgId, 'orgId'),
+      u64le(input.newEpochVersion),
+      requireDigest32(input.newGroupPk, 'newGroupPk'),
+    ),
+  );
+}
+
+/** H(DOMAIN_TREASURY_TRANSFER || … || bcs(proposal_id) || bcs(recipient) || bcs(amount))，国库转账门限执行。 */
+export function computeTreasuryTransferDigest(input: {
+  chainId: Uint8Array | string;
+  orgId: string;
+  epochVersion: number | bigint;
+  nonce: number | bigint;
+  proposalId: string;
+  recipient: string;
+  amount: number | bigint;
+}): Uint8Array {
+  return sha256(
+    concat(
+      utf8('SUI_ORG_TREASURY_TRANSFER_V1:'),
+      chainBytes(input.chainId),
+      requireAddress(input.orgId, 'orgId'),
+      u64le(input.epochVersion),
+      u64le(input.nonce),
+      requireAddress(input.proposalId, 'proposalId'),
+      requireAddress(input.recipient, 'recipient'),
+      u64le(input.amount),
     ),
   );
 }

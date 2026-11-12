@@ -20,7 +20,7 @@ function event(poll: PollSnapshot): SuiClientTypes.EventEntry {
 }
 function fixture(initial = snapshot()) {
   const org = { id: orgId, group_pk: [], threshold_weight: "7", epoch_version: "2", last_nonce: "0", chain_id: [],
-    members_weight: { id: tableId, size: "2" }, executed_proposals: { id: id(7), size: "0" } }
+    members_weight: { id: tableId, size: "2" }, executed_proposals: { id: id(7), size: "0" }, key_signers: [] }
   const state = { orgType: `${PROPOSAL_TYPE_ORIGIN}::cryptographic_org::Organization`, owner: { $kind: "Shared" } as { $kind: string },
     weights: { [creator]: 7, [voter]: 3 }, pollTypeError: null as Error | null, eventError: null as Error | null,
     pages: [{ events: [event(initial)], hasNextPage: false, endCursor: null, startCursor: null }] as SuiClientTypes.ListEventsResponse[] }

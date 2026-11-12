@@ -32,6 +32,7 @@ function fixture(overrides: { vaultVersion?: bigint; paused?: boolean; capVersio
         last_spent_epoch: overrides.lastSpentEpoch ?? "10", service_target_hash: Array.from(new TextEncoder().encode("api.example::infer")), is_active: overrides.capActive ?? true,
       },
     }] },
+    max_epoch_outflow: "1000000000000", epoch_outflow: "0", outflow_epoch: "10", max_agent_budget: "500000000000",
   }).toBytes()
   const master = masterCapBcs.serialize({ id: masterId, vault_id: vaultId }).toBytes()
   const operator = operatorCapBcs.serialize({ id: operatorId, vault_id: vaultId, vault_version: "1", operator_address: alice }).toBytes()
@@ -244,7 +245,7 @@ test("deposit resolves an exact coin value for the configured type", () => {
 })
 
 test("a created vault and MasterCap are resolved from the confirmed object set, never guessed", async () => {
-  const vaultBytes = agentVaultBcs.serialize({ id: vaultId, balance: "0", vault_version: "1", total_subagents: "0", paused: false, agents: { contents: [] } }).toBytes()
+  const vaultBytes = agentVaultBcs.serialize({ id: vaultId, balance: "0", vault_version: "1", total_subagents: "0", paused: false, agents: { contents: [] }, max_epoch_outflow: "0", epoch_outflow: "0", outflow_epoch: "0", max_agent_budget: "0" }).toBytes()
   const capBytes = masterCapBcs.serialize({ id: masterId, vault_id: vaultId }).toBytes()
   const client = (objects: Array<unknown>, content = true) => ({
     getObjects: async () => ({ objects: objects.map((object, index) => object instanceof Error ? object : {

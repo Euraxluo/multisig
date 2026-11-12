@@ -112,10 +112,10 @@ export function createGroupVaultReader(client: GroupVaultClient, config: GroupVa
       const vaultType = `${typeOrigin}::vault::AgentVault`
       const capType = `${typeOrigin}::vault::MasterCap`
       const specs: Array<[string, string, string, number[], boolean, string[]]> = [
-        ["vault", "AgentVault", typeOrigin, [4], true, ["id:" + framework("object::UID"), "balance:" + framework("balance::Balance") + "<$0>", "vault_version:u64", "total_subagents:u64", "paused:bool"]],
+        ["vault", "AgentVault", typeOrigin, [4], true, ["id:" + framework("object::UID"), "balance:" + framework("balance::Balance") + "<$0>", "vault_version:u64", "total_subagents:u64", "paused:bool", "agents:" + framework("vec_map::VecMap") + "<address,", "max_epoch_outflow:u64", "epoch_outflow:u64", "outflow_epoch:u64", "max_agent_budget:u64"]],
         ["vault", "MasterCap", typeOrigin, [3, 4], false, ["id:" + framework("object::UID"), "vault_id:" + framework("object::ID")]],
         ["vault", "VaultCreatedEvent", typeOrigin, [1, 2], false, ["vault_id:" + framework("object::ID"), "initial_version:u64"]],
-        ["cryptographic_org", "Organization", organizationTypeOrigin, [4], false, ["id:" + framework("object::UID"), "group_pk:vector<u8>", "threshold_weight:u64", "epoch_version:u64", "last_nonce:u64", "chain_id:vector<u8>", "members_weight:" + framework("table::Table") + "<address,u64>", "executed_proposals:" + framework("table::Table") + "<vector<u8>,bool>"]],
+        ["cryptographic_org", "Organization", organizationTypeOrigin, [4], false, ["id:" + framework("object::UID"), "group_pk:vector<u8>", "threshold_weight:u64", "epoch_version:u64", "last_nonce:u64", "chain_id:vector<u8>", "members_weight:" + framework("table::Table") + "<address,u64>", "executed_proposals:" + framework("table::Table") + "<vector<u8>,bool>", "key_signers:vector<address>"]],
       ]
       for (const [moduleName, name, origin, abilities, generic, fields] of specs) {
         const type = datatype(moduleName, name)
@@ -125,7 +125,11 @@ export function createGroupVaultReader(client: GroupVaultClient, config: GroupVa
         // Some gRPC servers omit the origin table; definingId still supplies the original type identity.
         if (pkg.typeOrigins.length && (origins.length !== 1 || objectId(origins[0].packageId || "") !== origin)) throw abiError(t("groups.abiTypeOriginTable"))
         if (type.kind !== 1 || type.variants.length || !same([...type.abilities].sort(), abilities) || type.typeParameters.length !== (generic ? 1 : 0) || (generic && (!type.typeParameters[0].isPhantom || type.typeParameters[0].constraints.length))) throw abiError(t("groups.abiAbilitiesOrGenerics"))
-        if (type.fields.length !== fields.length || type.fields.some((field, index) => !field.type || field.position !== index || `${field.name}:${bodySignature(field.type)}` !== fields[index])) throw abiError(t("groups.abiFieldLayout", { name }))
+        const layoutOk = (field: Datatype['fields'][number] | undefined, index: number): boolean => !!field?.type && field.position === index
+          && ((name === "AgentVault" && field.name === "agents")
+            ? `${field.name}:${bodySignature(field.type)}`.startsWith(fields[index])
+            : `${field.name}:${bodySignature(field.type)}` === fields[index])
+        if (type.fields.length !== fields.length || type.fields.some((field, index) => !layoutOk(field, index))) throw abiError(t("groups.abiFieldLayout", { name }))
       }
       const expectedFunctions: Record<string, string[]> = {
         deposit: [`&mut ${vaultType}<$0>`, framework("coin::Coin") + "<$0>"],
@@ -410,14 +414,15 @@ export function createGroupVaultReader(client: GroupVaultClient, config: GroupVa
     return tx
   }
 
-  async function buildExecuteTreasury(sender: string, treasuryId: string, orgId: string, proposalId: string, bindingId: string): Promise<Transaction> {
+  async function buildExecuteTreasury(sender: string, treasuryId: string, orgId: string, proposalId: string, bindingId: string, threshold?: { nonce: bigint; frostSignature: Uint8Array }): Promise<Transaction> {
     const account = objectId(sender), id = objectId(proposalId)
     const treasury = await readTreasury(treasuryId, orgId), transfer = await readBoundTransfer(bindingId, treasury)
     const org = await readOrganization(orgId), proposal = transfer.proposal
     if (transfer.proposalId !== id) throw new Error(t("groups.bindingProposalMismatch"))
     if (proposal.status !== 1 || BigInt(proposal.epoch) !== org.epoch || BigInt(proposal.accumulated_weight) < BigInt(proposal.threshold_weight) || BigInt(proposal.deadline_ms) < BigInt(Date.now()) || BigInt(proposal.amount) <= 0n || BigInt(proposal.amount) > treasury.balance) throw new Error(t("groups.proposalNotExecutable"))
+    if (!threshold || typeof threshold.nonce !== "bigint" || !(threshold.frostSignature instanceof Uint8Array)) throw new Error("执行 treasury 转出需要门限签名（nonce + FROST 签名），请先完成签名会话")
     const dep = await requireTreasuryDeployment()
-    const tx = buildExecuteTreasuryTransfer({ packageId: dep.packageId, treasuryId: treasury.treasuryId!, bindingId: transfer.bindingId, orgId: treasury.orgId, proposalId: id, vaultId: treasury.id }) as unknown as Transaction
+    const tx = buildExecuteTreasuryTransfer({ packageId: dep.packageId, treasuryId: treasury.treasuryId!, bindingId: transfer.bindingId, orgId: treasury.orgId, proposalId: id, vaultId: treasury.id, nonce: threshold.nonce, frostSignature: threshold.frostSignature }) as unknown as Transaction
     tx.setSender(account)
     return tx
   }

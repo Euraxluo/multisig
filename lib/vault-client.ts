@@ -91,14 +91,14 @@ export class AgentVaultClient {
   // 密码学组织 / 门限治理 — 直通
   // ------------------------------------------------------------------
 
-  public buildCreateOrganizationPTB(groupPk: Uint8Array, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[]): Transaction {
-    return ptb(this.sdk.buildCreateOrganizationPTB(groupPk, thresholdWeight, members, weights));
+  public buildCreateOrganizationPTB(groupPk: Uint8Array, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[], popSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildCreateOrganizationPTB(groupPk, thresholdWeight, members, weights, popSignature));
   }
   public buildAdvanceOrganizationEpochPTB(orgId: string, nonce: bigint | number, frostSignature: Uint8Array): Transaction {
     return ptb(this.sdk.buildAdvanceOrganizationEpochPTB(orgId, nonce, frostSignature));
   }
-  public buildRotateGroupKeyPTB(orgId: string, nonce: bigint | number, newGroupPk: Uint8Array, frostSignature: Uint8Array): Transaction {
-    return ptb(this.sdk.buildRotateGroupKeyPTB(orgId, nonce, newGroupPk, frostSignature));
+  public buildRotateGroupKeyPTB(orgId: string, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[], popSignature: Uint8Array, frostSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildRotateGroupKeyPTB(orgId, nonce, newGroupPk, newSigners, popSignature, frostSignature));
   }
   public buildUpdateOrganizationRosterPTB(orgId: string, nonce: bigint | number, priorMembers: string[], members: string[], weights: (bigint | number)[], newThresholdWeight: bigint | number, frostSignature: Uint8Array): Transaction {
     return ptb(this.sdk.buildUpdateOrganizationRosterPTB(orgId, nonce, priorMembers, members, weights, newThresholdWeight, frostSignature));
@@ -352,8 +352,8 @@ export function computeThresholdApprovalDigest(chainId: Uint8Array | string, org
   return sdkApprovalDigest({ chainId, orgId, epochVersion, nonce, newEpochVersion });
 }
 
-export function computeKeyRotationDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newGroupPk: Uint8Array): Uint8Array {
-  return sdkKeyRotationDigest({ chainId, orgId, epochVersion, nonce, newGroupPk });
+export function computeKeyRotationDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[]): Uint8Array {
+  return sdkKeyRotationDigest({ chainId, orgId, epochVersion, nonce, newGroupPk, newSigners });
 }
 
 export function computeRosterUpdateDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[]): Uint8Array {

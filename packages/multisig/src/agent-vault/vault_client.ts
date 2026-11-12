@@ -189,7 +189,8 @@ export class AgentVaultClient {
     groupPk: Uint8Array,
     thresholdWeight: bigint | number,
     members: string[],
-    weights: (bigint | number)[]
+    weights: (bigint | number)[],
+    popSignature: Uint8Array
   ): Transaction {
     if (groupPk.length !== 32) throw new Error('组织群公钥必须是 32 字节。');
     if (members.length !== weights.length) throw new Error('成员地址数与权重数必须一致。');
@@ -221,6 +222,7 @@ export class AgentVaultClient {
         tx.pure.u64(threshold),
         tx.pure.vector('address', members),
         tx.pure.vector('u64', weights.map(w => BigInt(w))),
+        tx.pure.vector('u8', Array.from(popSignature)),
       ],
     });
     return tx;
@@ -340,6 +342,8 @@ export class AgentVaultClient {
     orgId: string,
     nonce: bigint | number,
     newGroupPk: Uint8Array,
+    newSigners: string[],
+    popSignature: Uint8Array,
     frostSignature: Uint8Array
   ): Transaction {
     const tx = new Transaction();
@@ -350,6 +354,8 @@ export class AgentVaultClient {
         tx.object(orgId),
         tx.pure.u64(BigInt(nonce)),
         tx.pure.vector('u8', Array.from(newGroupPk)),
+        tx.pure.vector('address', newSigners),
+        tx.pure.vector('u8', Array.from(popSignature)),
         tx.pure.vector('u8', Array.from(frostSignature)),
       ],
     });

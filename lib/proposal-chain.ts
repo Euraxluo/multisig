@@ -16,7 +16,7 @@ export const ProposalContent = AsyncTransferProposalBcs
 export const OrganizationContent = bcs.struct("Organization", {
   id: bcs.Address, group_pk: bcs.vector(bcs.u8()), threshold_weight: bcs.u64(),
   epoch_version: bcs.u64(), last_nonce: bcs.u64(), chain_id: bcs.vector(bcs.u8()),
-  members_weight: Table, executed_proposals: Table,
+  members_weight: Table, executed_proposals: Table, key_signers: bcs.vector(bcs.Address),
 })
 const WeightField = bcs.struct("WeightField", { id: bcs.Address, name: bcs.Address, value: bcs.u64() })
 const requestSignal = () => AbortSignal.timeout(20_000)

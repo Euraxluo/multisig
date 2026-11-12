@@ -13,6 +13,7 @@ export const AgentVecMapBcs = bcs.struct('VecMap', {
 export const AgentVaultBcs = bcs.struct('AgentVault', {
   id: bcs.Address, balance: bcs.u64(), vault_version: bcs.u64(), total_subagents: bcs.u64(), paused: bcs.bool(),
   agents: AgentVecMapBcs,
+  max_epoch_outflow: bcs.u64(), epoch_outflow: bcs.u64(), outflow_epoch: bcs.u64(), max_agent_budget: bcs.u64(),
 });
 export const MasterCapBcs = bcs.struct('MasterCap', { id: bcs.Address, vault_id: bcs.Address });
 export const OperatorCapBcs = bcs.struct('OperatorCap', { id: bcs.Address, vault_id: bcs.Address, vault_version: bcs.u64(), operator_address: bcs.Address });

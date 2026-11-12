@@ -18,8 +18,9 @@ const capType = `${origin}::vault::MasterCap`
 const addr = (value: string) => Buffer.from(value.slice(2), "hex")
 const u64 = (value: bigint) => Buffer.from(value.toString(16).padStart(16, "0").match(/../g)!.reverse().join(""), "hex")
 // Independent Move serialization: UID, Balance<T>.value, version, subagent count, bool.
-// 末字节 0x00 = agents VecMap 空表（2026-10-29 起 vault 内联卡片表）
-const vaultBytes = Uint8Array.from(Buffer.concat([addr(vaultId), u64((1n << 64n) - 1n), u64(3n), u64(2n), Buffer.from([1]), Buffer.from([0])]))
+// 末字节 0x00 = agents VecMap 空表（2026-10-29 起 vault 内联卡片表），
+// 其后 4 个 u64 = max_epoch_outflow / epoch_outflow / outflow_epoch / max_agent_budget（2026-11-12 流出策略）。
+const vaultBytes = Uint8Array.from(Buffer.concat([addr(vaultId), u64((1n << 64n) - 1n), u64(3n), u64(2n), Buffer.from([1]), Buffer.from([0]), u64(1000n), u64(0n), u64(10n), u64(500n)]))
 const capBytes = Uint8Array.from(Buffer.concat([addr(capId), addr(vaultId)]))
 
 type RawPackage = NonNullable<Awaited<ReturnType<GroupVaultClient["movePackageService"]["getPackage"]>>["response"]["package"]>
@@ -37,18 +38,19 @@ function packageFixture(): RawPackage {
   return {
     storageId: pkg, modules: [
       { name: "vault", datatypes: [
-        rawType("vault", "AgentVault", [["id", uid], ["balance", datatype("0x2::balance::Balance", [generic])], ["vault_version", primitive(6)], ["total_subagents", primitive(6)], ["paused", primitive(2)]], [4], true),
+        rawType("vault", "AgentVault", [["id", uid], ["balance", datatype("0x2::balance::Balance", [generic])], ["vault_version", primitive(6)], ["total_subagents", primitive(6)], ["paused", primitive(2)], ["agents", datatype("0x2::vec_map::VecMap", [primitive(1), datatype(`${origin}::vault::AgentRecord`)])], ["max_epoch_outflow", primitive(6)], ["epoch_outflow", primitive(6)], ["outflow_epoch", primitive(6)], ["max_agent_budget", primitive(6)]], [4], true),
+        rawType("vault", "AgentRecord", [["daily_budget_limit", primitive(6)], ["spent_in_current_epoch", primitive(6)], ["last_spent_epoch", primitive(6)], ["service_target_hash", vector(primitive(3))], ["is_active", primitive(2)]], [5]),
         rawType("vault", "MasterCap", [["id", uid], ["vault_id", idType]], [3, 4]),
         rawType("vault", "VaultCreatedEvent", [["vault_id", idType], ["initial_version", primitive(6)]], [1, 2]),
       ], functions: [
         { name: "deposit", visibility: 2, isEntry: false, typeParameters: [{ constraints: [] }], parameters: [parameter(datatype(`${origin}::vault::AgentVault`, [generic]), 2), parameter(datatype("0x2::coin::Coin", [generic]))], returns: [] },
         { name: "withdraw", visibility: 2, isEntry: false, typeParameters: [{ constraints: [] }], parameters: [parameter(datatype(capType), 1), parameter(datatype(`${origin}::vault::AgentVault`, [generic]), 2), parameter(primitive(6)), parameter(primitive(1)), parameter(datatype("0x2::tx_context::TxContext"), 2)], returns: [] },
       ] },
-      { name: "cryptographic_org", datatypes: [rawType("cryptographic_org", "Organization", [["id", uid], ["group_pk", vector(primitive(3))], ["threshold_weight", primitive(6)], ["epoch_version", primitive(6)], ["last_nonce", primitive(6)], ["chain_id", vector(primitive(3))], ["members_weight", datatype("0x2::table::Table", [primitive(1), primitive(6)])], ["executed_proposals", datatype("0x2::table::Table", [vector(primitive(3)), primitive(2)])]], [4])], functions: [] },
+      { name: "cryptographic_org", datatypes: [rawType("cryptographic_org", "Organization", [["id", uid], ["group_pk", vector(primitive(3))], ["threshold_weight", primitive(6)], ["epoch_version", primitive(6)], ["last_nonce", primitive(6)], ["chain_id", vector(primitive(3))], ["members_weight", datatype("0x2::table::Table", [primitive(1), primitive(6)])], ["executed_proposals", datatype("0x2::table::Table", [vector(primitive(3)), primitive(2)])], ["key_signers", vector(primitive(1))]], [4])], functions: [] },
     ], typeOrigins: [], linkage: [],
   }
 }
-const organizationBytes = (pk = key) => OrganizationContent.serialize({ id: orgId, group_pk: Array.from(pk), threshold_weight: "2", epoch_version: "1", last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")), members_weight: { id: address("0x20"), size: "3" }, executed_proposals: { id: address("0x21"), size: "0" } }).toBytes()
+const organizationBytes = (pk = key) => OrganizationContent.serialize({ id: orgId, group_pk: Array.from(pk), threshold_weight: "2", epoch_version: "1", last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")), members_weight: { id: address("0x20"), size: "3" }, executed_proposals: { id: address("0x21"), size: "0" }, key_signers: [] }).toBytes()
 function fakeClient() {
   const metadata = packageFixture()
   type Obj = { objectId: string; type: string; owner: SuiClientObjectOwner; content: Uint8Array }
@@ -168,17 +170,17 @@ test("metadata checks original origin, storage identity, exact fields and deposi
   const mutations: Array<(pkg: RawPackage) => void> = [
     pkg => { pkg.storageId = other },
     pkg => { pkg.modules[0].datatypes[0].definingId = other },
-    pkg => { pkg.modules[0].datatypes[1].abilities = [4] },
+    pkg => { pkg.modules[0].datatypes[2].abilities = [4] },
     pkg => { pkg.modules[0].datatypes[0].typeParameters[0].constraints = [3] },
-    pkg => { pkg.modules[0].datatypes[0].fields.push({ name: "extra", position: 5, type: primitive(6) }) },
+    pkg => { pkg.modules[0].datatypes[0].fields.push({ name: "extra", position: 10, type: primitive(6) }) },
     pkg => { pkg.modules[0].functions[0].parameters[0].reference = 1 },
     pkg => { pkg.modules[0].functions[0].returns = [{ body: primitive(6) }] },
     pkg => { pkg.modules[0].functions[0].typeParameters[0].constraints = [3] },
     pkg => { pkg.modules[0].functions[0].parameters.reverse() },
     pkg => { pkg.typeOrigins = [{ moduleName: "vault", datatypeName: "AgentVault", packageId: other }] },
-    pkg => { pkg.modules[1].datatypes[0].fields.at(-1)!.type = datatype("0x2::table::Table", [datatype("0x2::object::ID"), datatype(capType)]) },
+    pkg => { pkg.modules[1].datatypes[0].fields.at(-1)!.type = vector(primitive(3)) },
   ]
-  for (const mutate of mutations) {
+  for (const [index, mutate] of mutations.entries()) {
     const fake = fakeClient(); mutate(fake.metadata)
     await assert.rejects(fake.reader().requireDeployment(), /ABI/)
   }
@@ -387,17 +389,18 @@ test("transfer recovery reads actual proposal and binding and supports terminal 
 
 test("execution validates treasury binding, proposal org, approval, epoch and amount before PTB", async () => {
   const fake = treasuryFake(), reader = fake.reader()
-  const tx = (await reader.buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId)).getData()
+  const threshold = { nonce: 5n, frostSignature: new Uint8Array(64).fill(1) }
+  const tx = (await reader.buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId, threshold)).getData()
   assert.equal(tx.commands[0].MoveCall?.function, "execute")
-  assert.equal(tx.commands[0].MoveCall?.arguments.length, 6)
-  assert.deepEqual(tx.inputs.map(input => input.UnresolvedObject?.objectId), [treasuryId, bindingId, orgId, proposalId, vaultId, address("0x6")])
-  await assert.rejects(reader.buildExecuteTreasury(alice, treasuryId, orgId, other, bindingId), /提案不匹配/)
+  assert.equal(tx.commands[0].MoveCall?.arguments.length, 8)
+  assert.deepEqual(tx.inputs.map(input => input.UnresolvedObject?.objectId), [treasuryId, bindingId, orgId, proposalId, vaultId, undefined, undefined, address("0x6")])
+  await assert.rejects(reader.buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId), /门限签名/)
+  await assert.rejects(reader.buildExecuteTreasury(alice, treasuryId, orgId, other, bindingId, threshold), /提案不匹配/)
   for (const patch of [{ status: 2 }, { accumulated_weight: "1" }, { epoch: "0" }, { deadline_ms: "1" }]) {
     const testFake = treasuryFake()
     testFake.objects.get(proposalId)!.content = ProposalContent.serialize({ ...ProposalContent.parse(testFake.objects.get(proposalId)!.content), ...patch }).toBytes()
-    await assert.rejects(testFake.reader().buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId))
+    await assert.rejects(testFake.reader().buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId, threshold))
   }
   fake.objects.get(bindingId)!.content = treasuryBindingBcs.serialize({ id: bindingId, treasury_id: other, proposal_id: proposalId }).toBytes()
-  await assert.rejects(reader.buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId), /转账绑定/)
+  await assert.rejects(reader.buildExecuteTreasury(alice, treasuryId, orgId, proposalId, bindingId, threshold), /转账绑定/)
 })
-

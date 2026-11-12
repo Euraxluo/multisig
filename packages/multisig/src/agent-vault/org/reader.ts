@@ -21,6 +21,8 @@ export interface OrganizationSnapshot {
   chainId: string;
   memberCount: bigint;
   replayTableSize: bigint;
+  /** 当前轮换周期的密钥签名者名单（rotate_group_key 设置；改册不可移除）。 */
+  keySigners: string[];
   /** 下一提案 nonce = last_nonce + 1（提案前必须重读链上，防撞号）。 */
   nextNonce: bigint;
 }
@@ -65,6 +67,9 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
   const chainId = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(chainBytes);
   const membersWeight = r.table();
   const executedProposals = r.table();
+  const signerCount = r.uleb();
+  const keySigners: string[] = [];
+  for (let i = 0; i < signerCount; i++) keySigners.push(r.address());
   if (r.remaining !== 0) throw new Error('Organization BCS 存在多余字节');
   return {
     id,
@@ -76,6 +81,7 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
     chainId,
     memberCount: membersWeight.size,
     replayTableSize: executedProposals.size,
+    keySigners,
     nextNonce: lastNonce + 1n,
   };
 }

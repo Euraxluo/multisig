@@ -1,5 +1,5 @@
 import { MIST_PER_SUI } from '@mysten/sui/utils';
-import { Point, evaluatePolynomial, generatePolynomial, createCommitments } from './vss';
+import { evaluatePolynomial, generatePolynomial, createCommitments } from './vss';
 import { mod, lagrangeCoefficient } from './math';
 import { ThresholdSignerNode } from './threshold_signer';
 import type { NonceCommitment, SignatureShare } from './threshold_signer';
@@ -30,7 +30,7 @@ export interface SentinelSignResult {
   reason: string;
   signerId: string;
   signerIndex: bigint;
-  nonceCommitment?: Point;
+  nonceCommitment?: NonceCommitment;
   signatureShare?: bigint;
   latencyMs: number;
 }

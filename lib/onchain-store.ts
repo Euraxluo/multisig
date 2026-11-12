@@ -571,6 +571,9 @@ export async function executeProposal(proposalId: string): Promise<{ success: bo
     if (treasury) {
       const { treasuryId, bindingId } = treasuryIds(target)
       // The wrapper checks immutable treasury/proposal binding and custody on chain.
+      // Treasury execution now requires a threshold signature (nonce + FROST); the
+      // signing ceremony UI is owned by Main and not wired here yet — omitting the
+      // argument makes group-vaults throw the dedicated error until then.
       tx = await groupVaults.buildExecuteTreasury(account.address, treasuryId, snapshot.orgId, snapshot.id, bindingId)
     } else {
       // A legacy Proposal has no vault binding; use only the explicitly saved personal-cap source.
