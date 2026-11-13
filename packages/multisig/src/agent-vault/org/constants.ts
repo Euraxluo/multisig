@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x827268c43588a928fc24ce48dee65ab2f89af54d0481e8060a83b54c1ea325e5';
+export const AGENT_VAULT_PACKAGE_ID = '0xce550b77f97866cb922834e4185585c61396ba953bacd27ee92f352b93cf9fc5';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -125,6 +125,8 @@ export const VAULT_ERRORS: Readonly<Record<number, string>> = {
 /** asynchronous_proposal 数字错误码（2701 门限签名校验失败，与合约逐一对齐）。 */
 export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
   2701: 'E_THRESHOLD_SIGNATURE_INVALID',
+  4017: 'E_INVALID_TITLE',
+  4018: 'E_INVALID_DEADLINE',
 };
 
 /** dkg_committee 数字错误码（3013 死桩已删除，不在表内）。 */
@@ -168,6 +170,7 @@ export const ASSET_CUSTODY_ERRORS: Readonly<Record<number, { name: string; messa
   19: { name: 'EWrongAsset', message: 'A returned asset must be the exact object the receipt was issued for.' },
   20: { name: 'ESlotReassigned', message: 'The approved slot now holds a different asset than the proposal approved.' },
   21: { name: 'EBorrowerMismatch', message: "Only the proposal's proposer may borrow; a release remains relayable because its recipient is frozen." },
+  22: { name: 'EBorrowWindowExpired', message: "A borrow must be taken within the proposal's borrow window (min(deadline, creation+5min)); create a fresh proposal instead." },
 };
 
 export const GOVERNANCE_POLL_ERRORS: Readonly<Record<number, { name: string; message: string }>> = {

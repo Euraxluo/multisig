@@ -128,7 +128,7 @@ export async function submitGovernanceApproval(vote: GovernanceVote, reject: boo
 }
 
 const Cap = bcs.struct("SubagentCoSignCap", {
-  id: bcs.Address, master_owner: bcs.Address, agent_address: bcs.Address, voter_weight: bcs.u64(), max_budget_per_tx: bcs.u64(),
+  id: bcs.Address, master_owner: bcs.Address, issued_epoch: bcs.u64(), agent_address: bcs.Address, voter_weight: bcs.u64(), max_budget_per_tx: bcs.u64(),
   daily_budget_limit: bcs.u64(), spent_today: bcs.u64(), expires_at_ms: bcs.u64(), is_revoked: bcs.bool(),
 })
 export async function submitGovernanceFollow(vote: GovernanceVote, policy: ShadowPolicy): Promise<string> {

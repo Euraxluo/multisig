@@ -203,8 +203,8 @@ export class AgentVaultClient {
   public buildExecuteTransferProposalPTB(proposalId: string, orgId: string, vaultId: string, masterCapId: string, coinType?: string): Transaction {
     return ptb(this.sdk.buildExecuteTransferProposalPTB(proposalId, orgId, vaultId, masterCapId, coinType));
   }
-  public buildCreateSharedSubagentCapPTB(agentAddress: string, voterWeight: bigint | number, maxBudgetPerTx: bigint | number, dailyBudgetLimit: bigint | number, expiresAtMs: bigint | number): Transaction {
-    return ptb(this.sdk.buildCreateSharedSubagentCapPTB(agentAddress, voterWeight, maxBudgetPerTx, dailyBudgetLimit, expiresAtMs));
+  public buildCreateSharedSubagentCapPTB(orgId: string, agentAddress: string, voterWeight: bigint | number, maxBudgetPerTx: bigint | number, dailyBudgetLimit: bigint | number, expiresAtMs: bigint | number): Transaction {
+    return ptb(this.sdk.buildCreateSharedSubagentCapPTB(orgId, agentAddress, voterWeight, maxBudgetPerTx, dailyBudgetLimit, expiresAtMs));
   }
   public buildRevokeSubagentCapPTB(capId: string): Transaction {
     return ptb(this.sdk.buildRevokeSubagentCapPTB(capId));

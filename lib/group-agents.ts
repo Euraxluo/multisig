@@ -20,7 +20,7 @@ const id = (value: string) => {
 }
 
 export const subagentCapBcs = bcs.struct("SubagentCoSignCap", {
-  id: bcs.Address, master_owner: bcs.Address, agent_address: bcs.Address, voter_weight: bcs.u64(),
+  id: bcs.Address, master_owner: bcs.Address, issued_epoch: bcs.u64(), agent_address: bcs.Address, voter_weight: bcs.u64(),
   max_budget_per_tx: bcs.u64(), daily_budget_limit: bcs.u64(), spent_today: bcs.u64(),
   expires_at_ms: bcs.u64(), is_revoked: bcs.bool(),
 })
@@ -36,7 +36,7 @@ export interface GroupAgentDelegation {
   /** Member who issued the delegation; the vote is recorded under this address. */
   masterOwner: string
   agentAddress: string
-  /** Weight the cap was issued with; must equal the live roster weight to be accepted. */
+  /** Weight the cap was issued with. In-epoch it must equal the live roster weight; cross-epoch the contract accepts the smaller of the two. */
   voterWeight: bigint
   /** Live roster weight of the issuing member. Non-members' caps are not group-scoped and are omitted. */
   rosterWeight: bigint

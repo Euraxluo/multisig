@@ -21,7 +21,7 @@ function organization() {
 
 function capBytes(overrides: Partial<{ id: string; master: string; agent: string; weight: string; perTx: string; daily: string; spent: string; expires: string; revoked: boolean }> = {}) {
   return subagentCapBcs.serialize({
-    id: overrides.id ?? address("0x30"), master_owner: overrides.master ?? alice, agent_address: overrides.agent ?? agentAlice,
+    id: overrides.id ?? address("0x30"), master_owner: overrides.master ?? alice, issued_epoch: "1", agent_address: overrides.agent ?? agentAlice,
     voter_weight: overrides.weight ?? "1", max_budget_per_tx: overrides.perTx ?? "5000000000", daily_budget_limit: overrides.daily ?? "20000000000",
     spent_today: overrides.spent ?? "0", expires_at_ms: overrides.expires ?? String(NOW + 86_400_000), is_revoked: overrides.revoked ?? false,
   }).toBytes()

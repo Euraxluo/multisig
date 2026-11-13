@@ -52,6 +52,8 @@ export const CustodyProposalBcs = bcs.struct('CustodyProposal', {
   rejected_weight: bcs.u64(),
   voters: TableHandle,
   deadline_ms: bcs.u64(),
+  /** borrow proposals must be taken within this window (min(deadline, creation+5min)); #12 mitigation */
+  borrow_deadline_ms: bcs.u64(),
   status: bcs.u8(),
 });
 

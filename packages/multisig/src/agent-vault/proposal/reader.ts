@@ -30,6 +30,7 @@ export function rejectingVoterKeyBcs(voter: string): Uint8Array {
 export const SubagentCoSignCapBcs = bcs.struct('SubagentCoSignCap', {
   id: bcs.Address,
   master_owner: bcs.Address,
+  issued_epoch: bcs.u64(),
   agent_address: bcs.Address,
   voter_weight: bcs.u64(),
   max_budget_per_tx: bcs.u64(),
@@ -46,6 +47,7 @@ export interface ProposalGovernanceReadOptions { signal?: AbortSignal }
 export interface SubagentCoSignCapSnapshot {
   id: string;
   masterOwner: string;
+  issuedEpoch: bigint;
   agentAddress: string;
   voterWeight: bigint;
   maxBudgetPerTx: bigint;
@@ -80,6 +82,7 @@ export async function readSubagentCoSignCap(
   return {
     id: capId,
     masterOwner: normalizeSuiAddress(fields.master_owner),
+    issuedEpoch: BigInt(fields.issued_epoch),
     agentAddress: normalizeSuiAddress(fields.agent_address),
     voterWeight: BigInt(fields.voter_weight),
     maxBudgetPerTx: BigInt(fields.max_budget_per_tx),

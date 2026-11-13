@@ -761,6 +761,7 @@ export class AgentVaultClient {
 
   /** 签发并共享 SubagentCoSignCap（推荐生产模式）。返回 PTB；cap_id 从事件/共享对象读取。 */
   public buildCreateSharedSubagentCapPTB(
+    orgId: string,
     agentAddress: string,
     voterWeight: bigint | number,
     maxBudgetPerTx: bigint | number,
@@ -772,6 +773,7 @@ export class AgentVaultClient {
       target: `${this.packageId}::asynchronous_proposal::create_shared_subagent_cap`,
       typeArguments: [],
       arguments: [
+        tx.object(orgId),
         tx.pure.address(agentAddress),
         tx.pure.u64(BigInt(voterWeight)),
         tx.pure.u64(BigInt(maxBudgetPerTx)),
