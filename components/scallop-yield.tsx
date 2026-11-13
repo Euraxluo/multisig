@@ -99,14 +99,12 @@ export function ScallopYieldPanel({ channelId, readOnly, run, busy }: ScallopYie
     const recipient = redeemRecipient.trim()
     if (!recipient) throw new Error(t("walrus.scallopRecipientRequired"))
     setPending(true); setError(""); setNotice("")
-    try {
-      await run(() => buildRecordPrincipalRedemption({ adapterId, suiReturned: amount, recipient }) as unknown as Transaction, t("walrus.scallopRunRedeem"))
-      setNotice(t("walrus.scallopRedeemNotice"))
-      setRedeemAmount("")
-      await refreshSnapshot()
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : t("walrus.scallopRedeemFailed"))
-    } finally { setPending(false) }
+    // #21 修复后的形态：赎回必须在同一 PTB 内完成 split sSUI → Scallop::withdraw 兑回
+    // Coin<SUI> → record_principal_redemption(suiCoin, …)，币值事实源在链上。旧的
+    // 「一键记账」路径（裸 u64）已删除，UI 待接入完整兑回流程前先明确禁用。
+    setPending(true); setError("")
+    setError(t("walrus.scallopRedeemNeedsCoin"))
+    setPending(false)
   }
 
   const handleManualSave = () => {

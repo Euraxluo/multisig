@@ -32,12 +32,13 @@ export function buildCreateScallopAdapter(input: FinanceTransactionOptions & { p
   return tx;
 }
 
-/** 存入本金：`suiAmount` 是记账口径，`ssuiCoin` 必须是同一 PTB 里 Scallop 铸出的 Coin<SSUI>。 */
-export function buildDepositToScallop(input: ScallopOperation & { suiAmount: bigint; ssuiCoin: FinanceCoinInput }): Transaction {
+/** 存入本金：记账事实源是 `ssuiCoin.value()`（admin-only）。`ssuiCoin` 必须是同一
+ * PTB 里 Scallop 铸出的 Coin<SSUI>——合约不收任何裸 u64，申报通道已删除（#21）。 */
+export function buildDepositToScallop(input: ScallopOperation & { ssuiCoin: FinanceCoinInput }): Transaction {
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
     target: scallopTarget(input, 'deposit_to_scallop'),
-    arguments: [tx.object(financeAddress(input.adapterId)), tx.pure.u64(financeU64(input.suiAmount, true)), coinArg(tx, input.ssuiCoin)],
+    arguments: [tx.object(financeAddress(input.adapterId)), coinArg(tx, input.ssuiCoin)],
   });
   return tx;
 }
@@ -55,7 +56,8 @@ export function buildSplitSsuiForRedemption(input: ScallopOperation & { ssuiToRe
 /** PTB 收尾：把赎回得到的 SUI 利息注入群聊（70/20/10 三路分润在链上完成）。
  *
  * `yieldCoin` 应是本 PTB 赎回步骤产出的 SUI：适配器会把它累加进
- * `total_harvested_yield_sui`，凭空塞入的币会让这个记账不再代表真实收割。 */
+ * `total_harvested_yield_sui`，凭空塞入的币会让这个记账不再代表真实收割。
+ * 合约侧强制 admin + `channelId == adapter.channel_id`（#22）。 */
 export function buildFeedHarvestedYieldToChat(input: ScallopOperation & { channelId: string; yieldCoin: FinanceCoinInput }): Transaction {
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
@@ -65,12 +67,13 @@ export function buildFeedHarvestedYieldToChat(input: ScallopOperation & { channe
   return tx;
 }
 
-/** 本金对账清算：admin 或收款人本人可记录（合约侧鉴权）。 */
-export function buildRecordPrincipalRedemption(input: ScallopOperation & { suiReturned: bigint; recipient: string }): Transaction {
+/** 本金对账清算（admin-only）：`suiCoin` 是本 PTB 里 Scallop 兑回的真实 Coin<SUI>，
+ * 记账与链上交割都以 coin.value() 为事实源（#21），`ssuiBurned` 记录对应 sSUI 份额。 */
+export function buildRecordPrincipalRedemption(input: ScallopOperation & { suiCoin: FinanceCoinInput; ssuiBurned: bigint; recipient: string }): Transaction {
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
     target: scallopTarget(input, 'record_principal_redemption'),
-    arguments: [tx.object(financeAddress(input.adapterId)), tx.pure.u64(financeU64(input.suiReturned, true)), tx.pure.address(financeAddress(input.recipient))],
+    arguments: [tx.object(financeAddress(input.adapterId)), coinArg(tx, input.suiCoin), tx.pure.u64(financeU64(input.ssuiBurned, true)), tx.pure.address(financeAddress(input.recipient))],
   });
   return tx;
 }
