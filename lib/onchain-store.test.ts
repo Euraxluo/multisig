@@ -50,7 +50,7 @@ function canonicalProposal(approvedWeight = "1", afterRead?: () => void) {
       voters: table(20), partial_signatures: table(21), deadline_ms: String(future()), status: 1,
     }).toBytes() : OrganizationContent.serialize({
       id: orgId, group_pk: Array(32).fill(1), threshold_weight: "1", epoch_version: "1", last_nonce: "0",
-      chain_id: [], members_weight: table(22), executed_proposals: table(23), key_signers: [],
+      chain_id: [], members_weight: table(22), executed_proposals: table(23), key_signers: [], key_threshold: "2",
     }).toBytes()
     return { object: { objectId, type: `${PROPOSAL_TYPE_ORIGIN}::${objectId === proposalId ? "asynchronous_proposal::Proposal" : "cryptographic_org::Organization"}`, content, previousTransaction: "previous" } }
   })

@@ -2,6 +2,20 @@ import { Transaction, type TransactionArgument } from '@mysten/sui/transactions'
 
 import { AGENT_VAULT_PACKAGE_ID, LIMITS, RED_PACKET_LIMITS, SUI_CLOCK_OBJECT_ID, SUI_RANDOM_OBJECT_ID } from './org/constants';
 import { canonicalAddress } from './org/bcs';
+/**
+ * DKG 会话参与者集合链下校验：与合约 assert 对齐（E_NOT_A_PARTICIPANT /
+ * E_INVALID_PARTICIPANT_SET），普通调用者不该让钱包先签名再吃 on-chain abort。
+ */
+function validateDkgParticipants(sender: string, participants: string[]): void {
+  if (participants.length < 1 || participants.length > 128) {
+    throw new Error(`参与者数量须在 1–128，实际 ${participants.length}。`);
+  }
+  const senderCanonical = canonicalAddress(sender);
+  if (!participants.some((p) => canonicalAddress(p) === senderCanonical)) {
+    throw new Error('会话创建者（sender）必须在参与者集合内。');
+  }
+}
+
 import {
   buildCreateAssetCustody, buildDepositAsset, buildCreateCustodyProposal,
   buildSubmitCustodyVote, buildRejectCustodyVote, buildExecuteRelease,
@@ -187,6 +201,7 @@ export class AgentVaultClient {
    */
   public buildCreateOrganizationPTB(
     groupPk: Uint8Array,
+    keyThreshold: bigint | number,
     thresholdWeight: bigint | number,
     members: string[],
     weights: (bigint | number)[],
@@ -208,6 +223,10 @@ export class AgentVaultClient {
       if (weight <= 0n) throw new Error(`成员 ${member} 的权重必须为正。`);
       rosterWeight += weight;
     });
+    const keyThresholdNum = BigInt(keyThreshold);
+    if (keyThresholdNum <= 0n || keyThresholdNum > BigInt(members.length)) {
+      throw new Error(`密钥门限必须为正且不超过成员数 ${members.length}。`);
+    }
     const threshold = BigInt(thresholdWeight);
     if (threshold <= 0n || threshold > rosterWeight) {
       throw new Error(`门限权重必须为正且不超过名册总权重 ${rosterWeight}。`);
@@ -219,6 +238,7 @@ export class AgentVaultClient {
       typeArguments: [],
       arguments: [
         tx.pure.vector('u8', Array.from(groupPk)),
+        tx.pure.u64(keyThresholdNum),
         tx.pure.u64(threshold),
         tx.pure.vector('address', members),
         tx.pure.vector('u64', weights.map(w => BigInt(w))),
@@ -343,9 +363,14 @@ export class AgentVaultClient {
     nonce: bigint | number,
     newGroupPk: Uint8Array,
     newSigners: string[],
+    keyThreshold: bigint | number,
     popSignature: Uint8Array,
     frostSignature: Uint8Array
   ): Transaction {
+    const keyThresholdNum = BigInt(keyThreshold);
+    if (keyThresholdNum <= 0n || keyThresholdNum > BigInt(newSigners.length)) {
+      throw new Error(`密钥门限必须为正且不超过签名者数 ${newSigners.length}。`);
+    }
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.packageId}::cryptographic_org::rotate_group_key`,
@@ -355,6 +380,7 @@ export class AgentVaultClient {
         tx.pure.u64(BigInt(nonce)),
         tx.pure.vector('u8', Array.from(newGroupPk)),
         tx.pure.vector('address', newSigners),
+        tx.pure.u64(keyThresholdNum),
         tx.pure.vector('u8', Array.from(popSignature)),
         tx.pure.vector('u8', Array.from(frostSignature)),
       ],
@@ -404,12 +430,15 @@ export class AgentVaultClient {
   /** Sui 系统随机源对象（claim_random 需要）。 */
   public static readonly RANDOM_OBJECT_ID = SUI_RANDOM_OBJECT_ID;
 
-  /** 创建限时门限 DKG 会话。返回 PTB；session_id 从 SessionCreatedEvent 读取。 */
+  /** 创建限时门限 DKG 会话。返回 PTB；session_id 从 SessionCreatedEvent 读取。
+   * 合约要求 sender 必须在参与者集合内（E_NOT_A_PARTICIPANT），链下先拒绝。 */
   public buildCreateDkgSessionPTB(
+    sender: string,
     threshold: bigint | number,
     participants: string[],
     deadlineTimestampMs: bigint | number
   ): Transaction {
+    validateDkgParticipants(sender, participants);
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::create_dkg_session`,
@@ -428,11 +457,13 @@ export class AgentVaultClient {
    * 参与者集合去重且非空；与普通会话共用 DkgSession 状态机。
    */
   public buildCreateResharingSessionPTB(
+    sender: string,
     epoch: bigint | number,
     threshold: bigint | number,
     participants: string[],
     deadlineTimestampMs: bigint | number
   ): Transaction {
+    validateDkgParticipants(sender, participants);
     if (BigInt(epoch) <= 1n) throw new Error('resharing 会话要求 epoch > 1（先 advance_epoch）。');
     const tx = new Transaction();
     tx.moveCall({

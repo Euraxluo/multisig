@@ -23,6 +23,8 @@ export interface OrganizationSnapshot {
   replayTableSize: bigint;
   /** 当前轮换周期的密钥签名者名单（rotate_group_key 设置；改册不可移除）。 */
   keySigners: string[];
+  /** 密钥门限（rotate/create 设置；名册门限不得低于它）。 */
+  keyThreshold: bigint;
   /** 下一提案 nonce = last_nonce + 1（提案前必须重读链上，防撞号）。 */
   nextNonce: bigint;
 }
@@ -70,6 +72,8 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
   const signerCount = r.uleb();
   const keySigners: string[] = [];
   for (let i = 0; i < signerCount; i++) keySigners.push(r.address());
+  if (r.remaining < 8) throw new Error('Organization BCS 缺少尾随 key_threshold u64（旧布局不再支持）');
+  const keyThreshold = r.u64();
   if (r.remaining !== 0) throw new Error('Organization BCS 存在多余字节');
   return {
     id,
@@ -82,6 +86,7 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
     memberCount: membersWeight.size,
     replayTableSize: executedProposals.size,
     keySigners,
+    keyThreshold,
     nextNonce: lastNonce + 1n,
   };
 }

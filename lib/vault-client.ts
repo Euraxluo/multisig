@@ -91,14 +91,14 @@ export class AgentVaultClient {
   // 密码学组织 / 门限治理 — 直通
   // ------------------------------------------------------------------
 
-  public buildCreateOrganizationPTB(groupPk: Uint8Array, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[], popSignature: Uint8Array): Transaction {
-    return ptb(this.sdk.buildCreateOrganizationPTB(groupPk, thresholdWeight, members, weights, popSignature));
+  public buildCreateOrganizationPTB(groupPk: Uint8Array, keyThreshold: bigint | number, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[], popSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildCreateOrganizationPTB(groupPk, keyThreshold, thresholdWeight, members, weights, popSignature));
   }
   public buildAdvanceOrganizationEpochPTB(orgId: string, nonce: bigint | number, frostSignature: Uint8Array): Transaction {
     return ptb(this.sdk.buildAdvanceOrganizationEpochPTB(orgId, nonce, frostSignature));
   }
-  public buildRotateGroupKeyPTB(orgId: string, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[], popSignature: Uint8Array, frostSignature: Uint8Array): Transaction {
-    return ptb(this.sdk.buildRotateGroupKeyPTB(orgId, nonce, newGroupPk, newSigners, popSignature, frostSignature));
+  public buildRotateGroupKeyPTB(orgId: string, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[], keyThreshold: bigint | number, popSignature: Uint8Array, frostSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildRotateGroupKeyPTB(orgId, nonce, newGroupPk, newSigners, keyThreshold, popSignature, frostSignature));
   }
   public buildUpdateOrganizationRosterPTB(orgId: string, nonce: bigint | number, priorMembers: string[], members: string[], weights: (bigint | number)[], newThresholdWeight: bigint | number, frostSignature: Uint8Array): Transaction {
     return ptb(this.sdk.buildUpdateOrganizationRosterPTB(orgId, nonce, priorMembers, members, weights, newThresholdWeight, frostSignature));
@@ -155,8 +155,8 @@ export class AgentVaultClient {
   // DKG 会话 (dkg_committee) — 直通
   // ------------------------------------------------------------------
 
-  public buildCreateDkgSessionPTB(threshold: bigint | number, participants: string[], deadlineTimestampMs: bigint | number): Transaction {
-    return ptb(this.sdk.buildCreateDkgSessionPTB(threshold, participants, deadlineTimestampMs));
+  public buildCreateDkgSessionPTB(sender: string, threshold: bigint | number, participants: string[], deadlineTimestampMs: bigint | number): Transaction {
+    return ptb(this.sdk.buildCreateDkgSessionPTB(sender, threshold, participants, deadlineTimestampMs));
   }
   public buildConfirmParticipantPTB(sessionId: string): Transaction {
     return ptb(this.sdk.buildConfirmParticipantPTB(sessionId));
@@ -352,8 +352,8 @@ export function computeThresholdApprovalDigest(chainId: Uint8Array | string, org
   return sdkApprovalDigest({ chainId, orgId, epochVersion, nonce, newEpochVersion });
 }
 
-export function computeKeyRotationDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[]): Uint8Array {
-  return sdkKeyRotationDigest({ chainId, orgId, epochVersion, nonce, newGroupPk, newSigners });
+export function computeKeyRotationDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[], keyThreshold: bigint | number): Uint8Array {
+  return sdkKeyRotationDigest({ chainId, orgId, epochVersion, nonce, newGroupPk, newSigners, keyThreshold });
 }
 
 export function computeRosterUpdateDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number, thresholdWeight: bigint | number, members: string[], weights: (bigint | number)[]): Uint8Array {

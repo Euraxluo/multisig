@@ -80,7 +80,7 @@ export class LocalMemoryShareProvider implements SessionShareProvider {
 export type SessionAction =
   | { kind: 'execute'; payload: Uint8Array; actionType: number }
   | { kind: 'advanceEpoch' }
-  | { kind: 'rotateKey'; newGroupPk: Uint8Array; newSigners: string[]; popSignature: Uint8Array }
+  | { kind: 'rotateKey'; newGroupPk: Uint8Array; newSigners: string[]; keyThreshold: number | bigint; popSignature: Uint8Array }
   | {
       kind: 'roster';
       priorMembers: string[];
@@ -118,7 +118,7 @@ type DerivedAction = {
 function copyAction(action: SessionAction): SessionAction {
   switch (action.kind) {
     case 'execute': return { ...action, payload: Uint8Array.from(action.payload) };
-    case 'rotateKey': return { ...action, newGroupPk: Uint8Array.from(action.newGroupPk), newSigners: [...action.newSigners], popSignature: Uint8Array.from(action.popSignature) };
+    case 'rotateKey': return { ...action, newGroupPk: Uint8Array.from(action.newGroupPk), newSigners: [...action.newSigners], keyThreshold: action.keyThreshold, popSignature: Uint8Array.from(action.popSignature) };
     case 'roster': return {
       ...action, priorMembers: [...action.priorMembers], newMembers: [...action.newMembers], newWeights: [...action.newWeights],
     };
@@ -201,12 +201,12 @@ export class ThresholdProposalSession {
         break;
       }
       case 'rotateKey': {
-        const digest = computeKeyRotationDigest({ ...base, newGroupPk: action.newGroupPk, newSigners: action.newSigners });
+        const digest = computeKeyRotationDigest({ ...base, newGroupPk: action.newGroupPk, newSigners: action.newSigners, keyThreshold: action.keyThreshold });
         derived = {
           digest,
           expectedEvents: [GOVERNANCE_EVENTS.groupKeyRotated],
           buildPTB: (sig) =>
-            buildRotateGroupKeyPTB({ packageId, orgId: snapshot.id, nonce, newGroupPk: action.newGroupPk, newSigners: action.newSigners, popSignature: action.popSignature, frostSignature: sig }),
+            buildRotateGroupKeyPTB({ packageId, orgId: snapshot.id, nonce, newGroupPk: action.newGroupPk, newSigners: action.newSigners, keyThreshold: action.keyThreshold, popSignature: action.popSignature, frostSignature: sig }),
         };
         break;
       }

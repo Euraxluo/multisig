@@ -67,13 +67,14 @@ export function buildAdvanceEpochPTB(
   return tx;
 }
 
-/** A1d 群密钥轮换（新公钥 32 字节；签名摘要用 computeKeyRotationDigest）。 */
+/** A1d 群密钥轮换（新公钥 32 字节；签名摘要用 computeKeyRotationDigest，V3 含 key_threshold）。 */
 export function buildRotateGroupKeyPTB(
   input: GovernanceTarget & {
     orgId: string;
     nonce: number | bigint;
     newGroupPk: Uint8Array;
     newSigners: string[];
+    keyThreshold: number | bigint;
     popSignature: Uint8Array;
     frostSignature: Uint8Array;
   },
@@ -89,6 +90,10 @@ export function buildRotateGroupKeyPTB(
   if (signers.length === 0 || signers.length > LIMITS.MAX_ROSTER_MEMBERS) {
     throw new Error(`newSigners 数量须在 1..${LIMITS.MAX_ROSTER_MEMBERS}，实际 ${signers.length}`);
   }
+  const keyThreshold = checkedU64(input.keyThreshold);
+  if (keyThreshold <= 0n || keyThreshold > BigInt(signers.length)) {
+    throw new Error(`keyThreshold 须在 1..${signers.length}，实际 ${keyThreshold}`);
+  }
   const tx = new Transaction();
   tx.moveCall({
     target: `${pkg(input)}::cryptographic_org::rotate_group_key`,
@@ -97,6 +102,7 @@ export function buildRotateGroupKeyPTB(
       tx.pure.u64(checkedU64(input.nonce)),
       tx.pure.vector('u8', Array.from(input.newGroupPk)),
       tx.pure.vector('address', signers),
+      tx.pure.u64(keyThreshold),
       tx.pure.vector('u8', Array.from(input.popSignature)),
       tx.pure.vector('u8', Array.from(input.frostSignature)),
     ],
@@ -108,6 +114,7 @@ export function buildRotateGroupKeyPTB(
 export function buildCreateOrganizationPTB(
   input: GovernanceTarget & {
     groupPk: Uint8Array;
+    keyThreshold: number | bigint;
     thresholdWeight: number | bigint;
     members: string[];
     weights: Array<number | bigint>;
@@ -117,11 +124,16 @@ export function buildCreateOrganizationPTB(
   if (input.groupPk.length !== 32) throw new Error(`groupPk 必须 32 字节，实际 ${input.groupPk.length}`);
   if (input.members.length !== input.weights.length) throw new Error('名册与权重长度不一致');
   if (input.members.length === 0) throw new Error('名册不能为空');
+  const keyThreshold = checkedU64(input.keyThreshold);
+  if (keyThreshold <= 0n || keyThreshold > BigInt(input.members.length)) {
+    throw new Error(`keyThreshold 须在 1..${input.members.length}，实际 ${keyThreshold}`);
+  }
   const tx = new Transaction();
   tx.moveCall({
     target: `${pkg(input)}::cryptographic_org::create_organization`,
     arguments: [
       tx.pure.vector('u8', Array.from(input.groupPk)),
+      tx.pure.u64(keyThreshold),
       tx.pure.u64(checkedU64(input.thresholdWeight)),
       tx.pure.vector('address', input.members),
       tx.pure.vector('u64', input.weights.map((w) => checkedU64(w))),

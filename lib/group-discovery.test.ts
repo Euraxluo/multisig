@@ -27,7 +27,7 @@ function organization(id: string, table: string, size = "3") {
     content: OrganizationContent.serialize({
       id, group_pk: Array.from({ length: 32 }, (_, i) => 255 - i), threshold_weight: "2", epoch_version: "4",
       last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")),
-      members_weight: { id: table, size }, executed_proposals: { id: address("7"), size: "0" }, key_signers: [],
+      members_weight: { id: table, size }, executed_proposals: { id: address("7"), size: "0" }, key_signers: [], key_threshold: "2",
     }).toBytes(),
   }
 }

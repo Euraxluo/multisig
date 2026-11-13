@@ -62,8 +62,9 @@ export function computeThresholdApprovalDigest(input: {
 }
 
 /**
- * H(DOMAIN_KEY_ROTATION_V2 || … || new_group_pk || bcs(new_signers))，rotate_group_key 用。
- * V2 绑定新公钥 + 新签名者名单：签名不可重放到不同的 signer 集合。
+ * H(DOMAIN_KEY_ROTATION_V3 || … || new_group_pk || bcs(new_signers) || bcs(key_threshold))，
+ * rotate_group_key 用。V3 绑定新公钥、新签名者名单与密钥门限：签名不可重放到
+ * 不同的 signer 集合或 key_threshold。
  */
 export function computeKeyRotationDigest(input: {
   chainId: Uint8Array | string;
@@ -72,16 +73,18 @@ export function computeKeyRotationDigest(input: {
   nonce: number | bigint;
   newGroupPk: Uint8Array;
   newSigners: string[];
+  keyThreshold: number | bigint;
 }): Uint8Array {
   return sha256(
     concat(
-      utf8('SUI_ORG_KEY_ROTATION_V2:'),
+      utf8('SUI_ORG_KEY_ROTATION_V3:'),
       chainBytes(input.chainId),
       requireAddress(input.orgId, 'orgId'),
       u64le(input.epochVersion),
       u64le(input.nonce),
       requireDigest32(input.newGroupPk, 'newGroupPk'),
       bcsVectorAddress(input.newSigners),
+      u64le(input.keyThreshold),
     ),
   );
 }

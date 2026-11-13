@@ -46,11 +46,11 @@ function packageFixture(): RawPackage {
         { name: "deposit", visibility: 2, isEntry: false, typeParameters: [{ constraints: [] }], parameters: [parameter(datatype(`${origin}::vault::AgentVault`, [generic]), 2), parameter(datatype("0x2::coin::Coin", [generic]))], returns: [] },
         { name: "withdraw", visibility: 2, isEntry: false, typeParameters: [{ constraints: [] }], parameters: [parameter(datatype(capType), 1), parameter(datatype(`${origin}::vault::AgentVault`, [generic]), 2), parameter(primitive(6)), parameter(primitive(1)), parameter(datatype("0x2::tx_context::TxContext"), 2)], returns: [] },
       ] },
-      { name: "cryptographic_org", datatypes: [rawType("cryptographic_org", "Organization", [["id", uid], ["group_pk", vector(primitive(3))], ["threshold_weight", primitive(6)], ["epoch_version", primitive(6)], ["last_nonce", primitive(6)], ["chain_id", vector(primitive(3))], ["members_weight", datatype("0x2::table::Table", [primitive(1), primitive(6)])], ["executed_proposals", datatype("0x2::table::Table", [vector(primitive(3)), primitive(2)])], ["key_signers", vector(primitive(1))]], [4])], functions: [] },
+      { name: "cryptographic_org", datatypes: [rawType("cryptographic_org", "Organization", [["id", uid], ["group_pk", vector(primitive(3))], ["threshold_weight", primitive(6)], ["epoch_version", primitive(6)], ["last_nonce", primitive(6)], ["chain_id", vector(primitive(3))], ["members_weight", datatype("0x2::table::Table", [primitive(1), primitive(6)])], ["executed_proposals", datatype("0x2::table::Table", [vector(primitive(3)), primitive(2)])], ["key_signers", vector(primitive(1))], ["key_threshold", primitive(6)]], [4])], functions: [] },
     ], typeOrigins: [], linkage: [],
   }
 }
-const organizationBytes = (pk = key) => OrganizationContent.serialize({ id: orgId, group_pk: Array.from(pk), threshold_weight: "2", epoch_version: "1", last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")), members_weight: { id: address("0x20"), size: "3" }, executed_proposals: { id: address("0x21"), size: "0" }, key_signers: [] }).toBytes()
+const organizationBytes = (pk = key) => OrganizationContent.serialize({ id: orgId, group_pk: Array.from(pk), threshold_weight: "2", epoch_version: "1", last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")), members_weight: { id: address("0x20"), size: "3" }, executed_proposals: { id: address("0x21"), size: "0" }, key_signers: [], key_threshold: "2" }).toBytes()
 function fakeClient() {
   const metadata = packageFixture()
   type Obj = { objectId: string; type: string; owner: SuiClientObjectOwner; content: Uint8Array }

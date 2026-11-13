@@ -55,15 +55,16 @@ describe('computeRotatePopDigest', () => {
   });
 });
 
-describe('computeKeyRotationDigest (V2)', () => {
-  it('binds new signers after the new public key', () => {
+describe('computeKeyRotationDigest (V3)', () => {
+  it('binds new signers + key threshold after the new public key', () => {
     const expected = sha256(
-      txt('SUI_ORG_KEY_ROTATION_V2:'), txt(CHAIN), ORG, u64(4n), u64(11n), PK2,
+      txt('SUI_ORG_KEY_ROTATION_V3:'), txt(CHAIN), ORG, u64(4n), u64(11n), PK2,
       uleb(2), M1, M2,
+      u64(2n),
     );
     expect(Buffer.from(computeKeyRotationDigest({
       chainId: CHAIN, orgId: ORGID, epochVersion: 4n, nonce: 11n, newGroupPk: PK2,
-      newSigners: [M1, M2].map(b => '0x' + b.toString('hex')),
+      newSigners: [M1, M2].map(b => '0x' + b.toString('hex')), keyThreshold: 2n,
     }))).toEqual(expected);
   });
 });
@@ -91,19 +92,21 @@ function firstMoveCall(tx: ReturnType<typeof buildCreateOrganizationPTB>) {
 
 describe('builders', () => {
   const pkg = '0x' + 'ee'.repeat(32);
-  it('buildCreateOrganizationPTB targets create_organization with 5 args', () => {
-    const call = firstMoveCall(buildCreateOrganizationPTB({ packageId: pkg, groupPk: PK, thresholdWeight: 2n, members: ['0x' + '11'.repeat(32)], weights: [2n], popSignature: new Uint8Array(64) }));
+  it('buildCreateOrganizationPTB targets create_organization with 6 args', () => {
+    const call = firstMoveCall(buildCreateOrganizationPTB({ packageId: pkg, groupPk: PK, keyThreshold: 1n, thresholdWeight: 2n, members: ['0x' + '11'.repeat(32)], weights: [2n], popSignature: new Uint8Array(64) }));
     expect(call.module).toBe('cryptographic_org');
     expect(call.function).toBe('create_organization');
-    expect(call.arguments.length).toBe(5);
-  });
-  it('buildRotateGroupKeyPTB targets rotate_group_key with 6 args and rejects duplicates', () => {
-    const call = firstMoveCall(buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: ['0x' + '11'.repeat(32), '0x' + '22'.repeat(32)], popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) }));
-    expect(call.function).toBe('rotate_group_key');
     expect(call.arguments.length).toBe(6);
+    expect(() => buildCreateOrganizationPTB({ packageId: pkg, groupPk: PK, keyThreshold: 2n, thresholdWeight: 2n, members: ['0x' + '11'.repeat(32)], weights: [2n], popSignature: new Uint8Array(64) })).toThrow(/keyThreshold/);
+  });
+  it('buildRotateGroupKeyPTB targets rotate_group_key with 7 args and rejects duplicates', () => {
+    const call = firstMoveCall(buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: ['0x' + '11'.repeat(32), '0x' + '22'.repeat(32)], keyThreshold: 2n, popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) }));
+    expect(call.function).toBe('rotate_group_key');
+    expect(call.arguments.length).toBe(7);
     const dup = '0x' + '33'.repeat(32);
-    expect(() => buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: [dup, dup], popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) })).toThrow(/重复/);
-    expect(() => buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: [], popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) })).toThrow(/1\.\./);
+    expect(() => buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: [dup, dup], keyThreshold: 1n, popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) })).toThrow(/重复/);
+    expect(() => buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: [], keyThreshold: 1n, popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) })).toThrow(/1\.\./);
+    expect(() => buildRotateGroupKeyPTB({ packageId: pkg, orgId: ORGID, nonce: 3n, newGroupPk: PK2, newSigners: ['0x' + '11'.repeat(32)], keyThreshold: 2n, popSignature: new Uint8Array(64), frostSignature: new Uint8Array(64) })).toThrow(/keyThreshold/);
   });
   it('buildSetOutflowPolicyPTB targets vault::set_outflow_policy with 4 args + typeArg', () => {
     const data = buildSetOutflowPolicyPTB({ packageId: pkg, coinType: '0x2::sui::SUI', masterCapId: '0x1235', vaultId: '0x1236', maxEpochOutflow: 10n, maxAgentBudget: 5n }).getData();
@@ -121,7 +124,7 @@ describe('builders', () => {
 });
 
 describe('readers / schemas', () => {
-  it('parseOrganization accepts trailing key_signers vector<address>', () => {
+  it('parseOrganization accepts trailing key_signers + key_threshold u64', () => {
     const table = (id: number) => Buffer.concat([A('0x' + id.toString(16).padStart(64, '0')), u64(0n)]);
     const bytes = Buffer.concat([
       ORG, // id
@@ -132,12 +135,16 @@ describe('readers / schemas', () => {
       uleb(CHAIN.length), txt(CHAIN), // chain_id
       table(0x20), table(0x21), // two Tables
       uleb(2), M1, M2, // key_signers
+      u64(2n), // key_threshold
     ]);
     const snap = parseOrganization(bytes);
     expect(snap.keySigners).toEqual([M1, M2].map(b => '0x' + b.toString('hex')));
+    expect(snap.keyThreshold).toBe(2n);
     expect(snap.memberCount).toBe(0n);
-    // 缺尾随 key_signers 的旧布局必须被拒绝
-    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 65))).toThrow();
+    // 缺尾随 key_threshold u64 的旧布局必须被拒绝
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 8))).toThrow();
+    // 缺尾随 key_signers + key_threshold 的更旧布局同样拒绝
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 73))).toThrow();
   });
   it('AgentVaultBcs parses 4 trailing u64 policy fields and rejects old layout', () => {
     const vault = {

@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0xef671151bb0da2198d1addcbeabc03e8e24513ebe0bb357ff217c7ea613cfb0f';
+export const AGENT_VAULT_PACKAGE_ID = '0xa1406bb3effdac9eab2b2672939a28d94aa77239bcf8e3cc5bdb4b0e8cd3fd21';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -35,7 +35,7 @@ export const MODULES = {
 export const DOMAINS = {
   PROPOSAL: 'SUI_ORG_PROPOSAL_V1:',
   THRESHOLD_APPROVAL: 'SUI_ORG_APPROVAL_V1:',
-  KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V2:',
+  KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V3:',
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
   POP: 'SUI_ORG_POP_V1:',
   TREASURY_TRANSFER: 'SUI_ORG_TREASURY_TRANSFER_V1:',
@@ -141,7 +141,8 @@ export const DKG_ERRORS: Readonly<Record<number, string>> = {
   3010: 'E_ENCRYPTION_KEY_CONFLICT',
   3011: 'E_NOT_CONFIRMED',
   3012: 'E_KEY_NOT_ATTESTED',
-  3014: 'E_INVALID_PARTICIPANT_SET',
+  3015: 'E_INVALID_COMMITMENT',
+  3016: 'E_COMMITMENT_MISSING',
 };
 
 /** asset_custody 命名错误（#[error(code = N)]，1–21 与合约逐一对齐）。 */
