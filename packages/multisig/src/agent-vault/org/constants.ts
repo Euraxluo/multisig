@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x50739707bbb612bdfe320ef7f1d2653541f8bc7eeb2867dd7814fade5e5a6325';
+export const AGENT_VAULT_PACKAGE_ID = '0x768e3781fd774bdd010089ede1c66df344aee2047817a121aa6c602e73723501';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -153,6 +153,7 @@ export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
 
 /** dkg_committee 数字错误码（3013 死桩已删除，不在表内；3017–3019 与 3020–3026 均与合约逐一对齐）。 */
 export const DKG_ERRORS: Readonly<Record<number, string>> = {
+  3027: 'E_SMALL_ORDER_PUBLIC_KEY',
   3001: 'E_NOT_A_PARTICIPANT',
   3002: 'E_INVALID_SESSION_STATUS',
   3003: 'E_ALREADY_SUBMITTED',

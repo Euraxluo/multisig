@@ -43,6 +43,16 @@ const MIN_BOND_MIST = ADMISSION_ECONOMICS.MIN_BOND_MIST
 
 /** Round1 须公布 32B attest 公钥；attest 阶段用对应私钥签名。
  *  按会话+地址持久化于 localStorage（密钥语义 = 会话级一次性，不与钱包钥复用）。 */
+async function ensureAttestationSecretKey(sessionId: string, address: string): Promise<Uint8Array> {
+  const storeKey = `dkg-attest-sk:${sessionId}:${address}`
+  const skB64 = localStorage.getItem(storeKey)
+  if (skB64) return Uint8Array.from(atob(skB64), (c) => c.charCodeAt(0))
+  const sk = new Uint8Array(32)
+  crypto.getRandomValues(sk)
+  localStorage.setItem(storeKey, btoa(String.fromCharCode(...sk)))
+  return sk
+}
+
 async function ensureAttestationKey(sessionId: string, address: string): Promise<Uint8Array> {
   const { ed25519 } = await import("@noble/curves/ed25519.js")
   const storeKey = `dkg-attest-sk:${sessionId}:${address}`
@@ -858,6 +868,10 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
         setStep("INIT"); return
       }
 
+      // attest 签名（round7）：用 Round1 公布的会话级私钥对 H(SUI_DKG_ATTEST_V1‖sid‖groupPk) 签名
+      const { computeDkgAttestationDigest } = await import("multisig/agent-vault/org")
+      const attestSk = await ensureAttestationSecretKey(session.sessionId, meNorm)
+      const attestSig = ed25519.sign(computeDkgAttestationDigest({ sessionId: session.sessionId, groupPublicKey: pkBytes }), attestSk)
       const tx = new Transaction()
       tx.moveCall({
         target: `${TESTNET_PACKAGE_ID}::dkg_committee::attest_group_key`,
@@ -866,6 +880,7 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
           tx.object(session.sessionId),
           tx.object("0x6"),
           tx.pure.vector("u8", Array.from(pkBytes)),
+          tx.pure.vector("u8", Array.from(attestSig)),
         ],
       })
       const { digest } = await signAndExecuteWithWallet(tx)
