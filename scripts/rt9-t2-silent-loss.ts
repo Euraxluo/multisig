@@ -24,7 +24,7 @@ import { verifyShareCommitment } from "../lib/crypto/vss"
 import { bytesToScalar, scalarToBytes32 } from "../lib/crypto/math"
 import { encryptMailboxShare, serializeEnvelopeToBytes, decryptMailboxShare, generateIdentityKeypair } from "../packages/multisig/src/dkg/mailbox"
 
-const PKG = "0x768e3781fd774bdd010089ede1c66df344aee2047817a121aa6c602e73723501"
+const PKG = "0xcdc87b8ef5b071a293966f4329f1e9b4a443f49f1cf599cc188009cf7524ab44"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const A2 = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"

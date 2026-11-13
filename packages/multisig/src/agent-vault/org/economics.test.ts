@@ -24,6 +24,7 @@ import {
   ADMISSION_ECONOMICS,
   DOMAINS,
   DKG_ERRORS,
+  MAX_MAILBOX_PAYLOAD_BYTES,
   ORG_ERRORS,
 } from './constants';
 
@@ -124,6 +125,23 @@ describe('vault_client admission-economics builders', () => {
     expect(firstMoveCall(tx).function).toBe('submit_async_package');
     expect(firstMoveCall(tx).arguments.length).toBe(7);
   });
+  it('buildDepositMailboxSharePTB accepts a payload at the 2048B limit and emits a 4-arg moveCall', () => {
+    const tx = client.buildDepositMailboxSharePTB('0x' + 'cc'.repeat(32), '0x' + '22'.repeat(32), new Uint8Array(2048));
+    const call = firstMoveCall(tx);
+    expect(call.function).toBe('deposit_mailbox_share');
+    expect(call.arguments.length).toBe(4);
+  });
+  it('buildDepositMailboxSharePTB rejects a 2049B payload with the 3028 guard', () => {
+    expect(() => client.buildDepositMailboxSharePTB('0x' + 'cc'.repeat(32), '0x' + '22'.repeat(32), new Uint8Array(2049))).toThrow(/2048|3028/);
+  });
+  it('buildSubmitAsyncPackagePTB rejects any over-limit payload (whole-package abort guard)', () => {
+    expect(() => client.buildSubmitAsyncPackagePTB(
+      '0x' + 'cc'.repeat(32), new Uint8Array(32), new Uint8Array(32),
+      ['0x' + '22'.repeat(32), '0x' + '33'.repeat(32)],
+      [new Uint8Array(4), new Uint8Array(2049)],
+      { amount: 50_000_000n },
+    )).toThrow(/2048|3028/);
+  });
   it('buildCreateOrganizationFromSessionPTB appends the clock argument (session, threshold, clock)', () => {
     const tx = client.buildCreateOrganizationFromSessionPTB('0x' + 'cc'.repeat(32), 2n);
     const call = firstMoveCall(tx);
@@ -182,6 +200,11 @@ describe('error registries + economics constants', () => {
     expect(DKG_ERRORS[3024]).toBe('E_SESSION_NOT_TERMINAL');
     expect(DKG_ERRORS[3025]).toBe('E_DEADLINE_OUT_OF_RANGE');
     expect(ORG_ERRORS[1011]).toBe('E_GENESIS_LOCKED');
+    expect(DKG_ERRORS[3028]).toBe('E_PAYLOAD_TOO_LARGE');
+    expect(DKG_ERRORS[3029]).toBe('E_RECIPIENT_KEY_MISSING');
+  });
+  it('carries the mailbox payload limit verbatim', () => {
+    expect(MAX_MAILBOX_PAYLOAD_BYTES).toBe(2048);
   });
   it('carries the contract economics constants verbatim', () => {
     expect(ADMISSION_ECONOMICS.SESSION_CREATION_FEE_MIST).toBe(5_000_000);

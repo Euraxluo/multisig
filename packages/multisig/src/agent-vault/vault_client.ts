@@ -1,6 +1,6 @@
 import { Transaction, type TransactionArgument } from '@mysten/sui/transactions';
 
-import { ADMISSION_ECONOMICS, AGENT_VAULT_PACKAGE_ID, LIMITS, RED_PACKET_LIMITS, SUI_CLOCK_OBJECT_ID, SUI_RANDOM_OBJECT_ID } from './org/constants';
+import { ADMISSION_ECONOMICS, AGENT_VAULT_PACKAGE_ID, LIMITS, MAX_MAILBOX_PAYLOAD_BYTES, RED_PACKET_LIMITS, SUI_CLOCK_OBJECT_ID, SUI_RANDOM_OBJECT_ID } from './org/constants';
 import { buildWithdrawGenesisStakePTB } from './org/builders';
 import { canonicalAddress } from './org/bcs';
 /**
@@ -526,12 +526,17 @@ export class AgentVaultClient {
     return tx;
   }
 
-  /** 写入密态信箱份额（sender/recipient 均须为参与者；首写优先，不可覆盖）。 */
+  /** 写入密态信箱份额（sender/recipient 均须为参与者；首写优先，不可覆盖）。
+   *  载荷 ≤ MAX_MAILBOX_PAYLOAD_BYTES（链上 3028）；recipient 必须已登记加密公钥（链上 3029），
+   *  未登记时先调 buildRegisterEncryptionKeyPTB。 */
   public buildDepositMailboxSharePTB(
     sessionId: string,
     recipient: string,
     encryptedPayload: Uint8Array
   ): Transaction {
+    if (encryptedPayload.length > MAX_MAILBOX_PAYLOAD_BYTES) {
+      throw new Error(`encryptedPayload must be <= ${MAX_MAILBOX_PAYLOAD_BYTES} bytes (on-chain E_PAYLOAD_TOO_LARGE=3028)`);
+    }
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::deposit_mailbox_share`,
@@ -541,6 +546,7 @@ export class AgentVaultClient {
         tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
         tx.pure.address(recipient),
         tx.pure.vector('u8', Array.from(encryptedPayload)),
+        // TODO(T2-a 后续): 信封加发送方签名（双栈 envelope 结构变更）——本轮不做。
       ],
     });
     return tx;
@@ -587,6 +593,11 @@ export class AgentVaultClient {
       throw new Error('recipients and encryptedPayloads length mismatch');
     }
     if (attestPublicKey?.length !== 32) throw new Error('attestPublicKey must be 32 bytes (ed25519)');
+    for (const payload of encryptedPayloads) {
+      if (payload.length > MAX_MAILBOX_PAYLOAD_BYTES) {
+        throw new Error(`every encryptedPayload must be <= ${MAX_MAILBOX_PAYLOAD_BYTES} bytes (on-chain E_PAYLOAD_TOO_LARGE=3028); one bad payload aborts the whole package`);
+      }
+    }
     const tx = transaction ?? new Transaction();
     const paymentArg = financeCoin(tx, FINANCE_SUI_TYPE, payment ?? { amount: ADMISSION_ECONOMICS.MIN_BOND_MIST });
     tx.moveCall({

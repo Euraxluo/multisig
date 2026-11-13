@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x4916084e93ee0323e1eff031b45ff83e70f7e19e7ad3d307ad498a20ed72b931';
+export const AGENT_VAULT_PACKAGE_ID = '0xcdc87b8ef5b071a293966f4329f1e9b4a443f49f1cf599cc188009cf7524ab44';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -76,6 +76,9 @@ export const ADMISSION_ECONOMICS = {
   /** 创世质押协议级硬锁（90 天，治理不可绕过；withdraw 须等 unlock_at_ms）。 */
   GENESIS_LOCK_MS: 7_776_000_000,
 } as const;
+
+/** dkg_committee 信箱单封载荷上限（B，与合约 MAX_MAILBOX_PAYLOAD_BYTES=2048 对齐；超限链上 abort 3028）。 */
+export const MAX_MAILBOX_PAYLOAD_BYTES = 2048;
 
 /** red_packet 协议上限（与合约常量逐一对齐；链下构造前先用它拒绝必拒载荷）。 */
 export const RED_PACKET_LIMITS = {
@@ -156,6 +159,8 @@ export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
 /** dkg_committee 数字错误码（3013 死桩已删除，不在表内；3017–3019 与 3020–3026 均与合约逐一对齐）。 */
 export const DKG_ERRORS: Readonly<Record<number, string>> = {
   3027: 'E_SMALL_ORDER_PUBLIC_KEY',
+  3028: 'E_PAYLOAD_TOO_LARGE',
+  3029: 'E_RECIPIENT_KEY_MISSING',
   3001: 'E_NOT_A_PARTICIPANT',
   3002: 'E_INVALID_SESSION_STATUS',
   3003: 'E_ALREADY_SUBMITTED',
