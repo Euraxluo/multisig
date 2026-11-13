@@ -555,12 +555,14 @@ export class AgentVaultClient {
   public buildSubmitAsyncPackagePTB(
     sessionId: string,
     commitmentBytes: Uint8Array,
+    attestPublicKey: Uint8Array,
     recipients: string[],
     encryptedPayloads: Uint8Array[]
   ): Transaction {
     if (recipients.length !== encryptedPayloads.length) {
       throw new Error('recipients and encryptedPayloads length mismatch');
     }
+    if (attestPublicKey?.length !== 32) throw new Error('attestPublicKey must be 32 bytes (ed25519)');
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::submit_async_package`,
@@ -569,6 +571,7 @@ export class AgentVaultClient {
         tx.object(sessionId),
         tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
         tx.pure.vector('u8', Array.from(commitmentBytes)),
+        tx.pure.vector('u8', Array.from(attestPublicKey!)),
         tx.pure.vector('address', recipients),
         (tx.pure as any).vector('vector<u8>', encryptedPayloads.map(p => Array.from(p))),
       ],
@@ -584,9 +587,11 @@ export class AgentVaultClient {
    */
   public buildAttestGroupKeyPTB(
     sessionId: string,
-    groupPublicKey: Uint8Array
+    groupPublicKey: Uint8Array,
+    attestationSignature: Uint8Array
   ): Transaction {
     if (groupPublicKey.length !== 32) throw new Error('groupPublicKey must be 32 bytes');
+    if (attestationSignature.length !== 64) throw new Error('attestationSignature must be 64 bytes');
     const tx = new Transaction();
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::attest_group_key`,
@@ -595,6 +600,7 @@ export class AgentVaultClient {
         tx.object(sessionId),
         tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
         tx.pure.vector('u8', Array.from(groupPublicKey)),
+        tx.pure.vector('u8', Array.from(attestationSignature)),
       ],
     });
     return tx;

@@ -188,3 +188,18 @@ export function computeRosterUpdateDigest(input: {
 
 /** 默认调用目标包（便于 builder 缺省）。 */
 export const DEFAULT_TARGET_PACKAGE = AGENT_VAULT_PACKAGE_ID;
+
+/**
+ * DKG attestation 绑定摘要——与 dkg_committee.move 逐字节一致：
+ * H("SUI_DKG_ATTEST_V1:" || bcs(ID) || group_pk)
+ * bcs(object::ID) 即 32 字节原始地址；签名须用参与者在 Round 1 公布的
+ * ed25519 公钥对应的私钥作出，链上验签（E_ATTEST_SIGNATURE_INVALID=3018）。
+ */
+export function computeDkgAttestationDigest(input: {
+  sessionId: string;
+  groupPublicKey: Uint8Array;
+}): Uint8Array {
+  const sid = requireAddress(input.sessionId, 'sessionId');
+  if (input.groupPublicKey.length !== 32) throw new Error('groupPublicKey 必须是 32 字节');
+  return sha256(concat(utf8('SUI_DKG_ATTEST_V1:'), sid, input.groupPublicKey));
+}

@@ -170,12 +170,12 @@ export class AgentVaultClient {
   public buildDepositMailboxSharePTB(sessionId: string, recipient: string, encryptedPayload: Uint8Array): Transaction {
     return ptb(this.sdk.buildDepositMailboxSharePTB(sessionId, recipient, encryptedPayload));
   }
-  public buildSubmitAsyncPackagePTB(sessionId: string, commitmentBytes: Uint8Array, recipients: string[], encryptedPayloads: Uint8Array[]): Transaction {
-    return ptb(this.sdk.buildSubmitAsyncPackagePTB(sessionId, commitmentBytes, recipients, encryptedPayloads));
+  public buildSubmitAsyncPackagePTB(sessionId: string, commitmentBytes: Uint8Array, attestPublicKey: Uint8Array, recipients: string[], encryptedPayloads: Uint8Array[]): Transaction {
+    return ptb(this.sdk.buildSubmitAsyncPackagePTB(sessionId, commitmentBytes, attestPublicKey, recipients, encryptedPayloads));
   }
   /** 现行 attest_group_key 入口不再读 Clock；clockId 仅保留兼容旧签名，忽略。 */
-  public buildAttestGroupKeyPTB(sessionId: string, groupPublicKey: Uint8Array, _clockId = AgentVaultClient.CLOCK_OBJECT_ID): Transaction {
-    return ptb(this.sdk.buildAttestGroupKeyPTB(sessionId, groupPublicKey));
+  public buildAttestGroupKeyPTB(sessionId: string, groupPublicKey: Uint8Array, attestationSignature: Uint8Array, _clockId = AgentVaultClient.CLOCK_OBJECT_ID): Transaction {
+    return ptb(this.sdk.buildAttestGroupKeyPTB(sessionId, groupPublicKey, attestationSignature));
   }
   public buildFinalizeSessionPTB(sessionId: string, groupPublicKey: Uint8Array): Transaction {
     return ptb(this.sdk.buildFinalizeSessionPTB(sessionId, groupPublicKey));

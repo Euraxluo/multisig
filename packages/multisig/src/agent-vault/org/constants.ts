@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0xa1406bb3effdac9eab2b2672939a28d94aa77239bcf8e3cc5bdb4b0e8cd3fd21';
+export const AGENT_VAULT_PACKAGE_ID = '0x827268c43588a928fc24ce48dee65ab2f89af54d0481e8060a83b54c1ea325e5';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
