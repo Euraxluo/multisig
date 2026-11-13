@@ -48,22 +48,30 @@ export function computeProposalDigest(input: {
   );
 }
 
-/** H(DOMAIN_THRESHOLD_APPROVAL || … || new_epoch_version)，advance_organization_epoch 用。 */
+/**
+ * 纪元推进审批摘要 V2（round-9）：H("SUI_ORG_EPOCH_ADVANCE_V2:" ‖ chain ‖ orgId ‖
+ * epoch ‖ nonce ‖ newEpoch ‖ key_generation)。key_generation 是密钥的「生成代」
+ * （rotate_group_key 时 +1）：resharing 保公钥换届后旧代分片对 V2 摘要不再可签，
+ * 旧分片窗口（P0）由 rotate 一键封死。V1（SUI_ORG_APPROVAL_V1:）已废弃，勿用旧签名重放。
+ */
 export function computeThresholdApprovalDigest(input: {
   chainId: Uint8Array | string;
   orgId: string;
   epochVersion: number | bigint;
   nonce: number | bigint;
   newEpochVersion: number | bigint;
+  /** 组织当前密钥生成代（org.key_generation，创建为 1，rotate +1）。 */
+  keyGeneration: number | bigint;
 }): Uint8Array {
   return sha256(
     concat(
-      utf8('SUI_ORG_APPROVAL_V1:'),
+      utf8('SUI_ORG_EPOCH_ADVANCE_V2:'),
       chainBytes(input.chainId),
       requireAddress(input.orgId, 'orgId'),
       u64le(input.epochVersion),
       u64le(input.nonce),
       u64le(input.newEpochVersion),
+      u64le(input.keyGeneration),
     ),
   );
 }
@@ -148,7 +156,11 @@ export function computeRotatePopDigest(input: {
   );
 }
 
-/** H(DOMAIN_TREASURY_TRANSFER || … || bcs(proposal_id) || bcs(recipient) || bcs(amount))，国库转账门限执行。 */
+/**
+ * 国库转账摘要 V2（round-9）：尾部追加 bcs(key_generation)（域
+ * SUI_ORG_TREASURY_TRANSFER_V2:）。rotate 换钥后 key_generation 变化 → 旧代分片
+ * 无法签出新摘要，旧分片在 resharing 窗口内的转账签名能力被封死。V1 已废弃。
+ */
 export function computeTreasuryTransferDigest(input: {
   chainId: Uint8Array | string;
   orgId: string;
@@ -157,10 +169,12 @@ export function computeTreasuryTransferDigest(input: {
   proposalId: string;
   recipient: string;
   amount: number | bigint;
+  /** 组织当前密钥生成代（org.key_generation，创建为 1，rotate +1）。 */
+  keyGeneration: number | bigint;
 }): Uint8Array {
   return sha256(
     concat(
-      utf8('SUI_ORG_TREASURY_TRANSFER_V1:'),
+      utf8('SUI_ORG_TREASURY_TRANSFER_V2:'),
       chainBytes(input.chainId),
       requireAddress(input.orgId, 'orgId'),
       u64le(input.epochVersion),
@@ -168,6 +182,7 @@ export function computeTreasuryTransferDigest(input: {
       requireAddress(input.proposalId, 'proposalId'),
       requireAddress(input.recipient, 'recipient'),
       u64le(input.amount),
+      u64le(input.keyGeneration),
     ),
   );
 }

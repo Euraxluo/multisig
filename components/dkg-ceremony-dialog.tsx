@@ -942,8 +942,9 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
       if (refreshed.length !== oldShares.length) throw new Error(t("dkg.reshareCountMismatch"));
 
       // 3. Sign the approval digest from the chain's own epoch and chain id.
+      //    V2 摘要绑定 key_generation（round-9）：换钥后旧代签名不可重放。
       const nonce = live.lastNonce + 1n;
-      const approvalDigest = computeThresholdApprovalDigest(live.chainId, live.orgId, live.epoch, nonce, live.epoch + 1n);
+      const approvalDigest = computeThresholdApprovalDigest(live.chainId, live.orgId, live.epoch, nonce, live.epoch + 1n, live.keyGeneration);
       const signature = signWithCommittee(
         { orgId: live.orgId, groupPk: live.groupPk, epoch: live.epoch, threshold: BigInt(threshold), indices: [...committee.values()], shares: refreshed },
         approvalDigest, { groupPk: live.groupPk, epoch: live.epoch },

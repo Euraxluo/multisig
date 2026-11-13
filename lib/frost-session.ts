@@ -13,7 +13,7 @@ import type { DeviceKeyPackage } from "./dkg-key-package"
 export interface FrostSigner { address: string; index: string }
 export type FrostAction =
   | { kind: "roster"; packageId: string; orgId: string; epoch: string; nonce: string; chainIdHex: string; newEpoch: string; thresholdWeight: string; priorMembers: string[]; members: string[]; weights: string[] }
-  | { kind: "epoch"; packageId: string; orgId: string; epoch: string; nonce: string; chainIdHex: string; newEpoch: string }
+  | { kind: "epoch"; packageId: string; orgId: string; epoch: string; nonce: string; chainIdHex: string; newEpoch: string; keyGeneration: string }
   | { kind: "proposal"; packageId: string; orgId: string; epoch: string; nonce: string; chainIdHex: string; actionType: number; payloadHex: string }
 export interface FrostPublicKeyPackage {
   network: "sui:testnet"; sessionId: string; participantAddresses: string[]; dealerAddresses: string[]; threshold: string; sessionEpoch: string
@@ -63,14 +63,14 @@ function actionDigest(action: FrostAction): Uint8Array {
     if (!Number.isInteger(action.actionType) || action.actionType < 0 || action.actionType > 255) throw new FrostSessionError("Proposal actionType must be a u8")
     return computeProposalDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), unhex(action.payloadHex), action.actionType)
   }
-  if (action.kind === "epoch") return computeThresholdApprovalDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), BigInt(action.newEpoch))
+  if (action.kind === "epoch") return computeThresholdApprovalDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), BigInt(action.newEpoch), BigInt(action.keyGeneration))
   return computeRosterUpdateDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), BigInt(action.newEpoch), BigInt(action.thresholdWeight), action.members, action.weights.map(BigInt))
 }
 function validateAction(action: FrostAction): void {
   normalized(action.orgId)
   normalized(action.packageId)
   if (!/^(?:[\da-f]{2})*$/.test(action.chainIdHex)) throw new FrostSessionError("chainIdHex must be lowercase even-length hex")
-  for (const value of [action.epoch, action.nonce, ...(action.kind === "roster" ? [action.newEpoch, action.thresholdWeight, ...action.weights] : action.kind === "epoch" ? [action.newEpoch] : [])]) {
+  for (const value of [action.epoch, action.nonce, ...(action.kind === "roster" ? [action.newEpoch, action.thresholdWeight, ...action.weights] : action.kind === "epoch" ? [action.newEpoch, action.keyGeneration] : [])]) {
     if (!/^(0|[1-9]\d*)$/.test(value) || BigInt(value) > (1n << 64n) - 1n) throw new FrostSessionError("Action integer fields must be canonical u64 decimal strings")
   }
   if (action.kind !== "proposal" && BigInt(action.newEpoch) !== BigInt(action.epoch) + 1n) throw new FrostSessionError("Organization epoch transition must increment exactly once")

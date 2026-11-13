@@ -138,7 +138,7 @@ describe('vault_client admission-economics builders', () => {
 
 describe('parseOrganization genesis tail', () => {
   const table = (id: number) => Buffer.concat([A('0x' + id.toString(16).padStart(64, '0')), u64(0n)]);
-  // 手工 Move 序列化：UID || group_pk || threshold || epoch || last_nonce || chain || 2×Table || key_signers || key_threshold || 4×u64 genesis
+  // 手工 Move 序列化：UID || group_pk || threshold || epoch || last_nonce || chain || 2×Table || key_signers || key_threshold || 4×u64 genesis || key_generation
   const orgBytes = (...tail: Buffer[]) => Buffer.concat([
     ORG,
     Buffer.from([32]), Buffer.alloc(32, 0xab), // group_pk = uleb(32) + 32B
@@ -149,7 +149,7 @@ describe('parseOrganization genesis tail', () => {
     u64(2n), // key_threshold
     ...tail,
   ]);
-  const genesisTail = [u64(123n), u64(200n), u64(77n), u64(1_777_777_777_777n)];
+  const genesisTail = [u64(123n), u64(200n), u64(77n), u64(1_777_777_777_777n), u64(1n)]; // 创世四元组 + key_generation（尾部）
   it('parses the 4 trailing genesis fields after key_threshold (Balance<SUI> as bare u64)', () => {
     const snap = parseOrganization(orgBytes(...genesisTail));
     expect(snap.genesisStake).toBe(123n);
@@ -157,16 +157,19 @@ describe('parseOrganization genesis tail', () => {
     expect(snap.genesisWithdrawn).toBe(77n);
     expect(snap.genesisUnlockAtMs).toBe(1_777_777_777_777n);
     expect(snap.keyThreshold).toBe(2n);
+    expect(snap.keyGeneration).toBe(1n);
     expect(snap.nextNonce).toBe(1n);
   });
   it('rejects the pre-genesis layout (missing 32-byte tail) and truncations inside the tail', () => {
+    expect(() => parseOrganization(orgBytes(u64(123n), u64(200n), u64(77n), u64(1_777_777_777_777n)))).toThrow(/key_generation/);
     expect(() => parseOrganization(orgBytes())).toThrow(/创世质押/);
-    expect(() => parseOrganization(orgBytes(...genesisTail.slice(0, 3)))).toThrow(/创世质押/);
+    expect(() => parseOrganization(orgBytes(u64(123n)))).toThrow(/创世质押/);
     expect(() => parseOrganization(orgBytes(...genesisTail, Buffer.from([0])))).toThrow(/多余字节/);
   });
   it('rejects the old layout without key_threshold (precedent preserved)', () => {
     const withTail = orgBytes(...genesisTail);
-    expect(() => parseOrganization(withTail.subarray(0, withTail.length - 40))).toThrow();
+    expect(() => parseOrganization(withTail.subarray(0, withTail.length - 8))).toThrow(/key_generation/);
+    expect(() => parseOrganization(withTail.subarray(0, withTail.length - 48))).toThrow();
   });
 });
 

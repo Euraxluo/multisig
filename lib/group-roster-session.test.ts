@@ -20,7 +20,7 @@ async function fixture() {
   const keys: BoundDeviceKey[] = participants.map((holder, index) => ({ ...metadata, holder, index: BigInt(index + 1), share: ed25519_FROST.utils.Fn.fromBytes(dealer.secretShares[identifiers[index]].signingShare), groupPk: metadata.commitments[0], keyPackageId: publicKeyPackageId(metadata), orgId: "0x" + "aa".repeat(32), epoch: 7n, creationDigest: "00".repeat(32) }))
   const verify = async (bytes: Uint8Array, signature: string, address: string) => { await verifyPersonalMessageSignature(bytes, signature, { address }) }
   const auth = wallets.map(wallet => ({ sign: async (bytes: Uint8Array) => ({ signature: (await wallet.signPersonalMessage(bytes)).signature }), verify }))
-  const live: LiveOrganization = { orgId: keys[0].orgId, epoch: 7n, lastNonce: 9n, groupPk: keys[0].groupPk, chainId: new TextEncoder().encode("sui-testnet:"), thresholdWeight: 2n, members: participants.map(address => ({ address, weight: 1n })) }
+  const live: LiveOrganization = { orgId: keys[0].orgId, epoch: 7n, lastNonce: 9n, groupPk: keys[0].groupPk, chainId: new TextEncoder().encode("sui-testnet:"), thresholdWeight: 2n, members: participants.map(address => ({ address, weight: 1n })), keyGeneration: 1n }
   const plan = planRosterChange(live, { members: live.members.map(member => ({ ...member, weight: 2n })), thresholdWeight: 3n })
   const request = await createFrostRequest({ action: createRosterFrostAction(live, plan), key: keys[0], signerIndices: [1n, 2n], coordinator: participants[0], expiresAtMs: Date.now() + 60_000 }, auth[0])
   const stores = keys.map(() => createMemoryFrostSessionStore())

@@ -54,6 +54,14 @@ export interface GennaroResharePackage {
   honestyProof?: DealerHonestyProof;
 }
 
+/** Dealer 诚实性校验失败（context 不匹配 / 常数承诺与多项式承诺不一致）。 */
+export class DealerHonestyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DealerHonestyError';
+  }
+}
+
 /**
  * 计算 Dealer 诚实性零知识证明的 Fiat-Shamir 挑战标量 c
  * 包含强域隔离上下文: orgId + epoch + sessionId + dealerIndex + C_{i,0} + Y_i + R
@@ -466,14 +474,15 @@ export class GennaroResharingParticipant {
    * 没有任何 Baseline 依赖！
    * @param incomingSubShares 来自各活跃旧成员的 w_{i -> this.index}
    * @param peerCommitments 各活跃旧成员广播的承诺向量
-   * @param originalGroupPublicKey 恒定的组织公钥
+   * @param originalGroupPublicKey 必传的恒定组织公钥（round-9 去可选化）：
+   *   无它时恶意 dealer 可静默产出被毒化的群公钥（RT9-T1c join 缺口）。
    * @param newCommitteeShares 可选的新委员会成员分片
    * @param options 必填的 Dealer 诚实性证明校验选项 (证明各 Dealer 的常数承诺 C_{i,0} == λ_i(0) * Y_i 且绑定会话上下文；不再存在无 context 的静默跳过路径)
    */
   public finalizeNewShare(
     incomingSubShares: Map<string, bigint>,
     peerCommitments: Map<string, Point[]>,
-    originalGroupPublicKey: Uint8Array | undefined = undefined,
+    originalGroupPublicKey: Uint8Array,
     newCommitteeShares: { index: bigint | number; share: bigint }[] = [],
     options: {
       dealerHonestyProofs: Map<string, DealerHonestyProof>;
@@ -485,9 +494,28 @@ export class GennaroResharingParticipant {
     if (!this.isNewMember) {
       throw new Error(`[Gennaro-${this.id}] Node is not a member of the new committee`);
     }
+    if (!(originalGroupPublicKey instanceof Uint8Array) || originalGroupPublicKey.length !== 32) {
+      throw new Error(
+        `[Gennaro-${this.id}] originalGroupPublicKey is required (32 bytes): without it a poisoned resharing polynomial silently corrupts the group public key`
+      );
+    }
 
     // 严格校验所有 Dealer 的 PoK —— 证明与 context 不匹配即为硬错误，无任何静默回退
     for (const [senderId, proof] of options.dealerHonestyProofs.entries()) {
+      // round-9 join 缺口闭合（RT9-T1c4）：证明的常数承诺 C_{i,0} 必须与该 dealer
+      // 投递的 resharing 多项式承诺 commitments[0] 逐字节一致。缺一即拒——
+      // 诚实身份 + 毒化多项式（常数 z* ≠ λ·s_i）的组合在此被硬拒。
+      const commitments = peerCommitments.get(senderId);
+      if (!commitments || commitments.length === 0) {
+        throw new Error(
+          `[Gennaro-${this.id}] Dealer honesty proof has no matching resharing commitments for sender: ${senderId}`
+        );
+      }
+      if (!bytesEqual(proof.constantCommitment, commitments[0].toBytes())) {
+        throw new DealerHonestyError(
+          `[Gennaro-${this.id}] constant commitment mismatch for sender: ${senderId}`
+        );
+      }
       const expectedY = options.expectedVerificationShares?.get(senderId);
       const isValid = verifyDealerHonestyProof(
         proof,
@@ -496,7 +524,7 @@ export class GennaroResharingParticipant {
         expectedY
       );
       if (!isValid) {
-        throw new Error(
+        throw new DealerHonestyError(
           `[Gennaro-${this.id}] Sub-share dealer honesty proof verification failed for sender: ${senderId}`
         );
       }
@@ -536,12 +564,11 @@ export class GennaroResharingParticipant {
       computedGroupPublicKey = groupPublicKeyPoint.toBytes();
     }
 
-    if (originalGroupPublicKey && originalGroupPublicKey.length === 32) {
-      if (!bytesEqual(computedGroupPublicKey, originalGroupPublicKey)) {
-        throw new Error(
-          `[Gennaro-${this.id}] Recomputed group public key does not match original group public key`
-        );
-      }
+    // round-9：originalGroupPublicKey 必传且必查（32 字节在方法入口已硬校验）。
+    if (!bytesEqual(computedGroupPublicKey, originalGroupPublicKey)) {
+      throw new DealerHonestyError(
+        `[Gennaro-${this.id}] Recomputed group public key does not match original group public key`
+      );
     }
 
     return {

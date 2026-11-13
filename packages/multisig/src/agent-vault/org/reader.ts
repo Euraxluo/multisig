@@ -35,6 +35,8 @@ export interface OrganizationSnapshot {
   genesisWithdrawn: bigint;
   /** 创世质押 90 天硬锁解锁时刻（ms）；0 = 直接创建路径（无质押）。 */
   genesisUnlockAtMs: bigint;
+  /** 密钥生成代：创建 = 1，rotate_group_key +1（resharing 不变）。执行摘要 V2 尾字段。 */
+  keyGeneration: bigint;
 }
 
 /** UpgradeCap BCS = uid(32) || package(32) || version u64 || policy u8 = 73B。 */
@@ -89,6 +91,9 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
   const genesisBondedTotal = r.u64();
   const genesisWithdrawn = r.u64();
   const genesisUnlockAtMs = r.u64();
+  // 尾随 key_generation（round-9）：创建 = 1，rotate +1；执行摘要 V2 绑定它。
+  if (r.remaining < 8) throw new Error('Organization BCS 缺少尾随 key_generation u64（旧布局不再支持）');
+  const keyGeneration = r.u64();
   if (r.remaining !== 0) throw new Error('Organization BCS 存在多余字节');
   return {
     id,
@@ -107,6 +112,7 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
     genesisBondedTotal,
     genesisWithdrawn,
     genesisUnlockAtMs,
+    keyGeneration,
   };
 }
 

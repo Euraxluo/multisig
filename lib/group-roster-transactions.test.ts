@@ -46,6 +46,7 @@ function fixture() {
     orgId, groupPk: commitments[0], epoch: 7n, lastNonce: 9n,
     thresholdWeight: 2n, chainId: new TextEncoder().encode("sui-testnet:"),
     members: [{ address: participants[0], weight: 2n }, { address: participants[1], weight: 1n }],
+    keyGeneration: 1n,
   }
   const draft = { members: [{ address: participants[0], weight: 2n }, { address: carol, weight: 1n }], thresholdWeight: 2n }
   return { keys, live, draft, plan: planRosterChange(live, draft) }

@@ -11,6 +11,7 @@ function live(overrides: Partial<LiveOrganization> = {}): LiveOrganization {
     orgId: address("0x20"), groupPk: new Uint8Array(32).fill(1), epoch: 1n, lastNonce: 0n,
     thresholdWeight: 2n, chainId: new TextEncoder().encode("sui-testnet:"),
     members: [{ address: alice, weight: 2n }, { address: bob, weight: 1n }],
+    keyGeneration: 1n,
     ...overrides,
   }
 }

@@ -10,6 +10,7 @@ import {
   computeCreatePopDigest,
   computeKeyRotationDigest,
   computeRotatePopDigest,
+  computeThresholdApprovalDigest,
   computeTreasuryTransferDigest,
 } from './digest';
 import {
@@ -78,17 +79,39 @@ describe('computeKeyRotationDigest (V3)', () => {
   });
 });
 
-describe('computeTreasuryTransferDigest', () => {
-  it('equals hand-computed H(SUI_ORG_TREASURY_TRANSFER_V1: || … || proposal || recipient || amount)', () => {
+describe('computeTreasuryTransferDigest (V2)', () => {
+  it('equals hand-computed H(SUI_ORG_TREASURY_TRANSFER_V2: || … || proposal || recipient || amount || key_generation)', () => {
     const prop = A('0x' + 'aa'.repeat(32));
     const recv = A('0x' + 'bb'.repeat(32));
     const expected = sha256(
-      txt('SUI_ORG_TREASURY_TRANSFER_V1:'), txt(CHAIN), ORG, u64(6n), u64(21n), prop, recv, u64(1_000_000n),
+      txt('SUI_ORG_TREASURY_TRANSFER_V2:'), txt(CHAIN), ORG, u64(6n), u64(21n), prop, recv, u64(1_000_000n), u64(3n),
     );
     expect(Buffer.from(computeTreasuryTransferDigest({
       chainId: CHAIN, orgId: ORGID, epochVersion: 6n, nonce: 21n,
       proposalId: '0x' + 'aa'.repeat(32), recipient: '0x' + 'bb'.repeat(32), amount: 1_000_000n,
+      keyGeneration: 3n,
     }))).toEqual(expected);
+  });
+  it('binds key_generation: a rotated org invalidates signatures made under the old generation', () => {
+    const base = { chainId: CHAIN, orgId: ORGID, epochVersion: 6n, nonce: 21n, proposalId: '0x' + 'aa'.repeat(32), recipient: '0x' + 'bb'.repeat(32), amount: 1_000_000n };
+    const gen1 = computeTreasuryTransferDigest({ ...base, keyGeneration: 1n });
+    const gen2 = computeTreasuryTransferDigest({ ...base, keyGeneration: 2n });
+    expect(Buffer.from(gen1).equals(Buffer.from(gen2))).toBe(false);
+  });
+});
+
+describe('computeThresholdApprovalDigest (V2)', () => {
+  it('equals hand-computed H(SUI_ORG_EPOCH_ADVANCE_V2: || chain || org || epoch || nonce || newEpoch || key_generation)', () => {
+    const expected = sha256(
+      txt('SUI_ORG_EPOCH_ADVANCE_V2:'), txt(CHAIN), ORG, u64(4n), u64(7n), u64(5n), u64(2n),
+    );
+    expect(Buffer.from(computeThresholdApprovalDigest({
+      chainId: CHAIN, orgId: ORGID, epochVersion: 4n, nonce: 7n, newEpochVersion: 5n, keyGeneration: 2n,
+    }))).toEqual(expected);
+  });
+  it('binds key_generation: flipping it changes the digest', () => {
+    const base = { chainId: CHAIN, orgId: ORGID, epochVersion: 4n, nonce: 7n, newEpochVersion: 5n };
+    expect(Buffer.from(computeThresholdApprovalDigest({ ...base, keyGeneration: 1n })).equals(Buffer.from(computeThresholdApprovalDigest({ ...base, keyGeneration: 2n })))).toBe(false);
   });
 });
 
@@ -133,7 +156,7 @@ describe('builders', () => {
 });
 
 describe('readers / schemas', () => {
-  it('parseOrganization accepts trailing key_signers + key_threshold u64 + genesis quartet', () => {
+  it('parseOrganization accepts trailing key_signers + key_threshold u64 + genesis quartet + key_generation', () => {
     const table = (id: number) => Buffer.concat([A('0x' + id.toString(16).padStart(64, '0')), u64(0n)]);
     const bytes = Buffer.concat([
       ORG, // id
@@ -146,6 +169,7 @@ describe('readers / schemas', () => {
       uleb(2), M1, M2, // key_signers
       u64(2n), // key_threshold
       u64(123n), u64(456n), u64(78n), u64(9_000_000_000n), // genesis_stake/bonded_total/withdrawn/unlock_at_ms
+      u64(4n), // key_generation（round-9 尾字段）
     ]);
     const snap = parseOrganization(bytes);
     expect(snap.keySigners).toEqual([M1, M2].map(b => '0x' + b.toString('hex')));
@@ -155,12 +179,15 @@ describe('readers / schemas', () => {
     expect(snap.genesisBondedTotal).toBe(456n);
     expect(snap.genesisWithdrawn).toBe(78n);
     expect(snap.genesisUnlockAtMs).toBe(9_000_000_000n);
+    expect(snap.keyGeneration).toBe(4n);
+    // 缺尾随 key_generation 的上一代布局必须被拒绝
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 8))).toThrow(/key_generation/);
     // 缺尾随创世质押四元组的布局必须被拒绝
-    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 32))).toThrow();
-    // 缺尾随 key_threshold u64 的旧布局必须被拒绝
     expect(() => parseOrganization(bytes.subarray(0, bytes.length - 40))).toThrow();
+    // 缺尾随 key_threshold u64 的旧布局必须被拒绝
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 48))).toThrow();
     // 缺尾随 key_signers + key_threshold 的更旧布局同样拒绝
-    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 105))).toThrow();
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 113))).toThrow();
   });
   it('AgentVaultBcs parses 4 trailing u64 policy fields and rejects old layout', () => {
     const vault = {

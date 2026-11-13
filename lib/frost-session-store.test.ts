@@ -16,7 +16,7 @@ function fixture(): BoundDeviceKey {
   const metadata = { network: "sui:testnet" as const, sessionId: "0x" + "bb".repeat(32), participantAddresses: [address], dealerAddresses: [address], threshold: 1n, sessionEpoch: 1n, commitments }
   return { ...metadata, groupPk: commitments[0], keyPackageId: publicKeyPackageId(metadata), holder: address, index: 1n, share: 7n, orgId, epoch: 1n, creationDigest: "00".repeat(32) }
 }
-const action = { kind: "epoch" as const, packageId: "0x" + "cc".repeat(32), orgId, epoch: "1", nonce: "2", chainIdHex: "00".repeat(32), newEpoch: "2" }
+const action = { kind: "epoch" as const, packageId: "0x" + "cc".repeat(32), orgId, epoch: "1", nonce: "2", chainIdHex: "00".repeat(32), newEpoch: "2", keyGeneration: "1" }
 
 test("IndexedDB nonce consumption commits before return and refuses a second transcript", async () => {
   const databaseName = `frost-test-${crypto.randomUUID()}`

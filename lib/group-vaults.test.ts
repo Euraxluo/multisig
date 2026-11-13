@@ -50,7 +50,7 @@ function packageFixture(): RawPackage {
     ], typeOrigins: [], linkage: [],
   }
 }
-const organizationBytes = (pk = key) => OrganizationContent.serialize({ id: orgId, group_pk: Array.from(pk), threshold_weight: "2", epoch_version: "1", last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")), members_weight: { id: address("0x20"), size: "3" }, executed_proposals: { id: address("0x21"), size: "0" }, key_signers: [], key_threshold: "2", genesis_stake: "0", genesis_bonded_total: "0", genesis_withdrawn: "0", genesis_unlock_at_ms: "0" }).toBytes()
+const organizationBytes = (pk = key) => OrganizationContent.serialize({ id: orgId, group_pk: Array.from(pk), threshold_weight: "2", epoch_version: "1", last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")), members_weight: { id: address("0x20"), size: "3" }, executed_proposals: { id: address("0x21"), size: "0" }, key_signers: [], key_threshold: "2", genesis_stake: "0", genesis_bonded_total: "0", genesis_withdrawn: "0", genesis_unlock_at_ms: "0", key_generation: "1" }).toBytes()
 function fakeClient() {
   const metadata = packageFixture()
   type Obj = { objectId: string; type: string; owner: SuiClientObjectOwner; content: Uint8Array }

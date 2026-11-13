@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x768e3781fd774bdd010089ede1c66df344aee2047817a121aa6c602e73723501';
+export const AGENT_VAULT_PACKAGE_ID = '0x4916084e93ee0323e1eff031b45ff83e70f7e19e7ad3d307ad498a20ed72b931';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -34,11 +34,13 @@ export const MODULES = {
 /** 域分隔常量（与 cryptographic_org.move 的 DOMAIN_* 逐字节一致）。 */
 export const DOMAINS = {
   PROPOSAL: 'SUI_ORG_THRESHOLD_PROPOSAL_V2:', // V2（#14）：+action_type 尾字节
-  THRESHOLD_APPROVAL: 'SUI_ORG_APPROVAL_V1:',
+  /** round-9：纪元推进摘要升 V2，尾部绑 key_generation（旧 APPROVAL_V1 已废弃）。 */
+  THRESHOLD_APPROVAL: 'SUI_ORG_EPOCH_ADVANCE_V2:',
+  /** round-9：国库转账摘要升 V2，尾部绑 key_generation（旧 TREASURY_TRANSFER_V1 已废弃）。 */
+  TREASURY_TRANSFER: 'SUI_ORG_TREASURY_TRANSFER_V2:',
   KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V3:',
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
   POP: 'SUI_ORG_POP_V2:', // round-7：创建 PoP 绑 key_threshold；轮换 PoP 仍 V1（见 rotate 注释）
-  TREASURY_TRANSFER: 'SUI_ORG_TREASURY_TRANSFER_V1:',
   GENESIS_WITHDRAW: 'SUI_ORG_GENESIS_WITHDRAW_V1:',
 } as const;
 

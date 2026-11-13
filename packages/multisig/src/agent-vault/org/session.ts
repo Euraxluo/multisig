@@ -192,7 +192,7 @@ export class ThresholdProposalSession {
         break;
       }
       case 'advanceEpoch': {
-        const digest = computeThresholdApprovalDigest({ ...base, newEpochVersion: snapshot.epochVersion + 1n });
+        const digest = computeThresholdApprovalDigest({ ...base, newEpochVersion: snapshot.epochVersion + 1n, keyGeneration: snapshot.keyGeneration });
         derived = {
           digest,
           expectedEvents: [GOVERNANCE_EVENTS.organizationEpochUpdated],
@@ -292,7 +292,8 @@ export class ThresholdProposalSession {
     if (!this.client) throw new Error('本会话无 client（fromSnapshot 离线构造），请重建会话');
     const latest = await readOrganization(this.client, this.signedSnapshot.id, this.packageId);
     const changed = latest.lastNonce !== this.signedSnapshot.lastNonce || latest.epochVersion !== this.signedSnapshot.epochVersion
-      || latest.chainId !== this.signedSnapshot.chainId || bytesToHex(latest.groupPk) !== bytesToHex(this.signedSnapshot.groupPk);
+      || latest.chainId !== this.signedSnapshot.chainId || bytesToHex(latest.groupPk) !== bytesToHex(this.signedSnapshot.groupPk)
+      || latest.keyGeneration !== this.signedSnapshot.keyGeneration;
     if (changed) {
       const wasSigned = this.frostSignature !== null;
       this.invalidated = true;
@@ -357,8 +358,10 @@ export class ThresholdProposalSession {
           valid = r.address() === orgId && r.u64() === nextEpoch;
           break;
         case GOVERNANCE_EVENTS.groupKeyRotated:
+          // round-9：事件尾部追加 key_generation（old_pk ‖ new_pk ‖ new_epoch ‖ key_generation）。
           valid = action.kind === 'rotateKey' && r.address() === orgId
-            && sameBytes(r.vector(), this.signedSnapshot.groupPk) && sameBytes(r.vector(), action.newGroupPk) && r.u64() === nextEpoch;
+            && sameBytes(r.vector(), this.signedSnapshot.groupPk) && sameBytes(r.vector(), action.newGroupPk) && r.u64() === nextEpoch
+            && r.u64() === this.signedSnapshot.keyGeneration + 1n;
           break;
         case GOVERNANCE_EVENTS.rosterUpdated: {
           if (action.kind !== 'roster' || r.address() !== orgId || r.uleb() !== action.newMembers.length) return false;

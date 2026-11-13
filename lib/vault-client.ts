@@ -358,8 +358,8 @@ export function computeProposalDigest(chainId: Uint8Array | string, orgId: strin
   return sdkProposalDigest({ chainId, orgId, epochVersion, nonce, payload, actionType });
 }
 
-export function computeThresholdApprovalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number): Uint8Array {
-  return sdkApprovalDigest({ chainId, orgId, epochVersion, nonce, newEpochVersion });
+export function computeThresholdApprovalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number, keyGeneration: bigint | number): Uint8Array {
+  return sdkApprovalDigest({ chainId, orgId, epochVersion, nonce, newEpochVersion, keyGeneration });
 }
 
 export function computeKeyRotationDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newGroupPk: Uint8Array, newSigners: string[], keyThreshold: bigint | number): Uint8Array {

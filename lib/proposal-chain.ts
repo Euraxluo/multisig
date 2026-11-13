@@ -21,6 +21,8 @@ export const OrganizationContent = bcs.struct("Organization", {
   // 准入经济学（2026-11-13）：Balance<SUI> BCS 编码即裸 u64 value。
   genesis_stake: bcs.u64(), genesis_bonded_total: bcs.u64(),
   genesis_withdrawn: bcs.u64(), genesis_unlock_at_ms: bcs.u64(),
+  // round-9：密钥生成代（创建 = 1，rotate +1）；执行摘要 V2 尾部绑定。
+  key_generation: bcs.u64(),
 })
 const WeightField = bcs.struct("WeightField", { id: bcs.Address, name: bcs.Address, value: bcs.u64() })
 const requestSignal = () => AbortSignal.timeout(20_000)

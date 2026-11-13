@@ -75,7 +75,7 @@ async function fixture(options: { threshold?: number; indices?: number[]; firstI
   const signers = (options.indices ?? [1, 3]).map(index => devices[index - 1])
   const coordinator = signers[0]
   const request = await createFrostRequest({
-    action: { kind: "epoch", packageId: address(), orgId, epoch: "7", nonce: "2", chainIdHex: "33".repeat(32), newEpoch: "8" },
+    action: { kind: "epoch", packageId: address(), orgId, epoch: "7", nonce: "2", chainIdHex: "33".repeat(32), newEpoch: "8", keyGeneration: "1" },
     key: coordinator.key, signerIndices: signers.map(device => device.key.index), coordinator: coordinator.profile.address,
     expiresAtMs: Date.now() + 300_000,
   }, coordinator.auth)

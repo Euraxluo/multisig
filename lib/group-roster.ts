@@ -28,6 +28,8 @@ export interface LiveOrganization {
   /** Bytes stored on chain; the signed digest must use these, not a default. */
   chainId: Uint8Array
   members: RosterMember[]
+  /** 密钥生成代（round-9）：创建 = 1，rotate_group_key +1；resharing 不变。 */
+  keyGeneration: bigint
 }
 
 export interface RosterPlan {
@@ -78,6 +80,7 @@ export async function readLiveOrganization(client: RosterClient, orgId: string):
     thresholdWeight: BigInt(content.threshold_weight),
     chainId: new Uint8Array(content.chain_id),
     members,
+    keyGeneration: BigInt(content.key_generation),
   }
 }
 
