@@ -15,7 +15,7 @@ function organization() {
   return OrganizationContent.serialize({
     id: orgId, group_pk: Array.from({ length: 32 }).fill(1) as number[], threshold_weight: "2", epoch_version: "1",
     last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")),
-    members_weight: { id: tableId, size: "2" }, executed_proposals: { id: address("0x22"), size: "0" }, key_signers: [], key_threshold: "2",
+    members_weight: { id: tableId, size: "2" }, executed_proposals: { id: address("0x22"), size: "0" }, key_signers: [], key_threshold: "2", genesis_stake: "0", genesis_bonded_total: "0", genesis_withdrawn: "0", genesis_unlock_at_ms: "0",
   }).toBytes()
 }
 

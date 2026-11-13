@@ -124,7 +124,7 @@ describe('builders', () => {
 });
 
 describe('readers / schemas', () => {
-  it('parseOrganization accepts trailing key_signers + key_threshold u64', () => {
+  it('parseOrganization accepts trailing key_signers + key_threshold u64 + genesis quartet', () => {
     const table = (id: number) => Buffer.concat([A('0x' + id.toString(16).padStart(64, '0')), u64(0n)]);
     const bytes = Buffer.concat([
       ORG, // id
@@ -136,15 +136,22 @@ describe('readers / schemas', () => {
       table(0x20), table(0x21), // two Tables
       uleb(2), M1, M2, // key_signers
       u64(2n), // key_threshold
+      u64(123n), u64(456n), u64(78n), u64(9_000_000_000n), // genesis_stake/bonded_total/withdrawn/unlock_at_ms
     ]);
     const snap = parseOrganization(bytes);
     expect(snap.keySigners).toEqual([M1, M2].map(b => '0x' + b.toString('hex')));
     expect(snap.keyThreshold).toBe(2n);
     expect(snap.memberCount).toBe(0n);
+    expect(snap.genesisStake).toBe(123n);
+    expect(snap.genesisBondedTotal).toBe(456n);
+    expect(snap.genesisWithdrawn).toBe(78n);
+    expect(snap.genesisUnlockAtMs).toBe(9_000_000_000n);
+    // 缺尾随创世质押四元组的布局必须被拒绝
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 32))).toThrow();
     // 缺尾随 key_threshold u64 的旧布局必须被拒绝
-    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 8))).toThrow();
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 40))).toThrow();
     // 缺尾随 key_signers + key_threshold 的更旧布局同样拒绝
-    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 73))).toThrow();
+    expect(() => parseOrganization(bytes.subarray(0, bytes.length - 105))).toThrow();
   });
   it('AgentVaultBcs parses 4 trailing u64 policy fields and rejects old layout', () => {
     const vault = {

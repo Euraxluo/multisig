@@ -155,14 +155,16 @@ export class AgentVaultClient {
   // DKG 会话 (dkg_committee) — 直通
   // ------------------------------------------------------------------
 
-  public buildCreateDkgSessionPTB(sender: string, threshold: bigint | number, participants: string[], deadlineTimestampMs: bigint | number): Transaction {
-    return ptb(this.sdk.buildCreateDkgSessionPTB(sender, threshold, participants, deadlineTimestampMs));
+  /** 准入经济学：creationFee 缺省 0.005 SUI（CoinWithBalance，gas 余额直接生成精确币）。 */
+  public buildCreateDkgSessionPTB(sender: string, threshold: bigint | number, participants: string[], deadlineTimestampMs: bigint | number, creationFee?: CoinInput): Transaction {
+    return ptb(this.sdk.buildCreateDkgSessionPTB(sender, threshold, participants, deadlineTimestampMs, creationFee !== undefined ? { coin: creationFee as unknown as string } : undefined));
   }
   public buildConfirmParticipantPTB(sessionId: string): Transaction {
     return ptb(this.sdk.buildConfirmParticipantPTB(sessionId));
   }
-  public buildSubmitCommitmentPTB(sessionId: string, commitmentBytes: Uint8Array): Transaction {
-    return ptb(this.sdk.buildSubmitCommitmentPTB(sessionId, commitmentBytes));
+  /** payment 缺省 0.05 SUI 参与质押；可传 coin 对象 ID。 */
+  public buildSubmitCommitmentPTB(sessionId: string, commitmentBytes: Uint8Array, attestPublicKey?: Uint8Array, payment?: CoinInput): Transaction {
+    return ptb(this.sdk.buildSubmitCommitmentPTB(sessionId, commitmentBytes, attestPublicKey ?? new Uint8Array(32), payment !== undefined ? { coin: payment as unknown as string } : undefined));
   }
   public buildRegisterEncryptionKeyPTB(sessionId: string, encryptionPublicKey: Uint8Array): Transaction {
     return ptb(this.sdk.buildRegisterEncryptionKeyPTB(sessionId, encryptionPublicKey));
@@ -170,8 +172,16 @@ export class AgentVaultClient {
   public buildDepositMailboxSharePTB(sessionId: string, recipient: string, encryptedPayload: Uint8Array): Transaction {
     return ptb(this.sdk.buildDepositMailboxSharePTB(sessionId, recipient, encryptedPayload));
   }
-  public buildSubmitAsyncPackagePTB(sessionId: string, commitmentBytes: Uint8Array, attestPublicKey: Uint8Array, recipients: string[], encryptedPayloads: Uint8Array[]): Transaction {
-    return ptb(this.sdk.buildSubmitAsyncPackagePTB(sessionId, commitmentBytes, attestPublicKey, recipients, encryptedPayloads));
+  public buildSubmitAsyncPackagePTB(sessionId: string, commitmentBytes: Uint8Array, attestPublicKey: Uint8Array, recipients: string[], encryptedPayloads: Uint8Array[], payment?: CoinInput): Transaction {
+    return ptb(this.sdk.buildSubmitAsyncPackagePTB(sessionId, commitmentBytes, attestPublicKey, recipients, encryptedPayloads, payment !== undefined ? { coin: payment as unknown as string } : undefined));
+  }
+  /** 领回参与质押（FINALIZED/TIMED_OUT 后原额退款）。 */
+  public buildClaimBondPTB(sessionId: string): Transaction {
+    return ptb(this.sdk.buildClaimBondPTB(sessionId));
+  }
+  /** 创世质押提取：FROST 门限签名（computeGenesisWithdrawDigest）+ 90 天硬锁。 */
+  public buildWithdrawGenesisStakePTB(orgId: string, nonce: bigint | number, amount: bigint | number, recipient: string, frostSignature: Uint8Array): Transaction {
+    return ptb(this.sdk.buildWithdrawGenesisStakePTB({ orgId, nonce, amount, recipient, frostSignature }));
   }
   /** 现行 attest_group_key 入口不再读 Clock；clockId 仅保留兼容旧签名，忽略。 */
   public buildAttestGroupKeyPTB(sessionId: string, groupPublicKey: Uint8Array, attestationSignature: Uint8Array, _clockId = AgentVaultClient.CLOCK_OBJECT_ID): Transaction {

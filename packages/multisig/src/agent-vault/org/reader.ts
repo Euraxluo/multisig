@@ -27,6 +27,14 @@ export interface OrganizationSnapshot {
   keyThreshold: bigint;
   /** 下一提案 nonce = last_nonce + 1（提案前必须重读链上，防撞号）。 */
   nextNonce: bigint;
+  /** 创世质押余款（Balance<SUI> 的 value；BCS 编码即裸 u64）。 */
+  genesisStake: bigint;
+  /** 创世质押累计入账总额（= 参与者超额支付合计，含已提取部分）。 */
+  genesisBondedTotal: bigint;
+  /** 已从创世质押提取的累计金额；live net = bonded_total - withdrawn。 */
+  genesisWithdrawn: bigint;
+  /** 创世质押 90 天硬锁解锁时刻（ms）；0 = 直接创建路径（无质押）。 */
+  genesisUnlockAtMs: bigint;
 }
 
 /** UpgradeCap BCS = uid(32) || package(32) || version u64 || policy u8 = 73B。 */
@@ -74,6 +82,13 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
   for (let i = 0; i < signerCount; i++) keySigners.push(r.address());
   if (r.remaining < 8) throw new Error('Organization BCS 缺少尾随 key_threshold u64（旧布局不再支持）');
   const keyThreshold = r.u64();
+  // 尾随创世质押四元组：genesis_stake: Balance<SUI>（BCS = 裸 u64 value）、
+  // genesis_bonded_total、genesis_withdrawn、genesis_unlock_at_ms。
+  if (r.remaining < 32) throw new Error('Organization BCS 缺少尾随创世质押四元组（旧布局不再支持）');
+  const genesisStake = r.u64();
+  const genesisBondedTotal = r.u64();
+  const genesisWithdrawn = r.u64();
+  const genesisUnlockAtMs = r.u64();
   if (r.remaining !== 0) throw new Error('Organization BCS 存在多余字节');
   return {
     id,
@@ -88,6 +103,10 @@ export function parseOrganization(b: Uint8Array): OrganizationSnapshot {
     keySigners,
     keyThreshold,
     nextNonce: lastNonce + 1n,
+    genesisStake,
+    genesisBondedTotal,
+    genesisWithdrawn,
+    genesisUnlockAtMs,
   };
 }
 

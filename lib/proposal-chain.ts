@@ -18,6 +18,9 @@ export const OrganizationContent = bcs.struct("Organization", {
   epoch_version: bcs.u64(), last_nonce: bcs.u64(), chain_id: bcs.vector(bcs.u8()),
   members_weight: Table, executed_proposals: Table, key_signers: bcs.vector(bcs.Address),
   key_threshold: bcs.u64(),
+  // 准入经济学（2026-11-13）：Balance<SUI> BCS 编码即裸 u64 value。
+  genesis_stake: bcs.u64(), genesis_bonded_total: bcs.u64(),
+  genesis_withdrawn: bcs.u64(), genesis_unlock_at_ms: bcs.u64(),
 })
 const WeightField = bcs.struct("WeightField", { id: bcs.Address, name: bcs.Address, value: bcs.u64() })
 const requestSignal = () => AbortSignal.timeout(20_000)

@@ -1,6 +1,7 @@
 import { Transaction, type TransactionArgument } from '@mysten/sui/transactions';
 
-import { AGENT_VAULT_PACKAGE_ID, LIMITS, RED_PACKET_LIMITS, SUI_CLOCK_OBJECT_ID, SUI_RANDOM_OBJECT_ID } from './org/constants';
+import { ADMISSION_ECONOMICS, AGENT_VAULT_PACKAGE_ID, LIMITS, RED_PACKET_LIMITS, SUI_CLOCK_OBJECT_ID, SUI_RANDOM_OBJECT_ID } from './org/constants';
+import { buildWithdrawGenesisStakePTB } from './org/builders';
 import { canonicalAddress } from './org/bcs';
 /**
  * DKG 会话参与者集合链下校验：与合约 assert 对齐（E_NOT_A_PARTICIPANT /
@@ -431,15 +432,21 @@ export class AgentVaultClient {
   public static readonly RANDOM_OBJECT_ID = SUI_RANDOM_OBJECT_ID;
 
   /** 创建限时门限 DKG 会话。返回 PTB；session_id 从 SessionCreatedEvent 读取。
-   * 合约要求 sender 必须在参与者集合内（E_NOT_A_PARTICIPANT），链下先拒绝。 */
+   * 合约要求 sender 必须在参与者集合内（E_NOT_A_PARTICIPANT），链下先拒绝。
+   * 准入经济学：creationFee（Coin<SUI>，≥0.005 SUI，链上进 @0x0）+ Clock
+   * （deadline - now 须落在 [10min, 7d]，E_DEADLINE_OUT_OF_RANGE=3025）。
+   * payment 沿支付统一约定：给 coin 或只给 amount 由 tx.coin() 生成精确币。 */
   public buildCreateDkgSessionPTB(
     sender: string,
     threshold: bigint | number,
     participants: string[],
-    deadlineTimestampMs: bigint | number
+    deadlineTimestampMs: bigint | number,
+    creationFee?: FinanceCoinSource,
+    transaction?: Transaction
   ): Transaction {
     validateDkgParticipants(sender, participants);
-    const tx = new Transaction();
+    const tx = transaction ?? new Transaction();
+    const feeArg = financeCoin(tx, FINANCE_SUI_TYPE, creationFee ?? { amount: ADMISSION_ECONOMICS.SESSION_CREATION_FEE_MIST });
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::create_dkg_session`,
       typeArguments: [],
@@ -447,6 +454,8 @@ export class AgentVaultClient {
         tx.pure.u64(BigInt(threshold)),
         tx.pure.vector('address', participants),
         tx.pure.u64(BigInt(deadlineTimestampMs)),
+        feeArg,
+        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
       ],
     });
     return tx;
@@ -490,9 +499,19 @@ export class AgentVaultClient {
     return tx;
   }
 
-  /** Round 1 提交多项式承诺。 */
-  public buildSubmitCommitmentPTB(sessionId: string, commitmentBytes: Uint8Array): Transaction {
-    const tx = new Transaction();
+  /** Round 1 提交多项式承诺。payment 为参与质押（≥ 会话 bond 下限
+   * 0.05 SUI，E_BOND_INSUFFICIENT_PAYMENT=3022；超额部分记作自愿 genesis
+   * stake，org 固化时归金库）；沿支付统一约定，可给 coin 或 amount。 */
+  public buildSubmitCommitmentPTB(
+    sessionId: string,
+    commitmentBytes: Uint8Array,
+    attestPublicKey: Uint8Array,
+    payment?: FinanceCoinSource,
+    transaction?: Transaction
+  ): Transaction {
+    if (attestPublicKey?.length !== 32) throw new Error('attestPublicKey must be 32 bytes (ed25519)');
+    const tx = transaction ?? new Transaction();
+    const paymentArg = financeCoin(tx, FINANCE_SUI_TYPE, payment ?? { amount: ADMISSION_ECONOMICS.MIN_BOND_MIST });
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::submit_commitment`,
       typeArguments: [],
@@ -500,6 +519,8 @@ export class AgentVaultClient {
         tx.object(sessionId),
         tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
         tx.pure.vector('u8', Array.from(commitmentBytes)),
+        tx.pure.vector('u8', Array.from(attestPublicKey)),
+        paymentArg,
       ],
     });
     return tx;
@@ -551,19 +572,23 @@ export class AgentVaultClient {
 
   /**
    * 一次性提交承诺 + 给多名收件人的密态份额（对应 Move 的 submit_async_package）。
+   * payment 为参与质押（≥ 会话 bond 下限；与 submit_commitment 同规）。
    */
   public buildSubmitAsyncPackagePTB(
     sessionId: string,
     commitmentBytes: Uint8Array,
     attestPublicKey: Uint8Array,
     recipients: string[],
-    encryptedPayloads: Uint8Array[]
+    encryptedPayloads: Uint8Array[],
+    payment?: FinanceCoinSource,
+    transaction?: Transaction
   ): Transaction {
     if (recipients.length !== encryptedPayloads.length) {
       throw new Error('recipients and encryptedPayloads length mismatch');
     }
     if (attestPublicKey?.length !== 32) throw new Error('attestPublicKey must be 32 bytes (ed25519)');
-    const tx = new Transaction();
+    const tx = transaction ?? new Transaction();
+    const paymentArg = financeCoin(tx, FINANCE_SUI_TYPE, payment ?? { amount: ADMISSION_ECONOMICS.MIN_BOND_MIST });
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::submit_async_package`,
       typeArguments: [],
@@ -571,10 +596,22 @@ export class AgentVaultClient {
         tx.object(sessionId),
         tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
         tx.pure.vector('u8', Array.from(commitmentBytes)),
-        tx.pure.vector('u8', Array.from(attestPublicKey!)),
+        tx.pure.vector('u8', Array.from(attestPublicKey)),
         tx.pure.vector('address', recipients),
-        (tx.pure as any).vector('vector<u8>', encryptedPayloads.map(p => Array.from(p))),
+        tx.pure.vector('vector<u8>', encryptedPayloads.map((p) => Array.from(p))),
+        paymentArg,
       ],
+    });
+    return tx;
+  }
+
+  /** 领回自己的 DKG 参与质押（会话 FINALIZED/TIMED_OUT 后原额退款；genesis 超额部分不可领，归 org 金库）。 */
+  public buildClaimBondPTB(sessionId: string, transaction?: Transaction): Transaction {
+    const tx = transaction ?? new Transaction();
+    tx.moveCall({
+      target: `${this.packageId}::dkg_committee::claim_bond`,
+      typeArguments: [],
+      arguments: [tx.object(sessionId)],
     });
     return tx;
   }
@@ -634,6 +671,21 @@ export class AgentVaultClient {
       arguments: [tx.object(sessionId), tx.object(AgentVaultClient.CLOCK_OBJECT_ID)],
     });
     return tx;
+  }
+
+  /**
+   * 创世质押提取（cryptographic_org::withdraw_genesis_stake）：FROST 门限签名
+   * （摘要用 computeGenesisWithdrawDigest）+ nonce 单调 + 90 天协议硬锁，
+   * Clock 由 builder 固定传系统对象。
+   */
+  public buildWithdrawGenesisStakePTB(input: {
+    orgId: string;
+    nonce: bigint | number;
+    amount: bigint | number;
+    recipient: string;
+    frostSignature: Uint8Array;
+  }): Transaction {
+    return buildWithdrawGenesisStakePTB({ packageId: this.packageId, ...input });
   }
 
   // ------------------------------------------------------------------
@@ -795,16 +847,18 @@ export class AgentVaultClient {
     return tx;
   }
 
-  /** 从已固化会话创建组织（members=已确认参与者，weight 全 1）。 */
+  /** 从已固化会话创建组织（members=已确认参与者，weight 全 1）。
+   * Clock 由 SDK builder 传入（org 侧记录创世质押 90 天硬锁的 unlock_at_ms）。 */
   public buildCreateOrganizationFromSessionPTB(
     sessionId: string,
-    thresholdWeight: bigint | number
+    thresholdWeight: bigint | number,
+    transaction?: Transaction
   ): Transaction {
-    const tx = new Transaction();
+    const tx = transaction ?? new Transaction();
     tx.moveCall({
       target: `${this.packageId}::cryptographic_org::create_organization_from_session`,
       typeArguments: [],
-      arguments: [tx.object(sessionId), tx.pure.u64(BigInt(thresholdWeight))],
+      arguments: [tx.object(sessionId), tx.pure.u64(BigInt(thresholdWeight)), tx.object(AgentVaultClient.CLOCK_OBJECT_ID)],
     });
     return tx;
   }

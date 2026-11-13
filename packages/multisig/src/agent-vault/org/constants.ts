@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0xb778d11962aaaee62518f487fdac208b26dff9dd53b614324c0a287bb326548f';
+export const AGENT_VAULT_PACKAGE_ID = '0x71d818e7ff348c741b845bcb967ba5dae751c844788cceeac60e00a9dd4d8fd0';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -39,6 +39,7 @@ export const DOMAINS = {
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
   POP: 'SUI_ORG_POP_V1:',
   TREASURY_TRANSFER: 'SUI_ORG_TREASURY_TRANSFER_V1:',
+  GENESIS_WITHDRAW: 'SUI_ORG_GENESIS_WITHDRAW_V1:',
 } as const;
 
 /** 组织绑定的链标识（DEFAULT_CHAIN_ID 固化 sui-testnet:；mainnet 走 create_organization_with_chain_id）。 */
@@ -53,6 +54,25 @@ export const CHAIN_IDS = {
 export const LIMITS = {
   /** update_organization_roster 原子替换的名册上限。 */
   MAX_ROSTER_MEMBERS: 128,
+} as const;
+
+/**
+ * 准入经济学常量（dkg_committee 参与质押 + cryptographic_org 创世质押，
+ * 与合约常量逐一对齐；链下构造前先用它拒绝必拒载荷）。
+ */
+export const ADMISSION_ECONOMICS = {
+  /** 创建 DKG 会话的防垃圾费（MIST）：足额即收，多余部分随币一起进 @0x0。 */
+  SESSION_CREATION_FEE_MIST: 5_000_000,
+  /** 参与质押下限（MIST，0.05 SUI）；付款不足直接拒。 */
+  MIN_BOND_MIST: 50_000_000,
+  /** 参与质押上限（MIST，0.5 SUI）；合约拒绝超额 bond 配置。 */
+  MAX_BOND_MIST: 500_000_000,
+  /** 会话最短时长（10 分钟）：deadline - now 低于它 abort 3025。 */
+  MIN_SESSION_DURATION_MS: 600_000,
+  /** 会话最长时长（7 天）：deadline - now 高于它 abort 3025。 */
+  MAX_SESSION_DURATION_MS: 604_800_000,
+  /** 创世质押协议级硬锁（90 天，治理不可绕过；withdraw 须等 unlock_at_ms）。 */
+  GENESIS_LOCK_MS: 7_776_000_000,
 } as const;
 
 /** red_packet 协议上限（与合约常量逐一对齐；链下构造前先用它拒绝必拒载荷）。 */
@@ -80,7 +100,7 @@ export const RED_PACKET_ERRORS: Readonly<Record<number, { name: string; message:
   14: { name: 'ENotExpired', message: 'Refund must occur strictly after the expiry millisecond.' },
 };
 
-/** cryptographic_org 数字错误码（1004 与 1010 已随清理删除，不在表内；创建与改册现在统一用 EUnreachableThreshold）。 */
+/** cryptographic_org 数字错误码（1004 已随清理删除，不在表内；创建与改册统一用 EUnreachableThreshold）。 */
 export const ORG_ERRORS: Readonly<Record<number, string>> = {
   1001: 'E_INVALID_SIGNATURE',
   1002: 'E_PROPOSAL_ALREADY_EXECUTED',
@@ -91,6 +111,7 @@ export const ORG_ERRORS: Readonly<Record<number, string>> = {
   1008: 'E_THRESHOLD_EXCEEDS_SIGNERS',
   1009: 'E_THRESHOLD_BELOW_KEY',
   1010: 'E_INVALID_POP',
+  1011: 'E_GENESIS_LOCKED',
 };
 
 /**
@@ -129,7 +150,7 @@ export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
   4018: 'E_INVALID_DEADLINE',
 };
 
-/** dkg_committee 数字错误码（3013 死桩已删除，不在表内）。 */
+/** dkg_committee 数字错误码（3013 死桩已删除，不在表内；3017–3019 与 3020–3025 均与合约逐一对齐）。 */
 export const DKG_ERRORS: Readonly<Record<number, string>> = {
   3001: 'E_NOT_A_PARTICIPANT',
   3002: 'E_INVALID_SESSION_STATUS',
@@ -145,6 +166,15 @@ export const DKG_ERRORS: Readonly<Record<number, string>> = {
   3012: 'E_KEY_NOT_ATTESTED',
   3015: 'E_INVALID_COMMITMENT',
   3016: 'E_COMMITMENT_MISSING',
+  3017: 'E_ATTEST_KEY_MISSING',
+  3018: 'E_ATTEST_SIGNATURE_INVALID',
+  3019: 'E_MAILBOX_ALREADY_DEPOSITED',
+  3020: 'E_BOND_BELOW_MIN',
+  3021: 'E_BOND_ABOVE_MAX',
+  3022: 'E_BOND_INSUFFICIENT_PAYMENT',
+  3023: 'E_NO_BOND_TO_CLAIM',
+  3024: 'E_SESSION_NOT_TERMINAL',
+  3025: 'E_DEADLINE_OUT_OF_RANGE',
 };
 
 /** asset_custody 命名错误（#[error(code = N)]，1–21 与合约逐一对齐）。 */

@@ -4,7 +4,7 @@
  * custody/builders 的托管模板。
  */
 import { Transaction } from '@mysten/sui/transactions';
-import { AGENT_VAULT_PACKAGE_ID, LIMITS } from './constants';
+import { AGENT_VAULT_PACKAGE_ID, LIMITS, SUI_CLOCK_OBJECT_ID } from './constants';
 import { u64le } from './bcs';
 
 function checkedU64(value: number | bigint): bigint {
@@ -197,6 +197,52 @@ export function buildUpdateRosterPTB(
       tx.pure.u64(checkedU64(input.newThresholdWeight)),
       tx.pure.vector('u8', Array.from(input.frostSignature)),
     ],
+  });
+  return tx;
+}
+
+/**
+ * 创世质押提取（withdraw_genesis_stake）：FROST 门限签名 + nonce 单调 +
+ * 90 天协议硬锁（unlock_at_ms 由 Clock 链上校验，签名摘要用
+ * computeGenesisWithdrawDigest）。
+ */
+export function buildWithdrawGenesisStakePTB(
+  input: GovernanceTarget & {
+    orgId: string;
+    nonce: number | bigint;
+    amount: number | bigint;
+    recipient: string;
+    frostSignature: Uint8Array;
+  },
+): Transaction {
+  if (input.frostSignature.length !== 64) {
+    throw new Error(`frostSignature 必须 64 字节，实际 ${input.frostSignature.length}`);
+  }
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pkg(input)}::cryptographic_org::withdraw_genesis_stake`,
+    arguments: [
+      tx.object(input.orgId),
+      tx.pure.u64(checkedU64(input.nonce)),
+      tx.pure.u64(checkedU64(input.amount)),
+      tx.pure.address(input.recipient),
+      tx.pure.vector('u8', Array.from(input.frostSignature)),
+      tx.object(SUI_CLOCK_OBJECT_ID),
+    ],
+  });
+  return tx;
+}
+
+/** 领回 DKG 参与质押（claim_bond）：会话 FINALIZED/TIMED_OUT 后原额退款。 */
+export function buildClaimBondPTB(
+  input: GovernanceTarget & {
+    sessionId: string;
+  },
+): Transaction {
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pkg(input)}::dkg_committee::claim_bond`,
+    arguments: [tx.object(input.sessionId)],
   });
   return tx;
 }

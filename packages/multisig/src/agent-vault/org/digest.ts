@@ -193,6 +193,32 @@ export function computeRosterUpdateDigest(input: {
   );
 }
 
+/**
+ * 创世质押提取摘要——与 cryptographic_org.move 的 withdraw_genesis_stake 逐字节一致：
+ * H("SUI_ORG_GENESIS_WITHDRAW_V1:" ‖ chain ‖ bcs(org_id) ‖ bcs(epoch) ‖ bcs(nonce) ‖ bcs(amount) ‖ bcs(recipient))。
+ * 门限签名（与提案同一 FROST 群钥）+ 链上 nonce 单调 + 90 天协议硬锁三重防重放/防提前。
+ */
+export function computeGenesisWithdrawDigest(input: {
+  chainId: Uint8Array | string;
+  orgId: string;
+  epochVersion: number | bigint;
+  nonce: number | bigint;
+  amount: number | bigint;
+  recipient: string;
+}): Uint8Array {
+  return sha256(
+    concat(
+      utf8('SUI_ORG_GENESIS_WITHDRAW_V1:'),
+      chainBytes(input.chainId),
+      requireAddress(input.orgId, 'orgId'),
+      u64le(input.epochVersion),
+      u64le(input.nonce),
+      u64le(input.amount),
+      requireAddress(input.recipient, 'recipient'),
+    ),
+  );
+}
+
 /** 默认调用目标包（便于 builder 缺省）。 */
 export const DEFAULT_TARGET_PACKAGE = AGENT_VAULT_PACKAGE_ID;
 
