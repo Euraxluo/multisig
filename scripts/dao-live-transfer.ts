@@ -20,7 +20,7 @@ import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { messageWithIntent, toSerializedSignature } from "@mysten/sui/cryptography"
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { blake2b } from "@noble/hashes/blake2.js"
-import { GennaroResharingParticipant } from "../lib/crypto/resharing"
+import { GennaroResharingParticipant, type DealerHonestyProof } from "../lib/crypto/resharing"
 import { mod, randomScalar } from "../lib/crypto/math"
 import type { Point } from "../lib/crypto/vss"
 import {
@@ -46,17 +46,19 @@ function reshare(oldCommittee: Member[], roster: { id: string; index: bigint }[]
   const oldIndices = oldCommittee.map(m => m.index)
   const rosterMap = new Map(roster.map(m => [m.id, m.index] as [string, bigint]))
   const oldIds = new Set(oldCommittee.map(m => m.id))
+  const context = { orgId: ORG, epoch: 1, sessionId: `${ORG}:reshare:1` }
   const packages = oldCommittee.map(member => new GennaroResharingParticipant({
     id: member.id, index: member.index, isOldActiveMember: true,
     isNewMember: rosterMap.has(member.id), currentShare: member.share, newThreshold: threshold,
-  }).generateResharePackage(oldIndices, rosterMap))
+  }).generateResharePackage(oldIndices, rosterMap, context))
   const peerCommitments = new Map<string, Point[]>(packages.map(p => [p.senderId, p.commitments] as [string, Point[]]))
+  const proofs = new Map(packages.map(p => [p.senderId, p.honestyProof!] as [string, DealerHonestyProof]))
   const results = roster.map(member => new GennaroResharingParticipant({
     id: member.id, index: member.index,
     isOldActiveMember: oldIds.has(member.id), isNewMember: true, newThreshold: threshold,
   }).finalizeNewShare(
     new Map(packages.map(p => [p.senderId, p.subShares.get(member.id)!] as [string, bigint])),
-    peerCommitments, originalGroupPk,
+    peerCommitments, originalGroupPk, [], { dealerHonestyProofs: proofs, oldActiveIndices: oldIndices, context },
   ))
   for (const result of results) {
     if (Buffer.compare(Buffer.from(result.groupPublicKey), Buffer.from(originalGroupPk)) !== 0) {

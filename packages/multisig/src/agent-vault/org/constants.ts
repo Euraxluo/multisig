@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x217be9d89ec16810b5ebb8404683768b31ec64bf0c92fa9aacfa79bf364f8655';
+export const AGENT_VAULT_PACKAGE_ID = '0xb778d11962aaaee62518f487fdac208b26dff9dd53b614324c0a287bb326548f';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -33,7 +33,7 @@ export const MODULES = {
 
 /** 域分隔常量（与 cryptographic_org.move 的 DOMAIN_* 逐字节一致）。 */
 export const DOMAINS = {
-  PROPOSAL: 'SUI_ORG_PROPOSAL_V1:',
+  PROPOSAL: 'SUI_ORG_THRESHOLD_PROPOSAL_V2:', // V2（#14）：+action_type 尾字节
   THRESHOLD_APPROVAL: 'SUI_ORG_APPROVAL_V1:',
   KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V3:',
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
@@ -171,6 +171,7 @@ export const ASSET_CUSTODY_ERRORS: Readonly<Record<number, { name: string; messa
   20: { name: 'ESlotReassigned', message: 'The approved slot now holds a different asset than the proposal approved.' },
   21: { name: 'EBorrowerMismatch', message: "Only the proposal's proposer may borrow; a release remains relayable because its recipient is frozen." },
   22: { name: 'EBorrowWindowExpired', message: "A borrow must be taken within the proposal's borrow window (min(deadline, creation+5min)); create a fresh proposal instead." },
+  23: { name: 'EInvalidActionDigest', message: 'Borrow proposals must commit to an exact 32-byte action digest; release proposals store none.' },
 };
 
 export const GOVERNANCE_POLL_ERRORS: Readonly<Record<number, { name: string; message: string }>> = {

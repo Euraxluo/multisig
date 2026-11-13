@@ -75,6 +75,7 @@ export function AssetCustodyPanel({ orgId, readOnly, run, busy }: AssetCustodyPa
   const [newSlot, setNewSlot] = useState("0")
   const [newTitle, setNewTitle] = useState("")
   const [newRecipient, setNewRecipient] = useState("")
+  const [newActionDigest, setNewActionDigest] = useState("")
   const [newDeadlineHours, setNewDeadlineHours] = useState("72")
   const [voteWeight, setVoteWeight] = useState("1")
   const [dumpJson, setDumpJson] = useState("")
@@ -184,6 +185,7 @@ export function AssetCustodyPanel({ orgId, readOnly, run, busy }: AssetCustodyPa
       const base = { custodyId, orgId, assetType: depositType.trim(), slot: BigInt(newSlot || "0"), title: newTitle.trim(), deadlineMs }
       const result = await run(() => buildCreateCustodyProposal({
         ...base, kind: newKind, recipient: newKind === CUSTODY_KIND.release ? newRecipient.trim() : undefined,
+        actionDigest: newKind === CUSTODY_KIND.borrow ? newActionDigest.trim() : undefined,
       }) as unknown as Transaction, t("walrus.custodyRunCreateProposal")) as { digest?: string }
       setNewTitle("")
       setNotice(t("walrus.custodyProposalCreatedNotice", { digest: result?.digest ? shortId(result.digest) : t("walrus.custodySubmitted") }))
@@ -341,6 +343,7 @@ export function AssetCustodyPanel({ orgId, readOnly, run, busy }: AssetCustodyPa
             <div className="flex gap-2">
               <Input value={newDeadlineHours} onChange={event => setNewDeadlineHours(event.target.value)} placeholder={t("walrus.custodyDeadlinePlaceholder")} inputMode="numeric" className="h-8 text-xs w-28" />
               {newKind === CUSTODY_KIND.release && <Input value={newRecipient} onChange={event => setNewRecipient(event.target.value)} placeholder={t("walrus.custodyRecipientPlaceholder")} className="h-8 text-xs" />}
+              {newKind === CUSTODY_KIND.borrow && <Input value={newActionDigest} onChange={event => setNewActionDigest(event.target.value)} placeholder={t("walrus.custodyActionDigestPlaceholder")} className="h-8 text-xs font-mono" />}
             </div>
             <Button size="sm" className="h-8 text-xs" disabled={disabled || !newTitle.trim() || (newKind === CUSTODY_KIND.release && !newRecipient.trim())} onClick={handleCreateProposal}>{t("walrus.custodyCreateProposal")}</Button>
           </div>

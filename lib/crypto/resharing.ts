@@ -415,15 +415,15 @@ export class GennaroResharingParticipant {
   }
 
   /**
-   * 阶段 1: 活跃旧成员为新委员会生成 Gennaro 刷新多项式及可选的 Dealer 诚实性零知识证明
+   * 阶段 1: 活跃旧成员为新委员会生成 Gennaro 刷新多项式及 Dealer 诚实性零知识证明
    * @param oldActiveIndices 参与本次换届的 t_old 个活跃旧成员的 index 列表
    * @param newCommitteeIndices 新委员会所有成员的 (id -> index) 映射
-   * @param context 可选的会话域隔离上下文 (orgId, epoch, sessionId)
+   * @param context 必填的会话域隔离上下文 (orgId, epoch, sessionId)
    */
   public generateResharePackage(
     oldActiveIndices: bigint[],
     newCommitteeIndices: Map<string, bigint>,
-    context?: DealerHonestyContext
+    context: DealerHonestyContext
   ): GennaroResharePackage {
     if (!this.isOldActiveMember || this.currentShare === undefined) {
       throw new Error(`[Gennaro-${this.id}] Not an active old member or missing current share`);
@@ -444,16 +444,13 @@ export class GennaroResharingParticipant {
       subShares.set(peerId, w_ik);
     }
 
-    let honestyProof: DealerHonestyProof | undefined;
-    if (context) {
-      honestyProof = createDealerHonestyProof(
-        this.id,
-        this.index,
-        this.currentShare,
-        oldActiveIndices,
-        context
-      );
-    }
+    const honestyProof = createDealerHonestyProof(
+      this.id,
+      this.index,
+      this.currentShare,
+      oldActiveIndices,
+      context
+    );
 
     return {
       senderId: this.id,
@@ -471,17 +468,17 @@ export class GennaroResharingParticipant {
    * @param peerCommitments 各活跃旧成员广播的承诺向量
    * @param originalGroupPublicKey 恒定的组织公钥
    * @param newCommitteeShares 可选的新委员会成员分片
-   * @param options 可选的 Dealer 诚实性证明校验选项 (证明各 Dealer 的常数承诺 C_{i,0} == λ_i(0) * Y_i 且绑定会话上下文)
+   * @param options 必填的 Dealer 诚实性证明校验选项 (证明各 Dealer 的常数承诺 C_{i,0} == λ_i(0) * Y_i 且绑定会话上下文；不再存在无 context 的静默跳过路径)
    */
   public finalizeNewShare(
     incomingSubShares: Map<string, bigint>,
     peerCommitments: Map<string, Point[]>,
-    originalGroupPublicKey?: Uint8Array,
-    newCommitteeShares?: { index: bigint | number; share: bigint }[],
-    options?: {
-      dealerHonestyProofs?: Map<string, DealerHonestyProof>;
-      oldActiveIndices?: bigint[];
-      context?: DealerHonestyContext;
+    originalGroupPublicKey: Uint8Array | undefined = undefined,
+    newCommitteeShares: { index: bigint | number; share: bigint }[] = [],
+    options: {
+      dealerHonestyProofs: Map<string, DealerHonestyProof>;
+      oldActiveIndices: bigint[];
+      context: DealerHonestyContext;
       expectedVerificationShares?: Map<string, Uint8Array>;
     }
   ): ReshareFinalResult {
@@ -489,21 +486,19 @@ export class GennaroResharingParticipant {
       throw new Error(`[Gennaro-${this.id}] Node is not a member of the new committee`);
     }
 
-    // 若提供了诚实性证明与上下文，先严格校验所有 Dealer 的 PoK
-    if (options?.dealerHonestyProofs && options.oldActiveIndices && options.context) {
-      for (const [senderId, proof] of options.dealerHonestyProofs.entries()) {
-        const expectedY = options.expectedVerificationShares?.get(senderId);
-        const isValid = verifyDealerHonestyProof(
-          proof,
-          options.oldActiveIndices,
-          options.context,
-          expectedY
+    // 严格校验所有 Dealer 的 PoK —— 证明与 context 不匹配即为硬错误，无任何静默回退
+    for (const [senderId, proof] of options.dealerHonestyProofs.entries()) {
+      const expectedY = options.expectedVerificationShares?.get(senderId);
+      const isValid = verifyDealerHonestyProof(
+        proof,
+        options.oldActiveIndices,
+        options.context,
+        expectedY
+      );
+      if (!isValid) {
+        throw new Error(
+          `[Gennaro-${this.id}] Sub-share dealer honesty proof verification failed for sender: ${senderId}`
         );
-        if (!isValid) {
-          throw new Error(
-            `[Gennaro-${this.id}] Sub-share dealer honesty proof verification failed for sender: ${senderId}`
-          );
-        }
       }
     }
 

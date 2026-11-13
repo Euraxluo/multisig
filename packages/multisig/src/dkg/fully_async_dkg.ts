@@ -41,6 +41,7 @@ export class FullyAsyncParticipant {
   public readonly identityKeypair: IdentityKeypair;
   public readonly threshold: number;
   public readonly totalParticipants: number;
+  public readonly sessionId: string;
 
   private dkgNode: DKGParticipant;
   private myVssPackage?: SingleShotVssPackage;
@@ -53,6 +54,8 @@ export class FullyAsyncParticipant {
     timezone: string;
     threshold: number;
     totalParticipants: number;
+    /** 链上会话 ID：V2 起绑定进信箱密封 AAD，密封与解开必须一致。 */
+    sessionId: string;
     identityKeypair?: IdentityKeypair;
   }) {
     this.id = params.id;
@@ -61,6 +64,7 @@ export class FullyAsyncParticipant {
     this.timezone = params.timezone;
     this.threshold = params.threshold;
     this.totalParticipants = params.totalParticipants;
+    this.sessionId = params.sessionId;
     this.identityKeypair = params.identityKeypair ?? generateIdentityKeypair(params.address);
 
     this.dkgNode = new DKGParticipant(
@@ -108,6 +112,7 @@ export class FullyAsyncParticipant {
       };
 
       const env = await encryptMailboxShare({
+        sessionId: this.sessionId,
         senderAddress: this.address,
         recipientAddress: peer.address,
         recipientPublicKey: peer.publicKey,
@@ -166,7 +171,8 @@ export class FullyAsyncParticipant {
 
         const payload = await decryptMailboxShare(
           envelope,
-          this.identityKeypair.secretKey
+          this.identityKeypair.secretKey,
+          { sessionId: this.sessionId }
         );
         const shareScalar = BigInt(`0x${payload.secretShareHex}`);
 

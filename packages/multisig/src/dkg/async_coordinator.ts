@@ -197,6 +197,7 @@ export class AsyncDkgCoordinator {
         };
 
         const envelope = await encryptMailboxShare({
+          sessionId: this.session.sessionId,
           senderAddress: sender.address,
           recipientAddress: target.address,
           recipientPublicKey: target.identityKeypair.publicKey,
@@ -305,7 +306,7 @@ export class AsyncDkgCoordinator {
     // 解密所有寄来的秘密分片
     const decryptedShares = new Map<string, bigint>();
     for (const env of envelopes) {
-      const payload = await decryptMailboxShare(env, participant.identityKeypair.secretKey);
+      const payload = await decryptMailboxShare(env, participant.identityKeypair.secretKey, { sessionId: this.session.sessionId });
       const shareScalar = BigInt(`0x${payload.secretShareHex}`);
 
       // 验证 VSS 承诺

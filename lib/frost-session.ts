@@ -61,7 +61,7 @@ function publicPackage(key: DeviceKeyPackage): FrostPublicKeyPackage {
 function actionDigest(action: FrostAction): Uint8Array {
   if (action.kind === "proposal") {
     if (!Number.isInteger(action.actionType) || action.actionType < 0 || action.actionType > 255) throw new FrostSessionError("Proposal actionType must be a u8")
-    return computeProposalDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), unhex(action.payloadHex))
+    return computeProposalDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), unhex(action.payloadHex), action.actionType)
   }
   if (action.kind === "epoch") return computeThresholdApprovalDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), BigInt(action.newEpoch))
   return computeRosterUpdateDigest(unhex(action.chainIdHex), action.orgId, BigInt(action.epoch), BigInt(action.nonce), BigInt(action.newEpoch), BigInt(action.thresholdWeight), action.members, action.weights.map(BigInt))

@@ -885,14 +885,16 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
       const activeOld = oldShares.map((_, index) => BigInt(index + 1));
       const committee = new Map(oldShares.map((_, index) => [`S${index + 1}`, BigInt(index + 1)]));
       const dealers = oldShares.map((share, index) => newOf(`S${index + 1}`, BigInt(index + 1), share));
-      const pkgs = dealers.map(dealer => dealer.generateResharePackage(activeOld, committee));
+      const reshareContext = { orgId: live.orgId, epoch: live.epoch, sessionId: `${live.orgId}:reshare:${live.epoch}` };
+      const pkgs = dealers.map(dealer => dealer.generateResharePackage(activeOld, committee, reshareContext));
       const commitments = new Map(pkgs.map(pkg => [pkg.senderId, pkg.commitments]));
+      const proofs = new Map(pkgs.map(pkg => [pkg.senderId, pkg.honestyProof!]));
       const refreshed: bigint[] = [];
       for (const [holder, index] of committee.entries()) {
         const node = new GennaroResharingParticipant({ id: holder, index, isOldActiveMember: true, isNewMember: true, newThreshold: threshold });
         const incoming = new Map<string, bigint>();
         pkgs.forEach(pkg => incoming.set(pkg.senderId, pkg.subShares.get(holder)!));
-        const result = node.finalizeNewShare(incoming, commitments, live.groupPk);
+        const result = node.finalizeNewShare(incoming, commitments, live.groupPk, [], { dealerHonestyProofs: proofs, oldActiveIndices: activeOld, context: reshareContext });
         refreshed.push(result.newPrivateShare);
       }
       if (refreshed.length !== oldShares.length) throw new Error(t("dkg.reshareCountMismatch"));

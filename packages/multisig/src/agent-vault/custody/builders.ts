@@ -26,6 +26,17 @@ export function custodyAssetType(value: string): string {
   return financeCoinType(value);
 }
 
+/** #12：actionDigest 归一化为字节（hex 字符串或 Uint8Array；缺省为空）。 */
+function digestOf(value: string | Uint8Array | undefined): Uint8Array {
+  if (value === undefined) return new Uint8Array(0);
+  if (typeof value !== 'string') return value;
+  const hex = value.replace(/^0x/i, '');
+  if (hex.length !== 64 || !/^[0-9a-fA-F]*$/.test(hex)) {
+    throw new Error(`actionDigest 必须为 32 字节的 hex 字符串（64 个十六进制位），收到长度 ${hex.length}。`);
+  }
+  return new Uint8Array(32).map((_, i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16));
+}
+
 /** 创建共享托管金库：new + share 一笔完成（发送者须为正权重成员）。 */
 export function buildCreateAssetCustody(input: CustodyTarget & { orgId: string }): Transaction {
   const tx = input.transaction ?? new Transaction();
@@ -64,6 +75,9 @@ export interface CustodyProposalInput extends CustodyTarget {
   title: string | Uint8Array;
   /** 绝对毫秒截止（含端点；须在未来且 ≤ 365 天）。 */
   deadlineMs: number | bigint;
+  /** #12：借出提案必须承诺的 32 字节 action digest（借出 PTB 的 PersonalMessage digest）；
+   *  release 传空/缺省。合约断言 borrow 恰 32 字节、release 恒空（EInvalidActionDigest=23）。 */
+  actionDigest?: string | Uint8Array;
   /** 转出收款人（仅 release；borrow 必须缺省）。 */
   recipient?: string;
 }
@@ -78,6 +92,13 @@ export function buildCreateCustodyProposal(input: CustodyProposalInput): Transac
   }
   if (kind === CUSTODY_KIND.release && input.recipient === undefined) {
     throw new Error('转出提案必须冻结收款人 recipient。');
+  }
+  const digestBytes = digestOf(input.actionDigest);
+  if (kind === CUSTODY_KIND.borrow && digestBytes.length !== 32) {
+    throw new Error(`借出提案必须承诺恰 32 字节 actionDigest，实际 ${digestBytes.length}。`);
+  }
+  if (kind === CUSTODY_KIND.release && digestBytes.length !== 0) {
+    throw new Error('转出提案不携带 actionDigest（合约恒存空值）。');
   }
   const title = typeof input.title === 'string' ? new TextEncoder().encode(input.title) : input.title;
   if (title.length === 0 || title.length > CUSTODY_LIMITS.MAX_TITLE_BYTES) {
@@ -94,6 +115,7 @@ export function buildCreateCustodyProposal(input: CustodyProposalInput): Transac
       tx.pure.u64(financeU64(input.slot)),
       tx.pure.address(input.recipient === undefined ? '0x0' : financeAddress(input.recipient)),
       tx.pure.u64(financeU64(input.deadlineMs)),
+      tx.pure.vector('u8', Array.from(digestBytes)),
       clock(tx),
     ],
   });

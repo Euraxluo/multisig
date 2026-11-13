@@ -117,7 +117,7 @@ export class AgentVaultClient {
   /** 资产托管：发起动用提案（borrow 借出一个 PTB / release 永久转出，收款人冻结在提案里）。 */
   public buildCreateCustodyProposalPTB(input: {
     custodyId: string; orgId: string; assetType: string; kind: number; slot: bigint | number;
-    title: string | Uint8Array; deadlineMs: bigint | number; recipient?: string;
+    title: string | Uint8Array; deadlineMs: bigint | number; recipient?: string; actionDigest?: string | Uint8Array;
   }): Transaction {
     return ptb(this.sdk.buildCreateCustodyProposalPTB(input));
   }
@@ -344,8 +344,8 @@ export class AgentVaultClient {
 // 一直使用的位置参数签名包装。
 // --------------------------------------------------------------------
 
-export function computeProposalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, payload: Uint8Array): Uint8Array {
-  return sdkProposalDigest({ chainId, orgId, epochVersion, nonce, payload });
+export function computeProposalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, payload: Uint8Array, actionType: number): Uint8Array {
+  return sdkProposalDigest({ chainId, orgId, epochVersion, nonce, payload, actionType });
 }
 
 export function computeThresholdApprovalDigest(chainId: Uint8Array | string, orgId: string, epochVersion: bigint | number, nonce: bigint | number, newEpochVersion: bigint | number): Uint8Array {

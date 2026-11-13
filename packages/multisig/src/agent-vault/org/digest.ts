@@ -22,21 +22,28 @@ function chainBytes(chainId: Uint8Array | string): Uint8Array {
 
 
 /** H(DOMAIN_PROPOSAL || chain_id || org_id || epoch || nonce || payload)。 */
+/**
+ * 门限提案摘要 V2（#14）：H("SUI_ORG_THRESHOLD_PROPOSAL_V2:" ‖ chain ‖ orgId ‖ epoch ‖ nonce ‖ payload ‖ action_type)。
+ * 与 cryptographic_org.move 的 compute_proposal_digest 逐字节一致——action_type 进摘要，
+ * 签名即动作类别授权（V1 无 action 字节，已废弃，勿用旧签名重放）。
+ */
 export function computeProposalDigest(input: {
   chainId: Uint8Array | string;
   orgId: string;
   epochVersion: number | bigint;
   nonce: number | bigint;
   payload: Uint8Array;
+  actionType: number;
 }): Uint8Array {
   return sha256(
     concat(
-      utf8('SUI_ORG_PROPOSAL_V1:'),
+      utf8('SUI_ORG_THRESHOLD_PROPOSAL_V2:'),
       chainBytes(input.chainId),
       requireAddress(input.orgId, 'orgId'),
       u64le(input.epochVersion),
       u64le(input.nonce),
       input.payload,
+      Uint8Array.of(input.actionType & 0xff),
     ),
   );
 }

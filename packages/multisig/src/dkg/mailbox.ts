@@ -18,6 +18,8 @@ export interface MailboxEnvelope {
   ephemeralPublicKeyHex: string;
   ivHex: string;
   ciphertextHex: string;
+  /** AAD 版本标记：密封算法将 domain/session/sender/recipient 绑入 HKDF info 与 AES-GCM AAD。 */
+  aadVersion: number;
 }
 
 export interface ShareDeliveryPayload {
@@ -31,8 +33,52 @@ export interface ShareDeliveryPayload {
   recipientAddress: string;
 }
 
-const HKDF_SALT = new TextEncoder().encode('DKG_ASYNC_MAILBOX_SALT_V1');
-const HKDF_INFO = new TextEncoder().encode('DKG_SHARE_DELIVERY_V1');
+/**
+ * 密态信箱密封版本。V2 起将
+ * utf8("SUI_DKG_MAILBOX_V1:") ‖ sessionId ‖ sender32 ‖ recipient32
+ * 同时绑入 HKDF info 与 AES-GCM additionalData，
+ * 密文不可跨会话、跨发件人、跨收件人重放。
+ */
+export const MAILBOX_AAD_VERSION = 2;
+
+const MAILBOX_AAD_DOMAIN = 'SUI_DKG_MAILBOX_V1:';
+const HKDF_SALT = new TextEncoder().encode('DKG_ASYNC_MAILBOX_SALT_V2');
+
+/** 地址字符串 (0x 十六进制) -> 32 字节小端地址（Sui address 即 32 字节）。 */
+function addressBytes(address: string): Uint8Array {
+  const clean = address.startsWith('0x') ? address.slice(2) : address;
+  if (clean.length !== 64) {
+    throw new Error(`地址必须是 32 字节 Sui 地址: ${address}`);
+  }
+  return fromHex(clean);
+}
+
+/** utf8 编码辅助（每次新建 TextEncoder 开销可忽略，保持无模块级状态）。 */
+function utf8(s: string): Uint8Array {
+  return new TextEncoder().encode(s);
+}
+
+/**
+ * AAD 字节布局（V2，绑入 HKDF info 与 AES-GCM additionalData 两层）：
+ *   utf8("SUI_DKG_MAILBOX_V1:") ‖ sessionId 的 utf8 字节 ‖ sender 32B ‖ recipient 32B
+ * sessionId 以 utf8 原文参与（链上会话 ID 是任意字符串，不强制 32B 地址格式）。
+ */
+export function mailboxAad(params: {
+  sessionId: string;
+  senderAddress: string;
+  recipientAddress: string;
+}): Uint8Array {
+  const domain = utf8(MAILBOX_AAD_DOMAIN);
+  const sessionId = utf8(params.sessionId);
+  const sender = addressBytes(params.senderAddress);
+  const recipient = addressBytes(params.recipientAddress);
+  const aad = new Uint8Array(domain.length + sessionId.length + 32 + 32);
+  aad.set(domain, 0);
+  aad.set(sessionId, domain.length);
+  aad.set(sender, domain.length + sessionId.length);
+  aad.set(recipient, domain.length + sessionId.length + 32);
+  return aad;
+}
 
 export function bytesToHex(bytes: Uint8Array): string {
   return toHex(bytes);
@@ -61,8 +107,12 @@ export function generateIdentityKeypair(address: string): IdentityKeypair {
 
 /**
  * 使用接收方的公钥对 DKG 分片进行密态信箱投递加密 (HPKE / ECIES with AES-256-GCM)
+ *
+ * V2: AAD = utf8("SUI_DKG_MAILBOX_V1:") ‖ sessionId ‖ sender32 ‖ recipient32
+ * 同时作为 HKDF info 与 AES-GCM additionalData；sessionId 必填。
  */
 export async function encryptMailboxShare(params: {
+  sessionId: string;
   senderAddress: string;
   recipientAddress: string;
   recipientPublicKey: Uint8Array;
@@ -72,8 +122,15 @@ export async function encryptMailboxShare(params: {
   const ephemeral = x25519.keygen();
   const sharedSecret = x25519.getSharedSecret(ephemeral.secretKey, params.recipientPublicKey);
 
-  // 通过 HKDF 派生 256 位对称密钥
-  const derivedKeyBytes = hkdf(sha256, sharedSecret, HKDF_SALT, HKDF_INFO, 32);
+  // AAD 绑定会话与收发双方：HKDF info 与 AES-GCM additionalData 两层同时绑定
+  const aad = mailboxAad({
+    sessionId: params.sessionId,
+    senderAddress: params.senderAddress,
+    recipientAddress: params.recipientAddress,
+  });
+
+  // 通过 HKDF 派生 256 位对称密钥（info = AAD）
+  const derivedKeyBytes = hkdf(sha256, sharedSecret, HKDF_SALT, aad, 32);
 
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const rawKey = await crypto.subtle.importKey(
@@ -86,9 +143,9 @@ export async function encryptMailboxShare(params: {
 
   const plaintext = new TextEncoder().encode(JSON.stringify(params.payload));
   const ciphertextBuffer = await crypto.subtle.encrypt(
-    { name: 'AES-GCM', iv: iv as any },
+    { name: 'AES-GCM', iv: iv as BufferSource, additionalData: aad as BufferSource },
     rawKey,
-    plaintext as any
+    plaintext as BufferSource
   );
 
   return {
@@ -99,20 +156,32 @@ export async function encryptMailboxShare(params: {
     ephemeralPublicKeyHex: bytesToHex(ephemeral.publicKey),
     ivHex: bytesToHex(iv),
     ciphertextHex: bytesToHex(new Uint8Array(ciphertextBuffer)),
+    aadVersion: MAILBOX_AAD_VERSION,
   };
 }
 
 /**
  * 离线成员上线后，使用自身私钥解开信箱中的密态分片
+ *
+ * V2: 调用方必须显式传入与密封时相同的 sessionId；AAD 不匹配（跨会话/
+ * 跨收件人/跨发件人重放或 V1 旧信封）会因 GCM 认证失败而抛错。
  */
 export async function decryptMailboxShare(
   envelope: MailboxEnvelope,
-  recipientSecretKey: Uint8Array
+  recipientSecretKey: Uint8Array,
+  context: { sessionId: string }
 ): Promise<ShareDeliveryPayload> {
   const ephemeralPubKey = hexToBytes(envelope.ephemeralPublicKeyHex);
   const sharedSecret = x25519.getSharedSecret(recipientSecretKey, ephemeralPubKey);
 
-  const derivedKeyBytes = hkdf(sha256, sharedSecret, HKDF_SALT, HKDF_INFO, 32);
+  // 与密封侧对称：AAD 必须由同样的参数显式派生，绝不从信封隐式读取
+  const aad = mailboxAad({
+    sessionId: context.sessionId,
+    senderAddress: envelope.senderAddress,
+    recipientAddress: envelope.recipientAddress,
+  });
+
+  const derivedKeyBytes = hkdf(sha256, sharedSecret, HKDF_SALT, aad, 32);
 
   const iv = hexToBytes(envelope.ivHex);
   const rawKey = await crypto.subtle.importKey(
@@ -125,9 +194,9 @@ export async function decryptMailboxShare(
 
   const ciphertext = hexToBytes(envelope.ciphertextHex);
   const decryptedBuffer = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: iv as any },
+    { name: 'AES-GCM', iv: iv as BufferSource, additionalData: aad as BufferSource },
     rawKey,
-    ciphertext as any
+    ciphertext as BufferSource
   );
 
   const decryptedText = new TextDecoder().decode(decryptedBuffer);

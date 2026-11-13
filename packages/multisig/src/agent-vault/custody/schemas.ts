@@ -54,6 +54,8 @@ export const CustodyProposalBcs = bcs.struct('CustodyProposal', {
   deadline_ms: bcs.u64(),
   /** borrow proposals must be taken within this window (min(deadline, creation+5min)); #12 mitigation */
   borrow_deadline_ms: bcs.u64(),
+  /** #12: 32-byte action digest committed by borrow proposals; empty for release. */
+  action_digest: bcs.vector(bcs.u8()),
   status: bcs.u8(),
 });
 
@@ -100,6 +102,8 @@ export const AssetTakenBcs = bcs.struct('AssetTaken', {
   type_name: TypeNameBcs,
   slot: bcs.u64(),
   object_id: bcs.Address,
+  /** #12: committed borrow PTB digest echoed by take_asset. */
+  action_digest: bcs.vector(bcs.u8()),
 });
 
 export const AssetReturnedBcs = bcs.struct('AssetReturned', {

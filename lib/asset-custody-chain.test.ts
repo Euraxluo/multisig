@@ -162,7 +162,7 @@ test("SDK BCS 快照（前端 reader 的底座）：清单/提案/事件 roundtr
     id: PROPOSAL, custody_id: CUSTODY, org_id: ORG, epoch: "1", kind: 1,
     type_name: typeName, slot: "0", object_id: ASSET, recipient: normalizeSuiAddress("0x0"), proposer: ORG,
     title: Array.from(new TextEncoder().encode("借出")), threshold_weight: "3", accumulated_weight: "0", rejected_weight: "0",
-    voters: { id: ASSET, size: "0" }, deadline_ms: "1", borrow_deadline_ms: "1", status: 1,
+    voters: { id: ASSET, size: "0" }, deadline_ms: "1", borrow_deadline_ms: "1", action_digest: Array.from({length:32},(_,i)=>i+1), status: 1,
   }
   const parsed = CustodyProposalBcs.parse(CustodyProposalBcs.serialize(proposal).toBytes())
   assert.equal(parsed.kind, 1)

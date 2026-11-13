@@ -3,7 +3,7 @@ import { evaluatePolynomial, generatePolynomial, createCommitments } from './vss
 import { mod, lagrangeCoefficient } from './math';
 import { ThresholdSignerNode } from './threshold_signer';
 import type { NonceCommitment, SignatureShare } from './threshold_signer';
-import { GennaroResharingParticipant } from './resharing';
+import { GennaroResharingParticipant, type DealerHonestyContext } from './resharing';
 
 export interface SentinelAuditPolicy {
   maxTransferAmount: bigint;       // 单笔交易上限 (防单次巨额盗取)
@@ -264,7 +264,8 @@ export class AIAgentSentinel {
   public autoParticipateGennaroResharing(
     activeOldIndices: bigint[],
     newCommitteeIndices: Map<string, bigint>,
-    newThreshold: number
+    newThreshold: number,
+    context: DealerHonestyContext
   ) {
     const participant = new GennaroResharingParticipant({
       id: this.id,
@@ -275,6 +276,6 @@ export class AIAgentSentinel {
       newThreshold,
     });
 
-    return participant.generateResharePackage(activeOldIndices, newCommitteeIndices);
+    return participant.generateResharePackage(activeOldIndices, newCommitteeIndices, context);
   }
 }

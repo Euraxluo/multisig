@@ -173,7 +173,7 @@ export class ThresholdProposalSession {
     let derived: DerivedAction;
     switch (action.kind) {
       case 'execute': {
-        const digest = computeProposalDigest({ ...base, payload: action.payload });
+        const digest = computeProposalDigest({ ...base, payload: action.payload, actionType: action.actionType });
         derived = {
           payload: action.payload,
           actionType: action.actionType,

@@ -223,10 +223,13 @@ async function runAsyncDemo() {
   const coordinator = new AsyncDkgCoordinator();
 
   console.log(`${CYAN}[1. 成员身份与预置密钥注册 (Pre-keys)]${RESET}`);
-  const alice = coordinator.registerParticipant('Alice', 1, '0xAlice', true);
-  const bob = coordinator.registerParticipant('Bob', 2, '0xBob', true);
-  const charlie = coordinator.registerParticipant('Charlie', 3, '0xCharlie', true);
-  const david = coordinator.registerParticipant('David', 4, '0xDavid', false); // 离线!
+  // 32 字节演示地址（V2 信箱 AAD 校验地址必须为 32 字节）
+  const demoAddr = (name: string) =>
+    '0x' + name.padStart(64, '0');
+  const alice = coordinator.registerParticipant('Alice', 1, demoAddr('a11ce'), true);
+  const bob = coordinator.registerParticipant('Bob', 2, demoAddr('b0b'), true);
+  const charlie = coordinator.registerParticipant('Charlie', 3, demoAddr('c0c'), true);
+  const david = coordinator.registerParticipant('David', 4, demoAddr('da71d'), false); // 离线!
 
   console.log(`  ✓ ${GREEN}Alice${RESET}   (在线) Sui: ${alice.address} | X25519 PK: 0x${alice.identityKeypair.publicKeyHex.slice(0, 16)}...`);
   console.log(`  ✓ ${GREEN}Bob${RESET}     (在线) Sui: ${bob.address}   | X25519 PK: 0x${bob.identityKeypair.publicKeyHex.slice(0, 16)}...`);
@@ -269,7 +272,7 @@ async function runAsyncDemo() {
     onlineSharesMap.get(recipient)!.set('Charlie', r2Charlie.directShares.get(recipient)!);
   });
 
-  const davidMailbox = session.mailboxes.get('0xDavid') || [];
+  const davidMailbox = session.mailboxes.get(david.address) || [];
   console.log(`  ✓ 在线节点已通过直接通信完成对内分发`);
   console.log(`  ✓ 离线成员 David 的链上密态信箱已接收到 ${GREEN}${davidMailbox.length} 份${RESET} 端到端加密分片 (AES-256-GCM)`);
 
@@ -331,12 +334,16 @@ async function runFullyAsyncDemo() {
     generateIdentityKeypair,
   } = await import('../src/dkg');
 
+  // 32 字节演示地址（V2 信箱 AAD 校验地址必须为 32 字节）
+  const demoAddr = (name: string) =>
+    '0x' + name.padStart(64, '0');
   const rosterInfo = [
-    { id: 'Alice', index: 1n, address: '0xAlice', timezone: 'Asia/Tokyo (东京 UTC+9)' },
-    { id: 'Bob', index: 2n, address: '0xBob', timezone: 'Europe/London (伦敦 UTC+0)' },
-    { id: 'Charlie', index: 3n, address: '0xCharlie', timezone: 'America/New_York (纽约 UTC-5)' },
-    { id: 'David', index: 4n, address: '0xDavid', timezone: 'Australia/Sydney (悉尼 UTC+10)' },
+    { id: 'Alice', index: 1n, address: demoAddr('a11ce'), timezone: 'Asia/Tokyo (东京 UTC+9)' },
+    { id: 'Bob', index: 2n, address: demoAddr('b0b'), timezone: 'Europe/London (伦敦 UTC+0)' },
+    { id: 'Charlie', index: 3n, address: demoAddr('c0c'), timezone: 'America/New_York (纽约 UTC-5)' },
+    { id: 'David', index: 4n, address: demoAddr('da71d'), timezone: 'Australia/Sydney (悉尼 UTC+10)' },
   ];
+  const fullyAsyncSessionId = 'session_fully_async_001';
 
   console.log(`${CYAN}[1. 成员预置公钥与跨时区花名册]${RESET}`);
   const participants = rosterInfo.map((m) => {
@@ -349,6 +356,7 @@ async function runFullyAsyncDemo() {
       timezone: m.timezone,
       threshold: 3,
       totalParticipants: 4,
+      sessionId: fullyAsyncSessionId,
       identityKeypair: kp,
     });
   });

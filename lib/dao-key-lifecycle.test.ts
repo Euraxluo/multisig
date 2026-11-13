@@ -9,7 +9,7 @@ import {
   aggregateNonce, aggregateSignature, createNonceCommitment, createSignatureShare,
   type NonceCommitment,
 } from "./frost-exchange"
-import { GennaroResharingParticipant } from "./crypto/resharing"
+import { GennaroResharingParticipant, type DealerHonestyProof } from "./crypto/resharing"
 import { mod, randomScalar, lagrangeCoefficient } from "./crypto/math"
 import type { Point } from "./crypto/vss"
 
@@ -89,15 +89,18 @@ function reshare(oldCommittee: Member[], roster: { id: string; index: bigint }[]
   const rosterMap = new Map(roster.map(m => [m.id, m.index]))
   const oldIds = new Set(oldCommittee.map(m => m.id))
 
-  // Every active old member deals a zero-constant-ish refresh polynomial.
+  // Every active old member deals a zero-constant-ish refresh polynomial,
+  // binding its dealer honesty proof to this reshare session's context.
+  const context = { orgId: ORG, epoch: 1, sessionId: `${ORG}:reshare:1` }
   const packages = oldCommittee.map(member => {
     const node = new GennaroResharingParticipant({
       id: member.id, index: member.index, isOldActiveMember: true,
       isNewMember: rosterMap.has(member.id), currentShare: member.share, newThreshold: threshold,
     })
-    return node.generateResharePackage(oldIndices, rosterMap)
+    return node.generateResharePackage(oldIndices, rosterMap, context)
   })
   const peerCommitments = new Map<string, Point[]>(packages.map(p => [p.senderId, p.commitments] as [string, Point[]]))
+  const proofs = new Map<string, DealerHonestyProof>(packages.map(p => [p.senderId, p.honestyProof!] as [string, DealerHonestyProof]))
 
   // Every new member accumulates sub-shares and must recompute the same group key.
   const results = roster.map(member => {
@@ -106,7 +109,7 @@ function reshare(oldCommittee: Member[], roster: { id: string; index: bigint }[]
       isOldActiveMember: oldIds.has(member.id), isNewMember: true, newThreshold: threshold,
     })
     const incoming = new Map<string, bigint>(packages.map(p => [p.senderId, p.subShares.get(member.id)!] as [string, bigint]))
-    return node.finalizeNewShare(incoming, peerCommitments, originalGroupPk)
+    return node.finalizeNewShare(incoming, peerCommitments, originalGroupPk, [], { dealerHonestyProofs: proofs, oldActiveIndices: oldIndices, context })
   })
 
   for (const result of results) {
