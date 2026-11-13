@@ -106,6 +106,18 @@ export function generateIdentityKeypair(address: string): IdentityKeypair {
 }
 
 /**
+ * 低阶/全零共享秘密检测（round-7）：X25519 对低阶临时公钥（全零点等）
+ * 会得到全零共享秘密。全零密钥会让任何密文都以确定的方式被"解密"，
+ * 不能交给 AES-GCM。密封侧同样拒绝，保证两侧对称拒绝该类信封。
+ */
+export function assertNonZeroSharedSecret(sharedSecret: Uint8Array, side: 'encrypt' | 'decrypt'): void {
+  const isZeroSecret = sharedSecret.length === 32 && sharedSecret.every(b => b === 0)
+  if (sharedSecret.length !== 32 || isZeroSecret) {
+    throw new Error(`[mailbox:${side}] low-order ephemeral detected: all-zero X25519 shared secret rejected`)
+  }
+}
+
+/**
  * 使用接收方的公钥对 DKG 分片进行密态信箱投递加密 (HPKE / ECIES with AES-256-GCM)
  *
  * V2: AAD = utf8("SUI_DKG_MAILBOX_V1:") ‖ sessionId ‖ sender32 ‖ recipient32
@@ -121,6 +133,7 @@ export async function encryptMailboxShare(params: {
 }): Promise<MailboxEnvelope> {
   const ephemeral = x25519.keygen();
   const sharedSecret = x25519.getSharedSecret(ephemeral.secretKey, params.recipientPublicKey);
+  assertNonZeroSharedSecret(sharedSecret, 'encrypt');
 
   // AAD 绑定会话与收发双方：HKDF info 与 AES-GCM additionalData 两层同时绑定
   const aad = mailboxAad({
@@ -165,6 +178,8 @@ export async function encryptMailboxShare(params: {
  *
  * V2: 调用方必须显式传入与密封时相同的 sessionId；AAD 不匹配（跨会话/
  * 跨收件人/跨发件人重放或 V1 旧信封）会因 GCM 认证失败而抛错。
+ * round-7: 临时公钥为低阶点导致的全零 X25519 共享秘密在 AES-GCM 之前
+ * 直接拒绝（低阶临时公钥攻击的封闭式防御）。
  */
 export async function decryptMailboxShare(
   envelope: MailboxEnvelope,
@@ -173,6 +188,7 @@ export async function decryptMailboxShare(
 ): Promise<ShareDeliveryPayload> {
   const ephemeralPubKey = hexToBytes(envelope.ephemeralPublicKeyHex);
   const sharedSecret = x25519.getSharedSecret(recipientSecretKey, ephemeralPubKey);
+  assertNonZeroSharedSecret(sharedSecret, 'decrypt');
 
   // 与密封侧对称：AAD 必须由同样的参数显式派生，绝不从信封隐式读取
   const aad = mailboxAad({

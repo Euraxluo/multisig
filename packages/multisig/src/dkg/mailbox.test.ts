@@ -123,3 +123,44 @@ test('信封序列化往返保留 V2 字段', () => {
   assert.equal(back.aadVersion, MAILBOX_AAD_VERSION);
   assert.equal(back.senderAddress, SENDER);
 });
+
+test('round-7: 全零共享秘密在 AES-GCM 之前被拒绝（两侧对称）', async () => {
+  const { assertNonZeroSharedSecret } = await import('./mailbox');
+  const zero = new Uint8Array(32);
+  // (a) 守卫直接契约: 全零 → 抛，非零 → 通过
+  assert.throws(() => assertNonZeroSharedSecret(zero, 'decrypt'), /low-order ephemeral detected/);
+  assert.throws(() => assertNonZeroSharedSecret(zero, 'encrypt'), /low-order ephemeral detected/);
+  assert.throws(() => assertNonZeroSharedSecret(new Uint8Array(31), 'decrypt'), /low-order ephemeral detected/);
+  const nonzero = new Uint8Array(32).fill(1);
+  assert.doesNotThrow(() => assertNonZeroSharedSecret(nonzero, 'decrypt'));
+
+  // (b) noble x25519 层在低阶临时公钥到达守卫前已拒绝（深度防御的第二层）:
+  // 用全零临时公钥构造信封必须解密失败而非解出明文分片
+  const recipient = generateIdentityKeypair(RECIPIENT);
+  const lowOrderEnvelope = {
+    senderAddress: SENDER,
+    recipientAddress: RECIPIENT,
+    epoch: 1,
+    timestamp: Date.now(),
+    ephemeralPublicKeyHex: '00'.repeat(32),
+    ivHex: 'cd'.repeat(12),
+    ciphertextHex: 'ef'.repeat(48),
+    aadVersion: MAILBOX_AAD_VERSION,
+  };
+  await assert.rejects(
+    decryptMailboxShare(lowOrderEnvelope, recipient.secretKey, { sessionId: SESSION }),
+  );
+
+  // (c) 诚实路径回归: 正常加密/解密不受守卫影响
+  const sender = generateIdentityKeypair(SENDER);
+  const envelope = await encryptMailboxShare({
+    sessionId: SESSION,
+    senderAddress: SENDER,
+    recipientAddress: RECIPIENT,
+    recipientPublicKey: recipient.publicKey,
+    payload: samplePayload(),
+  });
+  const payload = await decryptMailboxShare(envelope, recipient.secretKey, { sessionId: SESSION });
+  assert.equal(payload.secretShareHex, 'a1b2c3d4');
+  void sender;
+});

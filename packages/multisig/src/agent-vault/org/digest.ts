@@ -96,25 +96,36 @@ export function computeKeyRotationDigest(input: {
   );
 }
 
-/** H(DOMAIN_POP || chain_id || group_pk || bcs(members) || bcs(weights) || bcs(threshold))，创建组织 PoP。 */
+/**
+ * 创建组织 PoP 摘要 V2（round-7）：H("SUI_ORG_POP_V2:" ‖ chain_id ‖ group_pk ‖
+ * bcs(members) ‖ bcs(weights) ‖ bcs(threshold_weight) ‖ bcs(key_threshold))。
+ * 与 cryptographic_org.move 的 compute_create_pop_digest 逐字节一致。
+ * V2 把 key_threshold 绑进摘要：同一份 PoP 不可重放到不同密钥门限的创建参数
+ * （V1 无 key_threshold 尾段，已废弃，勿用旧签名重放）。轮换 PoP 仍用
+ * SUI_ORG_POP_V1: 布局（见 computeRotatePopDigest）。
+ */
 export function computeCreatePopDigest(input: {
   chainId: Uint8Array | string;
   groupPk: Uint8Array;
   members: string[];
   weights: Array<number | bigint>;
   thresholdWeight: number | bigint;
+  keyThreshold: number | bigint;
 }): Uint8Array {
   if (input.members.length !== input.weights.length) {
     throw new Error(`名册与权重长度不一致: ${input.members.length} vs ${input.weights.length}`);
   }
+  const keyThreshold = BigInt(input.keyThreshold);
+  if (keyThreshold <= 0n) throw new Error(`keyThreshold 必须为正，实际 ${keyThreshold}`);
   return sha256(
     concat(
-      utf8('SUI_ORG_POP_V1:'),
+      utf8('SUI_ORG_POP_V2:'),
       chainBytes(input.chainId),
       requireDigest32(input.groupPk, 'groupPk'),
       bcsVectorAddress(input.members),
       bcsVectorU64(input.weights),
       u64le(input.thresholdWeight),
+      u64le(keyThreshold),
     ),
   );
 }

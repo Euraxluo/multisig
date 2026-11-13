@@ -57,15 +57,14 @@ function split(threshold: number, n: number) {
 
 /** Signs with the supplied shares in the two-round protocol. */
 function signWith(shares: { index: bigint; share: bigint }[], groupPk: Uint8Array, message: Uint8Array) {
-  const round1 = shares.map(s => ({ signer: s, ...createNonceCommitment(ORG, s.index) }))
+  const round1 = shares.map(s => createNonceCommitment(ORG, s.index, s.share))
   const commitments: NonceCommitment[] = round1.map(r => r.commitment)
-  const aggregateR = aggregateNonce(commitments, ORG)
   const signerIndices = shares.map(s => s.index)
   const parts = round1.map(r => createSignatureShare({
-    orgId: ORG, index: r.signer.index, secret: r.secret, share: r.signer.share,
-    threshold: BigInt(T), signerIndices, aggregateR, groupPk, message, verifyRoundOne: true,
+    node: r.node, orgId: ORG,
+    threshold: BigInt(T), signerIndices, commitments, groupPk, message,
   }))
-  return aggregateSignature(aggregateR, parts, groupPk, message).signature
+  return aggregateSignature(commitments, parts, groupPk, message).signature
 }
 
 /** Runs the same check a Sui full node runs on a submitted signature. */

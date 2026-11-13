@@ -9,7 +9,7 @@
 import { SUI_CLOCK_OBJECT_ID as CLOCK_ID, SUI_RANDOM_OBJECT_ID as RANDOM_ID } from '@mysten/sui/utils';
 
 /** 现行调用目标包（2026-11-05 fresh publish，tx X2tVjZgE6Q4e9PNWhA4jtHQHZcJ93ZbnN9oiR8J5Jw3）。 */
-export const AGENT_VAULT_PACKAGE_ID = '0x71d818e7ff348c741b845bcb967ba5dae751c844788cceeac60e00a9dd4d8fd0';
+export const AGENT_VAULT_PACKAGE_ID = '0x50739707bbb612bdfe320ef7f1d2653541f8bc7eeb2867dd7814fade5e5a6325';
 
 /** 系统对象：取自官方常量，避免手写全地址形态漂移。 */
 export const SUI_CLOCK_OBJECT_ID = CLOCK_ID;
@@ -37,7 +37,7 @@ export const DOMAINS = {
   THRESHOLD_APPROVAL: 'SUI_ORG_APPROVAL_V1:',
   KEY_ROTATION: 'SUI_ORG_KEY_ROTATION_V3:',
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
-  POP: 'SUI_ORG_POP_V1:',
+  POP: 'SUI_ORG_POP_V2:', // round-7：创建 PoP 绑 key_threshold；轮换 PoP 仍 V1（见 rotate 注释）
   TREASURY_TRANSFER: 'SUI_ORG_TREASURY_TRANSFER_V1:',
   GENESIS_WITHDRAW: 'SUI_ORG_GENESIS_WITHDRAW_V1:',
 } as const;
@@ -112,6 +112,7 @@ export const ORG_ERRORS: Readonly<Record<number, string>> = {
   1009: 'E_THRESHOLD_BELOW_KEY',
   1010: 'E_INVALID_POP',
   1011: 'E_GENESIS_LOCKED',
+  1012: 'E_KEY_SIGNER_SHORTFALL',
 };
 
 /**
@@ -150,7 +151,7 @@ export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
   4018: 'E_INVALID_DEADLINE',
 };
 
-/** dkg_committee 数字错误码（3013 死桩已删除，不在表内；3017–3019 与 3020–3025 均与合约逐一对齐）。 */
+/** dkg_committee 数字错误码（3013 死桩已删除，不在表内；3017–3019 与 3020–3026 均与合约逐一对齐）。 */
 export const DKG_ERRORS: Readonly<Record<number, string>> = {
   3001: 'E_NOT_A_PARTICIPANT',
   3002: 'E_INVALID_SESSION_STATUS',
@@ -175,6 +176,7 @@ export const DKG_ERRORS: Readonly<Record<number, string>> = {
   3023: 'E_NO_BOND_TO_CLAIM',
   3024: 'E_SESSION_NOT_TERMINAL',
   3025: 'E_DEADLINE_OUT_OF_RANGE',
+  3026: 'E_ORG_ALREADY_CREATED',
 };
 
 /** asset_custody 命名错误（#[error(code = N)]，1–21 与合约逐一对齐）。 */

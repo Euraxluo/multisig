@@ -73,14 +73,14 @@ function reshare(oldCommittee: Member[], roster: { id: string; index: bigint }[]
 
 /** Two-round threshold signature over raw bytes. */
 function thresholdSign(members: Member[], groupPk: Uint8Array, message: Uint8Array, threshold: number) {
-  const round1 = members.map(member => ({ member, ...createNonceCommitment(ORG, member.index) }))
-  const aggregateR = aggregateNonce(round1.map(r => r.commitment), ORG)
+  const round1 = members.map(member => createNonceCommitment(ORG, member.index, member.share))
+  const commitments = round1.map(r => r.commitment)
   const signerIndices = members.map(m => m.index)
   const parts = round1.map(r => createSignatureShare({
-    orgId: ORG, index: r.member.index, secret: r.secret, share: r.member.share,
-    threshold: BigInt(threshold), signerIndices, aggregateR, groupPk, message, verifyRoundOne: true,
+    node: r.node, orgId: ORG,
+    threshold: BigInt(threshold), signerIndices, commitments, groupPk, message,
   }))
-  return aggregateSignature(aggregateR, parts, groupPk, message).signature
+  return aggregateSignature(commitments, parts, groupPk, message).signature
 }
 
 /** Signs Sui transaction bytes with the DAO key, as an ED25519 signature string. */

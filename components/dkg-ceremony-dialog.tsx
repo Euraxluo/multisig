@@ -36,6 +36,27 @@ import { MAX_ROSTER_MEMBERS } from "@/lib/group-roster";
 import { computeThresholdApprovalDigest } from "@/lib/vault-client";
 import { errorMessage as describeError } from "@/lib/error-message";
 import { TESTNET_PACKAGE_ID, findCreatedProtocolObject, getActiveAccount, getUserGroups, persistGroupOrganization } from "@/lib/onchain-store";
+import { ADMISSION_ECONOMICS } from "multisig/agent-vault/org";
+
+const SESSION_CREATION_FEE_MIST = ADMISSION_ECONOMICS.SESSION_CREATION_FEE_MIST
+const MIN_BOND_MIST = ADMISSION_ECONOMICS.MIN_BOND_MIST
+
+/** Round1 须公布 32B attest 公钥；attest 阶段用对应私钥签名。
+ *  按会话+地址持久化于 localStorage（密钥语义 = 会话级一次性，不与钱包钥复用）。 */
+async function ensureAttestationKey(sessionId: string, address: string): Promise<Uint8Array> {
+  const { ed25519 } = await import("@noble/curves/ed25519.js")
+  const storeKey = `dkg-attest-sk:${sessionId}:${address}`
+  let skB64 = localStorage.getItem(storeKey)
+  let sk: Uint8Array
+  if (skB64) {
+    sk = Uint8Array.from(atob(skB64), (c) => c.charCodeAt(0))
+  } else {
+    sk = new Uint8Array(32)
+    crypto.getRandomValues(sk)
+    localStorage.setItem(storeKey, btoa(String.fromCharCode(...sk)))
+  }
+  return ed25519.getPublicKey(sk)
+}
 import { DKG_ATTESTATION_TYPE_ORIGIN, DKG_ENCRYPTION_KEY_TYPE_ORIGIN, DKG_TYPE_ORIGIN } from "@/lib/dkg-type-origin";
 import { Transaction } from "@mysten/sui/transactions";
 import { isValidSuiAddress, normalizeSuiAddress } from "@mysten/sui/utils";
@@ -251,12 +272,14 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
       try {
         const participants = initialMembers.map((m) => normAddress(m.address, t("dkg.memberAddrInvalid", { address: m.address })))
         const threshold = Math.max(1, Math.min(participants.length, Math.ceil(participants.length * 0.6)))
-        const deadlineMs = Date.now() + 10 * 60 * 1000
+        // 准入经济学（#16）：deadline 钳制 [10min,7d]，创建费 0.005 SUI 销毁，bond 地板 0.05 SUI
+        const deadlineMs = Date.now() + 30 * 60 * 1000
         const tx = new Transaction()
+        const [creationFee] = tx.splitCoins(tx.gas, [BigInt(SESSION_CREATION_FEE_MIST)])
         tx.moveCall({
           target: `${TESTNET_PACKAGE_ID}::dkg_committee::create_dkg_session`,
           typeArguments: [],
-          arguments: [tx.pure.u64(BigInt(threshold)), tx.pure.vector('address', participants), tx.pure.u64(BigInt(deadlineMs))],
+          arguments: [tx.pure.u64(BigInt(threshold)), tx.pure.vector('address', participants), tx.pure.u64(BigInt(deadlineMs)), creationFee, tx.object("0x6")],
         })
         const { digest, createdObjects } = await signAndExecuteWithWallet(tx)
         const sessionId = await findCreatedProtocolObject(createdObjects, "dkg_committee", "DkgSession");
@@ -309,11 +332,15 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
         await saveDealerContribution({ sessionId: session.sessionId, holder: mine, index: myIndex, commitments: r1.commitmentBytes, share: node.evaluateShareForIndex(myIndex) });
         dealerRef.current = { sessionId: session.sessionId, holder: mine, node };
         check();
+        // 准入经济学：bond 0.05 SUI 随承诺原子托管（finalize/timeout 后 claim_bond 全额退款）；
+        // attest 公钥须在 Round1 公布（attest 时用它对 H(SUI_DKG_ATTEST_V1‖sid‖groupPk) 验签）。
+        const attestKeyBytes = await ensureAttestationKey(onChainSessionId, mine)
         const tx = new Transaction()
+        const [bondCoin] = tx.splitCoins(tx.gas, [BigInt(MIN_BOND_MIST)])
         tx.moveCall({
           target: `${TESTNET_PACKAGE_ID}::dkg_committee::submit_commitment`,
           typeArguments: [],
-          arguments: [tx.object(onChainSessionId), tx.object("0x6"), tx.pure.vector('u8', Array.from(encodeCommitments(r1.commitmentBytes)))],
+          arguments: [tx.object(onChainSessionId), tx.object("0x6"), tx.pure.vector('u8', Array.from(encodeCommitments(r1.commitmentBytes))), tx.pure.vector('u8', Array.from(attestKeyBytes)), bondCoin],
         })
         const { digest } = await signAndExecuteWithWallet(tx)
         setStep("INIT"); setProgress(0)
@@ -626,7 +653,7 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
       tx.moveCall({
         target: `${TESTNET_PACKAGE_ID}::cryptographic_org::create_organization_from_session`,
         typeArguments: [],
-        arguments: [tx.object(session.sessionId), tx.pure.u64(session.threshold)],
+        arguments: [tx.object(session.sessionId), tx.pure.u64(session.threshold), tx.object("0x6")],
       });
       setStep("DEPLOYING_ONCHAIN"); setProgress(88);
       setActiveLog(t("dkg.logCreatingOrg"));

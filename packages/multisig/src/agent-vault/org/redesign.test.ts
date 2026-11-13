@@ -35,16 +35,25 @@ const ORG = A(ORGID);
 const M1 = A('0x' + '11'.repeat(32));
 const M2 = A('0x' + '22'.repeat(32));
 
-describe('computeCreatePopDigest', () => {
-  it('equals hand-computed H(SUI_ORG_POP_V1: || chain || pk || bcs(members) || bcs(weights) || bcs(threshold))', () => {
+describe('computeCreatePopDigest (V2)', () => {
+  it('equals hand-computed H(SUI_ORG_POP_V2: || chain || pk || bcs(members) || bcs(weights) || bcs(threshold) || bcs(key_threshold))', () => {
     const expected = sha256(
-      txt('SUI_ORG_POP_V1:'), txt(CHAIN), PK,
+      txt('SUI_ORG_POP_V2:'), txt(CHAIN), PK,
       uleb(2), M1, M2,
       uleb(2), u64(3n), u64(7n),
       u64(5n),
+      u64(2n),
     );
-    expect(Buffer.from(computeCreatePopDigest({ chainId: CHAIN, groupPk: PK, members: [M1, M2].map(b => '0x' + b.toString('hex')), weights: [3n, 7n], thresholdWeight: 5n })))
+    expect(Buffer.from(computeCreatePopDigest({ chainId: CHAIN, groupPk: PK, members: [M1, M2].map(b => '0x' + b.toString('hex')), weights: [3n, 7n], thresholdWeight: 5n, keyThreshold: 2n })))
       .toEqual(expected);
+  });
+  it('binds key_threshold: flipping it changes the digest; V1 input shape is gone', () => {
+    const base = computeCreatePopDigest({ chainId: CHAIN, groupPk: PK, members: [M1].map(b => '0x' + b.toString('hex')), weights: [1n], thresholdWeight: 1n, keyThreshold: 1n });
+    const flipped = computeCreatePopDigest({ chainId: CHAIN, groupPk: PK, members: [M1].map(b => '0x' + b.toString('hex')), weights: [1n], thresholdWeight: 1n, keyThreshold: 2n });
+    expect(Buffer.from(base).equals(Buffer.from(flipped))).toBe(false);
+  });
+  it('rejects a zero key_threshold before hashing', () => {
+    expect(() => computeCreatePopDigest({ chainId: CHAIN, groupPk: PK, members: [M1].map(b => '0x' + b.toString('hex')), weights: [1n], thresholdWeight: 1n, keyThreshold: 0n })).toThrow(/keyThreshold/);
   });
 });
 
