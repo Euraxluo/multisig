@@ -55,17 +55,7 @@ async function ensureAttestationSecretKey(sessionId: string, address: string): P
 
 async function ensureAttestationKey(sessionId: string, address: string): Promise<Uint8Array> {
   const { ed25519 } = await import("@noble/curves/ed25519.js")
-  const storeKey = `dkg-attest-sk:${sessionId}:${address}`
-  const skB64 = localStorage.getItem(storeKey)
-  let sk: Uint8Array
-  if (skB64) {
-    sk = Uint8Array.from(atob(skB64), (c) => c.charCodeAt(0))
-  } else {
-    sk = new Uint8Array(32)
-    crypto.getRandomValues(sk)
-    localStorage.setItem(storeKey, btoa(String.fromCharCode(...sk)))
-  }
-  return ed25519.getPublicKey(sk)
+  return ed25519.getPublicKey(await ensureAttestationSecretKey(sessionId, address))
 }
 import { DKG_ATTESTATION_TYPE_ORIGIN, DKG_ENCRYPTION_KEY_TYPE_ORIGIN, DKG_TYPE_ORIGIN } from "@/lib/dkg-type-origin";
 import { Transaction } from "@mysten/sui/transactions";

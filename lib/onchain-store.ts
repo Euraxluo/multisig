@@ -12,7 +12,6 @@ import { isRecord, readStoredArray, type RecordSourceStatus } from "./local-reco
 import { t } from "./i18n/t"
 
 export const TESTNET_PACKAGE_ID = PROPOSAL_PACKAGE_ID
-export const KNOWN_TESTNET_ORG_ID = "0xaf0806fadf61ceeb76c21b40af4393e244a5d8ca91ba208d4f58537421eff2e4"
 const SUI_TYPE = SUI_TYPE_ARG
 
 export const vaultClient = new AgentVaultClient({ packageId: TESTNET_PACKAGE_ID, defaultCoinType: SUI_TYPE })
