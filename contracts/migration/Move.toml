@@ -1,0 +1,12 @@
+[package]
+name = "migration"
+edition = "2024"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "mainnet-v1.74.1" }
+liquidity_core = { local = "../core" }
+engine_cpmm = { local = "../engine_cpmm" }
+engine_custom = { local = "../engine_custom" }
+
+[addresses]
+migration = "0x0"

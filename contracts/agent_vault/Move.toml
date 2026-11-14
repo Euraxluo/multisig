@@ -1,0 +1,10 @@
+[package]
+name = "agent_vault"
+edition = "2024"
+
+[dependencies]
+# mainnet-v1.74.1; matches the existing Sui/MoveStdlib pins in Move.lock.
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "8fc60f1fa966e90398c93beb67ad4f42992889c7" }
+
+[addresses]
+agent_vault = "0x0"
