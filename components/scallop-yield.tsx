@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { Input } from "@/components/ui/input"
 import {
-  buildCreateScallopAdapter, buildFeedHarvestedYieldToChat, buildRecordPrincipalRedemption,
+  buildCreateScallopAdapter, buildFeedHarvestedYieldToChat,
   readScallopAdapter,
 } from "multisig/agent-vault"
 import { agentVaultClient } from "@/lib/agent-vault-chain"
@@ -95,7 +95,6 @@ export function ScallopYieldPanel({ channelId, readOnly, run, busy }: ScallopYie
   }
 
   const handleRedeem = async () => {
-    const amount = suiMist(redeemAmount)
     const recipient = redeemRecipient.trim()
     if (!recipient) throw new Error(t("walrus.scallopRecipientRequired"))
     setPending(true); setError(""); setNotice("")

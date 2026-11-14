@@ -6,9 +6,9 @@
  *         能否构造两段不同语义的参数元组 → 同一 SHA-256 摘要？
  * 问题 3: 若碰撞存在，链上消费路径是否可用（PoP 验签 / execute 验签）？
  */
-import { computeProposalDigest, computeCreatePopDigest } from "../packages/multisig/src/agent-vault/org/digest.ts";
-import { bcsVectorAddress, bcsVectorU64, u64le } from "../packages/multisig/src/agent-vault/org/bcs.ts";
-import { utf8 } from "../packages/multisig/src/agent-vault/org/bcs.ts";
+import { computeProposalDigest, computeCreatePopDigest } from "../packages/multisig/src/agent-vault/org/digest";
+import { bcsVectorAddress, bcsVectorU64, u64le } from "../packages/multisig/src/agent-vault/org/bcs";
+import { utf8 } from "../packages/multisig/src/agent-vault/org/bcs";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { ed25519 } from "@noble/curves/ed25519.js";
 
@@ -63,13 +63,13 @@ console.log("=== Q2: 裸拼接歧义 — compute_proposal_digest 移位碰撞构
   //   epB     = N                          （u64le(epB) = u64le(N)）
   //   nonceB  = u64le(P[0:8])              （u64le(nonceB) = P[0:8]）
   //   payloadB= P[8:]                      （尾部 action 1B 固定，总长不变）
-  const chainB = [...utf8(CHAIN), ...ORG.slice(0, 8)];
-  const orgB = addr(hex([...ORG.slice(8), ...u64le(E)]));
+  const chainB = new Uint8Array([...utf8(CHAIN), ...ORG.slice(0, 8)]);
+  const orgB = addr(hex(new Uint8Array([...ORG.slice(8), ...u64le(E)])));
   const nonceB = BigInt("0x" + hex(P.slice(0, 8).reverse())); // 小端读回
-  const dB = computeProposalDigest({ chainId: chainB, orgId: orgB, epochVersion: N, nonce: nonceB, payload: P.slice(8), actionType: ACT });
+  const dB = computeProposalDigest({ chainId: chainB, orgId: orgB, epochVersion: N, nonce: nonceB, payload: new Uint8Array(P.slice(8)), actionType: ACT });
 
   const same = hex(dA) === hex(dB);
-  const tupleDiff = JSON.stringify(chainB) !== JSON.stringify(utf8(CHAIN)) && orgB !== addr(hex(ORG)) && N !== E && nonceB !== N;
+  const tupleDiff = JSON.stringify(chainB) !== JSON.stringify(utf8(CHAIN)) && orgB !== addr(hex(ORG)) && (N as bigint) !== (E as bigint) && nonceB !== N;
   check("两不同元组 → 同一摘要（碰撞存在）", same, `digest=${hex(dA).slice(0, 16)}…`);
   check("两元组语义确不相同", tupleDiff, `org'=${orgB.slice(0, 10)}… epoch'=${N} nonce'=${nonceB & 0xffffn}… payload 缩短 8B`);
 }

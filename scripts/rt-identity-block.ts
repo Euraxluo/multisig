@@ -30,7 +30,7 @@ async function main() {
   const r = new Uint8Array(32); crypto.getRandomValues(r); const R = ed25519.Point.BASE.multiply(BigInt("0x" + Buffer.from(r).toString("hex")) % L)
   const s = (BigInt("0x" + Buffer.from(r).toString("hex")) + c) % L
   const sBuf = Buffer.alloc(32); let x = s; for (let i = 0; i < 32; i++) { sBuf[i] = Number(x & 0xffn); x >>= 8n }
-  const sig = new Uint8Array(64); sig.set(R.toRawBytes ? Buffer.from(R.toRawBytes()) : Buffer.from(R.toBytes()), 0); sig.set(sBuf, 32)
+  const sig = new Uint8Array(64); const Rb = Buffer.from(typeof (R as any).toRawBytes === "function" ? (R as any).toRawBytes() : R.toBytes()); sig.set(Rb, 0); sig.set(sBuf, 32)
   // sanity: noble verify（用 identity pk 可能被 noble 拒——链上才是事实源）
   const tx = new Transaction()
   tx.moveCall({ target: `${PKG}::cryptographic_org::create_organization_entry`, arguments: [tx.pure.vector("u8", [...identityPk]), tx.pure.u64(2n), tx.pure.u64(2n), tx.pure.vector("address", members), tx.pure.vector("u64", weights), tx.pure.vector("u8", [...sig])] })

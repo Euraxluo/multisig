@@ -13,7 +13,6 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { fromBase64 } from "@mysten/sui/utils"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Transaction } from "@mysten/sui/transactions"
-import type { SuiClient } from "@mysten/sui/client"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 
@@ -25,7 +24,7 @@ const A2 = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
 const grpc = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
 // gRPC client satisfies the read surface Transaction.build probes at runtime; the declared
 // type wants the JSON-RPC SuiClient, hence this single boundary cast.
-const buildClient = grpc as unknown as SuiClient
+const buildClient = grpc as unknown as never
 
 function keypairFor(address: string): Ed25519Keypair {
   const ks = JSON.parse(readFileSync(`${homedir()}/.sui/sui_config/sui.keystore`, "utf8")) as string[]
@@ -37,7 +36,7 @@ function keypairFor(address: string): Ed25519Keypair {
 }
 
 const delay = (ms: number) => {
-  const { promise, resolve } = Promise.withResolvers<void>()
+  let resolve!: () => void; const promise = new Promise<void>(res => { resolve = res })
   setTimeout(resolve, ms)
   return promise
 }
@@ -79,7 +78,7 @@ async function simulate(signer: Ed25519Keypair, tx: Transaction, label: string):
   tx.setSender(signer.toSuiAddress())
   try {
     const bytes = await tx.build({ client: buildClient })
-    const res = asRecord(await grpc.simulateTransaction({ transactionBytes: bytes }))
+    const res = asRecord(await (grpc as any).simulateTransaction({ transaction: bytes }))
     const effects = recordField(res, 'effects')
     const statusObj = effects == null ? recordField(res, 'status') : recordField(effects, 'status')
     const simOk = statusObj == null

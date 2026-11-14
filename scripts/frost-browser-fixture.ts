@@ -128,7 +128,7 @@ async function initialize(): Promise<Counts> {
     return { signature: (await wallets[index].signPersonalMessage(new Uint8Array(bytes))).signature }
   }
   const live: LiveOrganization = {
-    orgId, epoch: 7n, lastNonce: 9n, groupPk: keys[0].groupPk, chainId: new TextEncoder().encode("sui-testnet:"),
+    orgId, epoch: 7n, lastNonce: 9n, keyGeneration: 1n, groupPk: keys[0].groupPk, chainId: new TextEncoder().encode("sui-testnet:"),
     thresholdWeight: 2n, members: participants.map(address => ({ address, weight: 1n })),
   }
   const plan = planRosterChange(live, { members: live.members.map(member => ({ ...member, weight: 2n })), thresholdWeight: 3n })

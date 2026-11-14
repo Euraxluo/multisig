@@ -7,7 +7,7 @@ interface RpcRecord { [k: string]: unknown }
 const asRecord = (v: unknown): RpcRecord => { if (v && typeof v === "object") return v as RpcRecord; throw new Error("bad shape") }
 const fld = (v: unknown, k: string): unknown => asRecord(v)[k]
 
-const delay = (ms: number) => { const { promise, resolve } = Promise.withResolvers<void>(); setTimeout(resolve, ms); return promise }
+const delay = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 function hex2(e: unknown): Uint8Array {
   const b = fld(e, "bcs")

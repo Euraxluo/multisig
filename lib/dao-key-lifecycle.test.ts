@@ -6,7 +6,7 @@ import { messageWithIntent, toSerializedSignature } from "@mysten/sui/cryptograp
 import { blake2b } from "@noble/hashes/blake2.js"
 import { verifySignature } from "@mysten/sui/verify"
 import {
-  aggregateNonce, aggregateSignature, createNonceCommitment, createSignatureShare,
+  aggregateSignature, createNonceCommitment, createSignatureShare,
   type NonceCommitment,
 } from "./frost-exchange"
 import { GennaroResharingParticipant, type DealerHonestyProof } from "./crypto/resharing"

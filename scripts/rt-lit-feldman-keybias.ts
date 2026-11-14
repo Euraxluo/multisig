@@ -26,7 +26,7 @@
  * 攻击者能【多轮提交】- 我方 E_ALREADY_SUBMITTED 已封死。
  */
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { mod, bytesToScalar } from "../packages/multisig/src/dkg/math.ts";
+import { mod, bytesToScalar } from "../packages/multisig/src/dkg/math";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 const G = ed25519.Point.BASE;

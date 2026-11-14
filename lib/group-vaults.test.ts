@@ -180,7 +180,7 @@ test("metadata checks original origin, storage identity, exact fields and deposi
     pkg => { pkg.typeOrigins = [{ moduleName: "vault", datatypeName: "AgentVault", packageId: other }] },
     pkg => { pkg.modules[1].datatypes[0].fields.at(-1)!.type = vector(primitive(3)) },
   ]
-  for (const [index, mutate] of mutations.entries()) {
+  for (const [, mutate] of mutations.entries()) {
     const fake = fakeClient(); mutate(fake.metadata)
     await assert.rejects(fake.reader().requireDeployment(), /ABI/)
   }

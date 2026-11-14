@@ -2,7 +2,7 @@
  * 索引 §9 — 密钥复用逐边攻击分析（代码走查 + 离线验证）。
  */
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
-import { mod, CURVE_ORDER } from "../packages/multisig/src/dkg/math.ts";
+import { mod, CURVE_ORDER } from "../packages/multisig/src/dkg/math";
 import { sha256 } from "@noble/hashes/sha2.js";
 
 let pass = 0, fail = 0;

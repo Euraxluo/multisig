@@ -83,7 +83,7 @@ async function newSessionId(creator: Ed25519Keypair): Promise<string> {
   if (!r.ok) throw new Error("create session failed: " + r.err)
   for (const e of await eventsOf(r.digest!)) {
     if ((e.eventType ?? "").toLowerCase().includes("sessioncreated")) {
-      const b = e.bcs instanceof Uint8Array ? e.bcs : Uint8Array.from(Object.values(e.bcs) as number[])
+      const b = e.bcs instanceof Uint8Array ? e.bcs : Uint8Array.from(Object.values(e.bcs as Record<string, number>) as number[])
       return "0x" + Buffer.from(b.slice(0, 32)).toString("hex")
     }
   }
@@ -196,7 +196,7 @@ async function main() {
   {
     const env = await encryptMailboxShare({
       sessionId: sid2, senderAddress: A2, recipientAddress: A1, recipientPublicKey: crypto.getRandomValues(new Uint8Array(32)),
-      payload: { senderId: "x", senderIndex: 2n, recipientId: "y", recipientIndex: 1n, share: scalarToBytes32(42n), commitments: [], epoch: 1 },
+      payload: { fromIndex: 2, toIndex: 1, round: 1, epoch: 1, secretShareHex: scalarToBytes32(42n).toString().length > 0 ? Buffer.from(scalarToBytes32(42n)).toString("hex") : "", commitmentsHex: [], senderAddress: A2, recipientAddress: A1 },
       epoch: 1,
     }).catch(() => null)
     const payload = env ? serializeEnvelopeToBytes(env) : new TextEncoder().encode('{"json":"x25519-style"}')

@@ -45,7 +45,7 @@ async function main() {
   // SDK stack: signers 1,2
   const sdkNonces = [nodes[0], nodes[1]].map(m => m.node.generateNonceCommitment())
   const sdkShares = [nodes[0], nodes[1]].map(m => m.node.computeSignatureShare(message, groupPk, sdkNonces))
-  const sdkSig = ThresholdSignerNode.aggregateSignature(sdkNonces, sdkShares)
+  const sdkSig = ThresholdSignerNode.aggregateSignature(message, groupPk, sdkNonces, sdkShares)
   const sdkValid = ed25519.verify(sdkSig, message, groupPk)
   console.log("SDK stack sig verifies under plain ed25519.verify:", sdkValid)
 
@@ -80,14 +80,14 @@ async function main() {
   const n1 = signers[0].node.generateNonceCommitment()
   const n2 = signers[1].node.generateNonceCommitment()
   const fakePoint = ed25519.Point.BASE.multiply(randomScalar()).toBytes()
-  const fakeNonce: NonceCommitment = { participantId: "m2", participantIndex: 2n, nonceBytes: fakePoint, noncePoint: ed25519.Point.fromBytes(fakePoint) }
+  const fakeNonce: NonceCommitment = { participantId: "m2", participantIndex: 2n, hiding: fakePoint, binding: ed25519.Point.BASE.multiply(randomScalar()).toBytes() }
   // signer1 sees [n1, FAKE]; signer2 sees [n1, n2] (the real set)
   const share1 = signers[0].node.computeSignatureShare(realMsg, key2.groupPk, [n1, fakeNonce])
   const share2 = signers[1].node.computeSignatureShare(realMsg, key2.groupPk, [n1, n2])
   console.log("signer1 accepted a fabricated peer commitment (no validation): share emitted")
   console.log("signer2 signed against the real set: share emitted")
   // aggregator assembles with the REAL R̄ (from n1+n2) but share1 was computed with fake R̄:
-  const assembled = ThresholdSignerNode.aggregateSignature([n1, n2], [share1, share2])
+  const assembled = ThresholdSignerNode.aggregateSignature(realMsg, key2.groupPk, [n1, n2], [share1, share2])
   const valid = ed25519.verify(assembled, realMsg, key2.groupPk)
   console.log("mixed-R̄ signature verifies:", valid, "(if true: aggregator forged a valid group signature while signer1 signed a DIFFERENT R̄ — textbook missing-binding-factor anomaly)")
   if (valid) {
@@ -105,7 +105,7 @@ async function main() {
   const sh = [s3[0], s3[1]].map(m => m.node.computeSignatureShare(msg3, key3.groupPk, nn))
   // attacker corrupts share 2 (e.g. MITM on the DM transport)
   const corrupted = { ...sh[1], shareZ: mod(sh[1].shareZ + 12345n) }
-  const badSig = ThresholdSignerNode.aggregateSignature(nn, [sh[0], corrupted])
+  const badSig = ThresholdSignerNode.aggregateSignature(realMsg, key2.groupPk, nn, [sh[0], corrupted])
   console.log("corrupted-share signature verifies:", ed25519.verify(badSig, msg3, key3.groupPk), "(false ⇒ silent invalid signature shipped to chain; aggregateSignature never validates shares — issue #7 point 2)")
 }
 main().catch(e => { console.error("ERR", e.message); process.exit(1) })

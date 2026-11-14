@@ -14,7 +14,7 @@
  */
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { mod, lagrangeCoefficient, bytesToScalar, CURVE_ORDER } from "../packages/multisig/src/dkg/math.ts";
+import { mod, lagrangeCoefficient, bytesToScalar, CURVE_ORDER } from "../packages/multisig/src/dkg/math";
 
 const G = ed25519.Point.BASE;
 const L = CURVE_ORDER;

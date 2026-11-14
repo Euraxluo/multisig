@@ -56,7 +56,7 @@ async function ensureAttestationSecretKey(sessionId: string, address: string): P
 async function ensureAttestationKey(sessionId: string, address: string): Promise<Uint8Array> {
   const { ed25519 } = await import("@noble/curves/ed25519.js")
   const storeKey = `dkg-attest-sk:${sessionId}:${address}`
-  let skB64 = localStorage.getItem(storeKey)
+  const skB64 = localStorage.getItem(storeKey)
   let sk: Uint8Array
   if (skB64) {
     sk = Uint8Array.from(atob(skB64), (c) => c.charCodeAt(0))

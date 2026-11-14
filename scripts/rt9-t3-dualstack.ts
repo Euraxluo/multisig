@@ -73,7 +73,7 @@ async function main() {
   const x25519Env = await encryptMailboxShare({
     sessionId: sid, senderAddress: sender, recipientAddress: recipient,
     recipientPublicKey: recv.publicKey,
-    payload: { senderId: "s", senderIndex: 1, recipientId: "r", recipientIndex: 2, share: new Uint8Array(32).fill(7), commitments: [], epoch: 1 },
+    payload: { fromIndex: Number(1), toIndex: Number(2), round: 1, epoch: 1, secretShareHex: Buffer.from(new Uint8Array(32).fill(7)).toString("hex"), commitmentsHex: [], senderAddress: sender, recipientAddress: recipient },
   })
   const a5Bytes = new TextEncoder().encode(JSON.stringify(x25519Env, (_, v) => typeof v === "bigint" ? v.toString() : v))
   const b1 = await openShare(a5Bytes, bob.privateKey, ctx).then(() => "静默成功(危险!)", (e: Error) => `显式报错: ${e.message.slice(0, 60)}`)
