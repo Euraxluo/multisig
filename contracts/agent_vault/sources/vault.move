@@ -112,6 +112,14 @@ module agent_vault::vault {
         current_epoch: u64,
         recipient: address,
     }
+    /// 【审计 M-01】Master 提现事件（监控口径：所有出金都可观测）
+    public struct MasterWithdrawnEvent has copy, drop {
+        vault_id: ID,
+        amount: u64,
+        recipient: address,
+        epoch_outflow_after: u64,
+    }
+
     public struct OutflowPolicyUpdatedEvent has copy, drop {
         vault_id: ID,
         max_epoch_outflow: u64,
@@ -179,9 +187,31 @@ module agent_vault::vault {
         assert!(amount > 0, E_ZERO_AMOUNT);
         assert!(vault.balance.value() >= amount, E_INSUFFICIENT_VAULT_BALANCE);
 
+        // 【审计 M-01】Master 出口同样记账 epoch_outflow，使该上限对所有出金入口成立；
+        // 且一旦设置过策略（max_epoch_outflow > 0），Master 也受同一上限约束。
+        let current_epoch = ctx.epoch();
+        if (vault.outflow_epoch != current_epoch) {
+            vault.outflow_epoch = current_epoch;
+            vault.epoch_outflow = 0;
+        };
+        if (vault.max_epoch_outflow > 0) {
+            assert!(
+                vault.epoch_outflow + amount <= vault.max_epoch_outflow,
+                E_EXCEEDS_EPOCH_OUTFLOW
+            );
+        };
+        vault.epoch_outflow = vault.epoch_outflow + amount;
+
         let split_bal = vault.balance.split(amount);
         let withdraw_coin = coin::from_balance(split_bal, ctx);
         transfer::public_transfer(withdraw_coin, recipient);
+
+        event::emit(MasterWithdrawnEvent {
+            vault_id: master.vault_id,
+            amount,
+            recipient,
+            epoch_outflow_after: vault.epoch_outflow,
+        });
     }
 
     /// 2. Master 颁发 OperatorCap 给运维经理
@@ -392,6 +422,9 @@ module agent_vault::vault {
         // 递增全局版本号：所有旧的 OperatorCap 和 AgentCap 校验 vault_version 立即全部失效！
         vault.vault_version = vault.vault_version + 1;
         vault.paused = true;
+        // 【审计 M-01】紧急出口不设限流（必须能扫空），但把 epoch_outflow 置满以便监控告警。
+        vault.outflow_epoch = ctx.epoch();
+        vault.epoch_outflow = vault.max_epoch_outflow;
 
         // 一键将所有余额全额归集到老板指定安全地址
         let total_val = vault.balance.value();

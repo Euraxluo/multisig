@@ -3819,6 +3819,74 @@ module agent_vault::dkg_committee_economics_tests {
         ts::end(s);
     }
 
+    // 【审计 H-02 回归】TIMED_OUT 会话中，超额创世质押可通过 claim_stake 原路退回
+    #[test]
+    fun audit_h02_timed_out_session_refunds_genesis_stake() {
+        let mut s = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        let _id = dkg_committee::create_dkg_session(
+            2, vector[ALICE, BOB, CHARLIE], 2_000_000, fee_coin(ts::ctx(&mut s)), &clock, ts::ctx(&mut s),
+        );
+        let (min_bond, _max) = dkg_committee::bond_bounds();
+        let extra_stake = 20_000_000u64; // 超额缴纳 → 记入创世质押
+
+        ts::next_tx(&mut s, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&s);
+            let paid = coin::mint_for_testing<SUI>(min_bond + extra_stake, ts::ctx(&mut s));
+            dkg_committee::submit_commitment(&mut session, &clock, COMMITMENT, ATTEST_PK, paid, ts::ctx(&mut s));
+            assert!(dkg_committee::participant_bond_mist(&session, ALICE) == min_bond, 3);
+            ts::return_shared(session);
+        };
+        // 只有 1 人提交（< threshold 2），过 deadline 后超时
+        clock::set_for_testing(&mut clock, 3_000_000);
+        ts::next_tx(&mut s, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&s);
+            dkg_committee::handle_session_timeout(&mut session, &clock);
+            assert!(dkg_committee::status(&session) == 4, 1);
+            dkg_committee::claim_bond(&mut session, ts::ctx(&mut s));
+            dkg_committee::claim_stake(&mut session, ts::ctx(&mut s));
+            ts::return_shared(session);
+        };
+
+        // bond 和 stake 是两笔独立转账（claim_bond / claim_stake 各一枚 coin）
+        ts::next_tx(&mut s, ALICE);
+        {
+            let refund_a = ts::take_from_sender<coin::Coin<SUI>>(&s);
+            let refund_b = ts::take_from_sender<coin::Coin<SUI>>(&s);
+            let total = coin::value(&refund_a) + coin::value(&refund_b);
+            assert!(total == min_bond + extra_stake, 2);
+            ts::return_to_sender(&s, refund_a);
+            ts::return_to_sender(&s, refund_b);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(s);
+    }
+
+    // 【审计 H-02 反向】FINALIZED 会话不得走 claim_stake（质押已扫入 org）
+    #[test]
+    #[expected_failure(abort_code = agent_vault::dkg_committee::E_INVALID_SESSION_STATUS)]
+    fun audit_h02_claim_stake_rejected_on_finalized() {
+        let mut s = ts::begin(ALICE);
+        let (mut session, clock) = open_two_submitted(&mut s);
+        let group_pk = x"3b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29";
+        dkg_committee::finalize_session_for_testing(&mut session, group_pk, ts::ctx(&mut s));
+        ts::return_shared(session);
+
+        ts::next_tx(&mut s, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&s);
+            dkg_committee::claim_stake(&mut session, ts::ctx(&mut s));
+            ts::return_shared(session);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(s);
+    }
+
     // (5) 重复 claim → E_NO_BOND_TO_CLAIM (3023)
     #[test]
     #[expected_failure(abort_code = agent_vault::dkg_committee::E_NO_BOND_TO_CLAIM)]

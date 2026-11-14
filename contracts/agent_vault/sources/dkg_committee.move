@@ -302,6 +302,12 @@ module agent_vault::dkg_committee {
     /// Emitted when organization creation sweeps the genesis stakes out of a
     /// finalized session. `stakers` counts participants whose escrowed excess
     /// was actually non-zero; bonds are not part of this sweep.
+    public struct GenesisStakeRefundedEvent has copy, drop {
+        session_id: ID,
+        participant: address,
+        amount_mist: u64,
+    }
+
     public struct GenesisStakeSweptEvent has copy, drop {
         session_id: ID,
         total_mist: u64,
@@ -934,6 +940,26 @@ module agent_vault::dkg_committee {
 
     /// 8c. 创世质押扫入（仅供本包 Organization 的固化路径调用）。
     ///
+    /// 【审计 H-02 修复】会话超时后，参与者取回自己超额缴纳的创世质押。
+    /// 与 claim_bond 同构的 Pull 模型：纯退款、无罚没；只能退回给缴款者本人。
+    /// 仅在 TIMED_OUT 终态开放（FINALIZED 时质押已随 org 创建扫入组织，见 take_genesis_stakes）。
+    public fun claim_stake(session: &mut DkgSession, ctx: &mut TxContext) {
+        let sender = ctx.sender();
+        assert!(session.participants.contains(&sender), E_NOT_A_PARTICIPANT);
+        assert!(session.status == STATUS_TIMED_OUT, E_INVALID_SESSION_STATUS);
+        let slot = ParticipantStakeSlot { participant: sender };
+        assert!(dynamic_field::exists(&mut session.id, slot), E_NO_BOND_TO_CLAIM);
+        let stake: Balance<SUI> = dynamic_field::remove(&mut session.id, slot);
+        let amount = balance::value(&stake);
+        let coin = coin::from_balance(stake, ctx);
+        transfer::public_transfer(coin, sender);
+        event::emit(GenesisStakeRefundedEvent {
+            session_id: object::uid_to_inner(&session.id),
+            participant: sender,
+            amount_mist: amount,
+        });
+    }
+
     /// 一次性抽干全部 ParticipantStakeSlot，返回 (总余额, 有效质押人数)。
     /// 保证金槽位不在扫入范围 —— 它们由 claim_bond 逐人退款。
     /// 空扫安全：无人超额缴款时返回 (零余额, 0)，零值槽位会被清理且不计数。

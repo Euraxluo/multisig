@@ -1111,5 +1111,42 @@ module agent_vault::agent_vault_tests {
 
         ts::end(scenario);
     }
+    // 【审计 M-01 回归】Master 提现现在同样记账 epoch_outflow，并受 max_epoch_outflow 约束
+    #[test]
+    #[expected_failure(abort_code = agent_vault::vault::E_EXCEEDS_EPOCH_OUTFLOW)]
+    fun audit_m01_master_withdraw_respects_epoch_outflow() {
+        let mut scenario = ts::begin(ALICE);
+        let master_cap = vault::initialize_vault<SUI>(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            let coin = coin::mint_for_testing<SUI>(1_000, ts::ctx(&mut scenario));
+            vault::deposit(&mut vault, coin);
+            // 策略：单 epoch 流出上限 100
+            vault::set_outflow_policy(&master_cap, &mut vault, 100, 100);
+            ts::return_shared(vault);
+        };
+
+        // 第一次 withdraw 60：记账后 epoch_outflow = 60
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::withdraw(&master_cap, &mut vault, 60, BOB, ts::ctx(&mut scenario));
+            ts::return_shared(vault);
+        };
+
+        // 第二次 withdraw 60：60 + 60 > 100 → 必须 abort（旧实现会静默放行）
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::withdraw(&master_cap, &mut vault, 60, BOB, ts::ctx(&mut scenario));
+            ts::return_shared(vault);
+        };
+
+        vault::destroy_master_cap_for_testing(master_cap);
+        ts::end(scenario);
+    }
+
 }
 
