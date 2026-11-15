@@ -500,17 +500,23 @@ export class GennaroResharingParticipant {
       );
     }
 
-    // 严格校验所有 Dealer 的 PoK —— 证明与 context 不匹配即为硬错误，无任何静默回退
-    for (const [senderId, proof] of options.dealerHonestyProofs.entries()) {
-      // round-9 join 缺口闭合（RT9-T1c4）：证明的常数承诺 C_{i,0} 必须与该 dealer
-      // 投递的 resharing 多项式承诺 commitments[0] 逐字节一致。缺一即拒——
-      // 诚实身份 + 毒化多项式（常数 z* ≠ λ·s_i）的组合在此被硬拒。
-      const commitments = peerCommitments.get(senderId);
+    // 严格校验所有 Dealer 的 PoK —— 以 peerCommitments（全部 dealer）为基准遍历，
+    // 任何 dealer 缺证明即为硬错误（abort），不存在“没交证明就静默绕过诚实性校验”的路径。
+    for (const [senderId, commitments] of peerCommitments.entries()) {
+      const proof = options.dealerHonestyProofs.get(senderId);
+      if (!proof) {
+        throw new DealerHonestyError(
+          `[Gennaro-${this.id}] Missing dealer honesty proof for sender: ${senderId}`
+        );
+      }
       if (!commitments || commitments.length === 0) {
         throw new Error(
           `[Gennaro-${this.id}] Dealer honesty proof has no matching resharing commitments for sender: ${senderId}`
         );
       }
+      // round-9 join 缺口闭合（RT9-T1c4）：证明的常数承诺 C_{i,0} 必须与该 dealer
+      // 投递的 resharing 多项式承诺 commitments[0] 逐字节一致。缺一即拒——
+      // 诚实身份 + 毒化多项式（常数 z* ≠ λ·s_i）的组合在此被硬拒。
       if (!bytesEqual(proof.constantCommitment, commitments[0].toBytes())) {
         throw new DealerHonestyError(
           `[Gennaro-${this.id}] constant commitment mismatch for sender: ${senderId}`

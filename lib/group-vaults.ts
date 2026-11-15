@@ -30,7 +30,7 @@ export interface GroupVaultConfig {
   packageId?: string; typeOrigin?: string; organizationTypeOrigin?: string; treasuryPackageId?: string; treasuryTypeOrigin?: string; maxPages?: number; pageSize?: number
 }
 export interface GroupVaultDeployment { packageId: string; typeOrigin: string; organizationTypeOrigin: string }
-export interface GroupVaultOrganization { id: string; groupAddress: string; epoch: bigint; thresholdWeight: bigint }
+export interface GroupVaultOrganization { id: string; groupAddress: string; epoch: bigint; thresholdWeight: bigint; groupPk: Uint8Array; lastNonce: bigint; chainId: Uint8Array; keyGeneration: bigint }
 export interface GroupVaultRow {
   id: string; orgId: string; coinType: string; balance: bigint; masterCapId: string | null
   paused: boolean; vaultVersion: bigint; totalSubagents: bigint; vaultOwnerAddress: string | null; treasuryId?: string
@@ -218,7 +218,7 @@ export function createGroupVaultReader(client: GroupVaultClient, config: GroupVa
     if (org.id !== id || org.group_pk.length !== 32 || BigInt(org.threshold_weight) <= 0n) throw new Error(t("groups.invalidOrgIdentity"))
     objectId(org.members_weight.id); objectId(org.executed_proposals.id)
     const groupAddress = new Ed25519PublicKey(Uint8Array.from(org.group_pk)).toSuiAddress()
-    return { id, groupAddress, epoch: BigInt(org.epoch_version), thresholdWeight: BigInt(org.threshold_weight) }
+    return { id, groupAddress, epoch: BigInt(org.epoch_version), thresholdWeight: BigInt(org.threshold_weight), groupPk: Uint8Array.from(org.group_pk), lastNonce: BigInt(org.last_nonce), chainId: Uint8Array.from(org.chain_id), keyGeneration: BigInt(org.key_generation) }
   }
 
   async function readVaultObject(vaultId: string, d: GroupVaultDeployment) {

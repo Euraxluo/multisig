@@ -60,7 +60,7 @@ export function TransactionDetailsDialog({ open, onOpenChange, transactionId, gr
     }
     loadProposal()
     void refreshProposal(transactionId).catch(error => {
-      if (!cancelled && run === actionGeneration.current) setErrorMessage(error instanceof Error ? error.message : t("vault.chainReadFailed"))
+      if (!cancelled && run === actionGeneration.current) setErrorMessage(describeError(error, t("vault.chainReadFailed")))
     })
     const accountChanged = () => { actionGeneration.current++; setActionDigest(""); setErrorMessage(null); loadProposal() }
     const invalidate = () => { actionGeneration.current++ }

@@ -417,11 +417,18 @@ module agent_vault::dkg_committee {
     }
 
     /// 1b. 创建新纪元重置会话 (支持新成员加入或移除成员，推进 Epoch)
+    ///
+    /// 【审计 T01/L】准入经济学与 `create_dkg_session` 完全对齐：
+    /// `creation_fee` ≥ SESSION_CREATION_FEE_MIST，全额转 @0x0 销毁。
+    /// 此前 resharing 会话零成本创建，且可兑换 org——绕过 DKG 的准入
+    /// 定价，用同一委员会预算就能无限刷会话。
     public fun create_resharing_session(
         epoch: u64,
         threshold: u64,
         participants: vector<address>,
         deadline_timestamp_ms: u64,
+        creation_fee: Coin<SUI>,
+        clock: &Clock,
         ctx: &mut TxContext
     ): ID {
         assert!(epoch > 1, E_INVALID_SESSION_STATUS);
@@ -430,6 +437,18 @@ module agent_vault::dkg_committee {
         assert_participant_set(&participants);
         assert!(participants.contains(&ctx.sender()), E_NOT_A_PARTICIPANT);
         assert!(len >= 1 && len <= 128, E_INVALID_PARTICIPANT_SET);
+
+        // 创建费与 DKG 会话同价：先验额再整体转 @0x0（精确或多付均销毁）。
+        assert!(
+            creation_fee.value() >= SESSION_CREATION_FEE_MIST,
+            E_BOND_INSUFFICIENT_PAYMENT,
+        );
+        transfer::public_transfer(creation_fee, @0x0);
+
+        // 与 create_dkg_session 相同的 Clock 入参形态（SDK 按 DKG 形态传参）；
+        // 显式读取一次时间戳保持入口一致。不做期限夹取，保持既有
+        // resharing 期限语义不变，避免行为回退。
+        let _now = clock.timestamp_ms();
 
         let uid = object::new(ctx);
         let session_id = object::uid_to_inner(&uid);

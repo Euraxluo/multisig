@@ -1,0 +1,109 @@
+# 四道门禁 CI（issue #26）：push/PR 即跑 Move 测试、SDK 类型检查+单测+金样防漂移、
+# next build、根 tsc + lib 集成套件。命令与本地验证一致（见 docs/DEPLOYMENT_RUNBOOK.md G1-G4）。
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  move-test:
+    name: G1 · sui move test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SUI_RELEASE: testnet-v1.82.1
+      SUI_ASSET: sui-testnet-v1.82.1-ubuntu-x86_64.tgz
+    steps:
+      - name: Cache sui CLI binary
+        id: sui
+        uses: actions/cache@v4
+        with:
+          path: ~/sui-bin
+          key: sui-${{ env.SUI_RELEASE }}-ubuntu-x86_64
+      - name: Install sui CLI (prebuilt release, ~1.2GB tarball)
+        if: steps.sui.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$HOME/sui-bin"
+          curl -sSL --retry 3 -o /tmp/sui.tgz \
+            "https://github.com/MystenLabs/sui/releases/download/${SUI_RELEASE}/${SUI_ASSET}"
+          # 归档成员带 ./ 前缀（./sui）；两种写法都兜住，只解出 sui 单个二进制。
+          tar -xzf /tmp/sui.tgz -C "$HOME/sui-bin" --no-same-owner './sui' \
+            || tar -xzf /tmp/sui.tgz -C "$HOME/sui-bin" --no-same-owner 'sui'
+          chmod +x "$HOME/sui-bin/sui"
+          rm -f /tmp/sui.tgz
+      - name: sui move test (contracts/agent_vault)
+        run: |
+          export PATH="$HOME/sui-bin:$PATH"
+          sui --version
+          cd contracts/agent_vault
+          sui move test
+
+  sdk:
+    name: G2 · SDK tsc + tests + golden vectors
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.9.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: SDK 类型检查
+        run: pnpm sdk:typecheck
+      - name: SDK 单元测试（org + dkg）
+        run: pnpm test:sdk
+      - name: 金样向量防漂移（regenerate + git diff --exit-code）
+        run: |
+          node scripts/golden-vectors-gen.mjs
+          git diff --exit-code -- packages/multisig/src/agent-vault/org/digest-vectors.json
+
+  app:
+    name: G3 · next build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: 1
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.9.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: next build
+        run: pnpm build
+
+  integration:
+    name: 根 tsc + lib 集成测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.9.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: pnpm
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+      - name: 根 TypeScript 类型检查
+        run: pnpm exec tsc --noEmit
+      - name: lib 测试套件（node:test）
+        run: pnpm test

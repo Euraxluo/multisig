@@ -18,6 +18,7 @@ import {
   type ProposalItem,
 } from "@/lib/onchain-store"
 import { useI18n } from "@/components/i18n-provider"
+import { errorMessage as describeError } from "@/lib/error-message"
 
 export default function Transactions() {
   const { t } = useI18n()
@@ -59,7 +60,7 @@ export default function Transactions() {
       const result = reject ? await rejectProposalWithReceipt(id) : await approveProposal(id)
       setActionDigest(result.digest || "")
     } catch (error) {
-      setActionError(error instanceof Error ? error.message : t("tx.voteFailed"))
+      setActionError(describeError(error, t("tx.voteFailed")))
     } finally { actionPending.current = false; setActionLoadingId(null) }
   }
 
@@ -73,7 +74,7 @@ export default function Transactions() {
       const res = await executeProposal(id)
       setActionDigest(res.digest || "")
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : t("tx.executeFailed"))
+      setActionError(describeError(err, t("tx.executeFailed")))
     } finally {
       actionPending.current = false
       setActionLoadingId(null)

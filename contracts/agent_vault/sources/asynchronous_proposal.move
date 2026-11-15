@@ -50,11 +50,15 @@ module agent_vault::asynchronous_proposal {
     /// Proposal deadlines must be in the future and at most 365 days away.
     const E_INVALID_DEADLINE: u64 = 4018;
 
+    /// The vault passed to execute_transfer_proposal does not match the vault
+    /// recorded in the executed transfer proposal (proposal.vault_id binding).
+    const E_VAULT_MISMATCH: u64 = 4019;
     /// Domain separator for treasury transfer execution signatures.
     const DOMAIN_TREASURY_TRANSFER: vector<u8> = b"SUI_ORG_TREASURY_TRANSFER_V1:";
-    /// Transfer 摘要域（V2，Round-9 P0）：尾部追加 bcs(key_generation)。
-    /// V1 域保留（不删）用于历史摘要辨认，新签名一律走 V2。
-    const DOMAIN_TREASURY_TRANSFER_V2: vector<u8> = b"SUI_ORG_TREASURY_TRANSFER_V2:";
+    /// Transfer 摘要域（V3，Issue #23 / Round-10 T01）：amount 后追加
+    /// bcs(vault_id)，签名绑定放款金库。V1/V2 域保留（不删）用于历史
+    /// 摘要辨认，新签名一律走 V3。
+    const DOMAIN_TREASURY_TRANSFER_V3: vector<u8> = b"SUI_ORG_TREASURY_TRANSFER_V3:";
 
     /// Rolling budget window for `SubagentCoSignCap.daily_budget_limit`.
     const DAY_MS: u64 = 86_400_000;
@@ -483,8 +487,10 @@ module agent_vault::asynchronous_proposal {
 
         // 门限签名门：单调 nonce 防重放 + 对转账摘要的原生 Ed25519 验签。
         // 摘要绑定 chain_id/org_id/epoch/nonce/proposal_id/recipient/amount/
-        // key_generation，任何字段被替换都会导致验签失败。签名验证通过后才推进 nonce。
+        // vault_id/key_generation，任何字段被替换都会导致验签失败
+        // （V3：换金库重放 = 摘要改变 = 2701）。签名验证通过后才推进 nonce。
         assert!(nonce > cryptographic_org::last_nonce(org), E_INVALID_NONCE);
+        let vault_id = vault::master_vault_id(master_cap);
         let digest = transfer_digest(
             &cryptographic_org::chain_id(org),
             &org_id,
@@ -493,6 +499,7 @@ module agent_vault::asynchronous_proposal {
             &object::uid_to_inner(&proposal.id),
             &proposal.recipient,
             proposal.amount,
+            &vault_id,
             cryptographic_org::key_generation(org),
         );
         assert!(
@@ -542,11 +549,17 @@ module agent_vault::asynchronous_proposal {
         });
     }
 
-    /// Treasury transfer execution digest (V2):
-    /// H(DOMAIN_V2 || chain_id || bcs(org_id) || bcs(epoch) || bcs(nonce) ||
-    ///   bcs(proposal_id) || bcs(recipient) || bcs(amount) || bcs(key_generation))
-    /// V2 尾部追加 bcs(key_generation)（Round-9 P0）：rotate_group_key 落地后
-    /// 生成代递增，旧密钥分片签出的旧摘要不再可重放，新摘要只有持新钥者能签。
+    /// Treasury transfer execution digest (V3):
+    /// H(DOMAIN_V3 || chain_id || bcs(org_id) || bcs(epoch) || bcs(nonce) ||
+    ///   bcs(proposal_id) || bcs(recipient) || bcs(amount) || bcs(vault_id) ||
+    ///   bcs(key_generation))
+    /// V2 -> V3（Issue #23 / Round-10 T01）：amount 之后追加 bcs(vault_id)。
+    /// 门限签名显式绑定放款金库，杜绝「组织 A 的签名在零关联的同类型
+    /// vault 上重放放款」。vault_id 取自执行时传入的 vault（其 UID 已由
+    /// organization_treasury::execute 与 binding/vault 白名单强校验），
+    /// 攻击者换一个 vault 即摘要改变、验签必然失败。
+    /// V2 追加 key_generation（Round-9 P0）的语义保留：rotate_group_key
+    /// 落地后生成代递增，旧密钥分片签出的旧摘要不再可重放。
     /// Implemented locally (std::hash) so cryptographic_org keeps no public
     /// helper for it; org_id/epoch/key_generation are read at call time and
     /// equality with the proposal snapshot is already asserted above.
@@ -558,9 +571,10 @@ module agent_vault::asynchronous_proposal {
         proposal_id: &ID,
         recipient: &address,
         amount: u64,
+        vault_id: &ID,
         key_generation: u64,
     ): vector<u8> {
-        let mut data = DOMAIN_TREASURY_TRANSFER_V2;
+        let mut data = DOMAIN_TREASURY_TRANSFER_V3;
         vector::append(&mut data, *chain_id);
         vector::append(&mut data, bcs::to_bytes(org_id));
         vector::append(&mut data, bcs::to_bytes(&epoch));
@@ -568,6 +582,7 @@ module agent_vault::asynchronous_proposal {
         vector::append(&mut data, bcs::to_bytes(proposal_id));
         vector::append(&mut data, bcs::to_bytes(recipient));
         vector::append(&mut data, bcs::to_bytes(&amount));
+        vector::append(&mut data, bcs::to_bytes(vault_id));
         vector::append(&mut data, bcs::to_bytes(&key_generation));
         hash::sha2_256(data)
     }

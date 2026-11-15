@@ -3,7 +3,7 @@ import { ObjectError, type SuiClientTypes } from "@mysten/sui/client"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { normalizeSuiAddress, normalizeStructTag } from "@mysten/sui/utils"
 import { t } from "./i18n/t"
-import { AsyncTransferProposalBcs } from "multisig/agent-vault/finance"
+import { AsyncTransferProposalBcs, OrganizationContentBcs } from "multisig/agent-vault/finance"
 import { AGENT_VAULT_PACKAGE_ID } from "multisig/agent-vault/org"
 
 export const PROPOSAL_PACKAGE_ID = process.env.NEXT_PUBLIC_PROPOSAL_PACKAGE_ID || AGENT_VAULT_PACKAGE_ID
@@ -11,19 +11,10 @@ export const PROPOSAL_PACKAGE_ID = process.env.NEXT_PUBLIC_PROPOSAL_PACKAGE_ID |
 export const PROPOSAL_TYPE_ORIGIN = AGENT_VAULT_PACKAGE_ID
 export const PROTOCOL_MODULE_ORIGIN = AGENT_VAULT_PACKAGE_ID
 export const proposalClient = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
-const Table = bcs.struct("Table", { id: bcs.Address, size: bcs.u64() })
+// Organization BCS 布局唯一权威在 SDK finance/schemas.ts（与 Move cryptographic_org.move
+// 同步演进）。这里不再私定义第二份布局——lib 侧曾因私副本漂移 9 天无人察觉（issue #26）。
 export const ProposalContent = AsyncTransferProposalBcs
-export const OrganizationContent = bcs.struct("Organization", {
-  id: bcs.Address, group_pk: bcs.vector(bcs.u8()), threshold_weight: bcs.u64(),
-  epoch_version: bcs.u64(), last_nonce: bcs.u64(), chain_id: bcs.vector(bcs.u8()),
-  members_weight: Table, executed_proposals: Table, key_signers: bcs.vector(bcs.Address),
-  key_threshold: bcs.u64(),
-  // 准入经济学（2026-11-13）：Balance<SUI> BCS 编码即裸 u64 value。
-  genesis_stake: bcs.u64(), genesis_bonded_total: bcs.u64(),
-  genesis_withdrawn: bcs.u64(), genesis_unlock_at_ms: bcs.u64(),
-  // round-9：密钥生成代（创建 = 1，rotate +1）；执行摘要 V2 尾部绑定。
-  key_generation: bcs.u64(),
-})
+export const OrganizationContent = OrganizationContentBcs
 const WeightField = bcs.struct("WeightField", { id: bcs.Address, name: bcs.Address, value: bcs.u64() })
 const requestSignal = () => AbortSignal.timeout(20_000)
 

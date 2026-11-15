@@ -79,24 +79,31 @@ describe('computeKeyRotationDigest (V3)', () => {
   });
 });
 
-describe('computeTreasuryTransferDigest (V2)', () => {
-  it('equals hand-computed H(SUI_ORG_TREASURY_TRANSFER_V2: || … || proposal || recipient || amount || key_generation)', () => {
+describe('computeTreasuryTransferDigest (V3)', () => {
+  it('equals hand-computed H(SUI_ORG_TREASURY_TRANSFER_V3: || … || amount || vault_id || key_generation)', () => {
     const prop = A('0x' + 'aa'.repeat(32));
     const recv = A('0x' + 'bb'.repeat(32));
+    const vault = A('0x' + 'cc'.repeat(32));
     const expected = sha256(
-      txt('SUI_ORG_TREASURY_TRANSFER_V2:'), txt(CHAIN), ORG, u64(6n), u64(21n), prop, recv, u64(1_000_000n), u64(3n),
+      txt('SUI_ORG_TREASURY_TRANSFER_V3:'), txt(CHAIN), ORG, u64(6n), u64(21n), prop, recv, u64(1_000_000n), vault, u64(3n),
     );
     expect(Buffer.from(computeTreasuryTransferDigest({
       chainId: CHAIN, orgId: ORGID, epochVersion: 6n, nonce: 21n,
       proposalId: '0x' + 'aa'.repeat(32), recipient: '0x' + 'bb'.repeat(32), amount: 1_000_000n,
-      keyGeneration: 3n,
+      keyGeneration: 3n, vaultId: '0x' + 'cc'.repeat(32),
     }))).toEqual(expected);
   });
   it('binds key_generation: a rotated org invalidates signatures made under the old generation', () => {
-    const base = { chainId: CHAIN, orgId: ORGID, epochVersion: 6n, nonce: 21n, proposalId: '0x' + 'aa'.repeat(32), recipient: '0x' + 'bb'.repeat(32), amount: 1_000_000n };
+    const base = { chainId: CHAIN, orgId: ORGID, epochVersion: 6n, nonce: 21n, proposalId: '0x' + 'aa'.repeat(32), recipient: '0x' + 'bb'.repeat(32), amount: 1_000_000n, vaultId: '0x' + 'cc'.repeat(32) };
     const gen1 = computeTreasuryTransferDigest({ ...base, keyGeneration: 1n });
     const gen2 = computeTreasuryTransferDigest({ ...base, keyGeneration: 2n });
     expect(Buffer.from(gen1).equals(Buffer.from(gen2))).toBe(false);
+  });
+  it('binds vault_id: the same proposal cannot be replayed against a different vault', () => {
+    const base = { chainId: CHAIN, orgId: ORGID, epochVersion: 6n, nonce: 21n, proposalId: '0x' + 'aa'.repeat(32), recipient: '0x' + 'bb'.repeat(32), amount: 1_000_000n, keyGeneration: 3n };
+    const v1 = computeTreasuryTransferDigest({ ...base, vaultId: '0x' + 'cc'.repeat(32) });
+    const v2 = computeTreasuryTransferDigest({ ...base, vaultId: '0x' + 'dd'.repeat(32) });
+    expect(Buffer.from(v1).equals(Buffer.from(v2))).toBe(false);
   });
 });
 

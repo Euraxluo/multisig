@@ -10,6 +10,9 @@ import { paymentUnits } from "./scheduled-payments-chain"
 import { PROPOSAL_PACKAGE_ID, PROPOSAL_TYPE_ORIGIN, proposalClient, readProposalSnapshot, validateApproval, type ProposalSnapshot } from "./proposal-chain"
 import { isRecord, readStoredArray, type RecordSourceStatus } from "./local-records"
 import { t } from "./i18n/t"
+import { getCommitteeSession } from "./committee-session"
+import { signWithCommittee } from "./crypto/committee-signing"
+import { computeTreasuryTransferDigest } from "multisig/agent-vault/org"
 
 export const TESTNET_PACKAGE_ID = PROPOSAL_PACKAGE_ID
 const SUI_TYPE = SUI_TYPE_ARG
@@ -570,10 +573,23 @@ export async function executeProposal(proposalId: string): Promise<{ success: bo
     if (treasury) {
       const { treasuryId, bindingId } = treasuryIds(target)
       // The wrapper checks immutable treasury/proposal binding and custody on chain.
-      // Treasury execution now requires a threshold signature (nonce + FROST); the
-      // signing ceremony UI is owned by Main and not wired here yet — omitting the
-      // argument makes group-vaults throw the dedicated error until then.
-      tx = await groupVaults.buildExecuteTreasury(account.address, treasuryId, snapshot.orgId, snapshot.id, bindingId)
+      // Treasury execution requires a threshold signature (nonce + FROST): the
+      // digest comes from the SDK (single source of truth, layout tracks the
+      // deployed contract), and the shares come from this tab's committee session
+      // established by the DKG/resharing ceremony. Without threshold shares the
+      // dedicated error tells the user to run the ceremony first.
+      const [org, treasuryRow] = await Promise.all([groupVaults.readOrganization(snapshot.orgId), groupVaults.readTreasury(treasuryId, snapshot.orgId)])
+      const session = getCommitteeSession(snapshot.orgId)
+      if (!session) throw new Error(t("tx.errThresholdSessionMissing"))
+      if (BigInt(session.epoch) !== org.epoch) throw new Error(t("tx.errThresholdEpochMismatch", { sessionEpoch: String(session.epoch), liveEpoch: String(org.epoch) }))
+      const nonce = org.lastNonce + 1n
+      const digest = computeTreasuryTransferDigest({
+        chainId: org.chainId, orgId: org.id, epochVersion: org.epoch, nonce,
+        proposalId: snapshot.id, recipient: snapshot.recipient, amount: BigInt(snapshot.amountMist),
+        keyGeneration: org.keyGeneration, vaultId: treasuryRow.id,
+      })
+      const signature = signWithCommittee(session, digest, { groupPk: org.groupPk, epoch: org.epoch })
+      tx = await groupVaults.buildExecuteTreasury(account.address, treasuryId, snapshot.orgId, snapshot.id, bindingId, { nonce, frostSignature: signature.signature })
     } else {
       // A legacy Proposal has no vault binding; use only the explicitly saved personal-cap source.
       const vaultId = target.vaultId, masterCapId = target.masterCapId

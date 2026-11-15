@@ -807,6 +807,8 @@ module agent_vault::dkg_committee_tests {
             3, // 3-of-3 门限：Eve 确认前必须补交承诺 (confirm 需先有 commitment)
             new_committee,
             deadline,
+            fee_coin(ts::ctx(&mut scenario)),
+            &clock,
             ts::ctx(&mut scenario)
         );
 
@@ -3358,9 +3360,31 @@ module agent_vault::dkg_committee_attestation_tests {
     #[expected_failure(abort_code = 3014, location = agent_vault::dkg_committee)]
     fun resharing_creation_rejects_a_duplicated_participant() {
         let mut s = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+        clock::set_for_testing(&mut clock, 1_000_000);
         let _id = dkg_committee::create_resharing_session(
-            2, 2, vector[ALICE, ALICE], 2_000_000, ts::ctx(&mut s),
+            2, 2, vector[ALICE, ALICE], 2_000_000,
+            fee_coin(ts::ctx(&mut s)), &clock, ts::ctx(&mut s),
         );
+        clock::destroy_for_testing(clock);
+        ts::end(s);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = 3022, location = agent_vault::dkg_committee)]
+    fun resharing_creation_rejects_an_underfunded_fee() {
+        // 【审计 T01/L】resharing 与 DKG 会话同价：创建费不足 SESSION_CREATION_FEE_MIST 直接拒绝。
+        let mut s = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut s));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        let underfunded = coin::mint_for_testing<SUI>(
+            dkg_committee::creation_fee_mist() - 1,
+            ts::ctx(&mut s)
+        );
+        let _id = dkg_committee::create_resharing_session(
+            2, 1, vector[ALICE], 2_000_000, underfunded, &clock, ts::ctx(&mut s),
+        );
+        clock::destroy_for_testing(clock);
         ts::end(s);
     }
 

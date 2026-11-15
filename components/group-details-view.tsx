@@ -53,7 +53,7 @@ import { useState, useEffect, useRef } from "react"
 import { motion, AnimatePresence } from "framer-motion"
 import { CreateTransactionDialog } from "@/components/create-transaction-dialog"
 import { TransactionDetailsDialog } from "@/components/transaction-details-dialog"
-import { DkgCeremonyDialog } from "@/components/dkg-ceremony-dialog"
+import dynamic from "next/dynamic"
 import { WalrusBlobDialog } from "@/components/walrus-blob-dialog"
 import { RedPacketDialog, RedPacketData } from "@/components/red-packet-dialog"
 import { WalrusAppSandboxDialog } from "@/components/walrus-app-sandbox-dialog"
@@ -96,6 +96,12 @@ import { useSsmChat } from "@/lib/use-ssm-chat"
 import { describeSsmError } from "@/lib/sui-stack-messaging"
 import { useMemberProfiles } from "@/lib/use-member-profiles"
 import { IdentityAvatar } from "@/components/identity-avatar"
+
+/** #28/T06: the ceremony dialog (FROST + resharing + wallet-signer stack) is
+ *  only needed after "升级为链上组织" is clicked, so it stays out of the
+ *  group-details bundle and loads on first open. SSR stays off: the dialog is
+ *  localStorage/IndexedDB-bound from its first effect. */
+const DkgCeremonyDialog = dynamic(() => import("@/components/dkg-ceremony-dialog").then((m) => m.DkgCeremonyDialog), { ssr: false })
 
 export interface GroupDetailsViewProps {
   groupId: string
@@ -1959,6 +1965,7 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
         groupName={group.name}
         groupId={groupId}
         initialMembers={group.members}
+        draftThreshold={group.threshold}
         onConvertedSuccess={(pk, orgId) => {
           setIsConvertedToDao(true)
           setGroupPk(pk)

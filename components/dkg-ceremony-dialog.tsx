@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   ShieldCheck,
   Cpu,
@@ -23,6 +24,10 @@ import {
   Layers,
   Clock,
   ExternalLink,
+  AlertTriangle,
+  Coins,
+  Download,
+  Upload,
 } from "lucide-react";
 import { DKGParticipant } from "@/lib/crypto/ceremony";
 import { useI18n } from "@/components/i18n-provider";
@@ -35,7 +40,8 @@ import { proposalClient } from "@/lib/proposal-chain";
 import { MAX_ROSTER_MEMBERS } from "@/lib/group-roster";
 import { computeThresholdApprovalDigest } from "@/lib/vault-client";
 import { errorMessage as describeError } from "@/lib/error-message";
-import { TESTNET_PACKAGE_ID, findCreatedProtocolObject, getActiveAccount, getUserGroups, persistGroupOrganization } from "@/lib/onchain-store";
+import { TESTNET_PACKAGE_ID, findCreatedProtocolObject, getActiveAccount, getUserGroups, persistGroupOrganization, vaultClient } from "@/lib/onchain-store";
+import { exportEncryptedDeviceKey, importEncryptedDeviceKey } from "@/lib/crypto/encrypted-keystore";
 import { ADMISSION_ECONOMICS } from "multisig/agent-vault/org";
 
 const SESSION_CREATION_FEE_MIST = ADMISSION_ECONOMICS.SESSION_CREATION_FEE_MIST
@@ -77,6 +83,14 @@ interface DkgCeremonyDialogProps {
   groupName: string;
   groupId?: string;
   initialMembers: { name: string; address: string; weight: number }[];
+  /**
+   * Draft sign-off threshold from the local group record, in weight units
+   * (#28/T04). When every member carries weight 1 it is exactly a t-of-n key
+   * threshold and is installed as the DKG session threshold; otherwise it
+   * cannot map to a per-head count and the override is disclosed below
+   * instead of being applied silently.
+   */
+  draftThreshold?: number;
   onConvertedSuccess?: (groupPk: string, orgId: string, txDigest?: string) => void;
 }
 
@@ -89,7 +103,7 @@ type CeremonyStep =
   | "COMPLETE"
   | "RESHARING_ACTIVE";
 
-export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers, onConvertedSuccess }: DkgCeremonyDialogProps) {
+export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers, draftThreshold, onConvertedSuccess }: DkgCeremonyDialogProps) {
   const { t } = useI18n();
   const [step, setStep] = useState<CeremonyStep>("INIT");
   const [progress, setProgress] = useState(0);
@@ -122,11 +136,32 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
   const [pendingDeviceKey, setPendingDeviceKey] = useState<Awaited<ReturnType<typeof readPendingDeviceKey>>>(null);
   const [deviceKeyError, setDeviceKeyError] = useState("");
 
+  // F-01: switching accounts mid-ceremony must tear down every piece of local
+  // ceremony state and close the dialog. Leaving a half-cleared shell lets the
+  // next account act on the previous account's session/share context.
   useEffect(() => {
+    const resetCeremony = () => {
+      generation.current++;
+      dealerRef.current = null;
+      setDeviceKey(null); setDeviceKeyError("");
+      setStoredShares([]); setStoredPkBytes(null);
+      setDeadlineTs(null); setOnChainSessionId(null);
+      setMemberSigned({}); setPendingDeviceKey(null);
+      setStep("INIT"); setProgress(0); setActiveLog("");
+      setReshareLog(""); setReshareTxDigest(""); setSuiscanReshareTxUrl("");
+      setOrgChainCheck({ state: "pending" });
+      onOpenChange(false);
+    };
+    window.addEventListener("sui-account-switched", resetCeremony);
     const invalidate = () => { generation.current++; dealerRef.current = null; setDeviceKey(null); setDeviceKeyError(""); };
-    window.addEventListener("sui-account-switched", invalidate);
+    window.addEventListener("sui-account-changed", invalidate);
     invalidate();
-    return () => { generation.current++; window.removeEventListener("sui-account-switched", invalidate); };
+    return () => {
+      generation.current++;
+      window.removeEventListener("sui-account-switched", resetCeremony);
+      window.removeEventListener("sui-account-changed", invalidate);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
   // 异步信箱状态
@@ -224,6 +259,85 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
     } catch (error) { setActiveLog(describeError(error, t("dkg.sessionReadFailed"))); }
   };
 
+  // T-1: sealed device-key backup. The crypto is already implemented in
+  // encrypted-keystore.ts; this is only the UI surface. Export seals the bound
+  // key with a user password (AAD binds session+holder); import restores it.
+  const [keyBackupBusy, setKeyBackupBusy] = useState(false);
+
+  const handleExportDeviceKey = async () => {
+    if (keyBackupBusy) return
+    setKeyBackupBusy(true)
+    try {
+      const account = getActiveAccount()
+      if (!account || !orgObjectId) throw new Error(t("dkg.keyExportMissing"))
+      const key = await readDeviceKey(orgObjectId, account.address)
+      if (!key) throw new Error(t("dkg.keyExportMissing"))
+      const password = window.prompt(t("dkg.keyExportPrompt"))
+      if (!password) return
+      const envelope = await exportEncryptedDeviceKey(key, password)
+      const blob = new Blob([JSON.stringify(envelope)], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = `sui-device-key-${orgObjectId.slice(0, 8)}-${account.address.slice(0, 6)}.json`
+      link.click()
+      URL.revokeObjectURL(url)
+      setActiveLog(t("dkg.keyExportDone"))
+    } catch (error) {
+      setActiveLog(describeError(error, t("dkg.keyExportMissing")))
+    } finally { setKeyBackupBusy(false) }
+  }
+
+  const handleImportDeviceKey = async () => {
+    if (keyBackupBusy) return
+    setKeyBackupBusy(true)
+    try {
+      const account = getActiveAccount()
+      if (!account) throw new Error(t("dkg.connectWalletFirst"))
+      const input = document.createElement("input")
+      input.type = "file"
+      input.accept = "application/json,.json"
+      const file: File | null = await new Promise(resolve => { input.onchange = () => resolve(input.files?.[0] ?? null); input.click() })
+      if (!file) return
+      const envelope = JSON.parse(await file.text())
+      const password = window.prompt(t("dkg.keyImportPrompt"))
+      if (!password) return
+      const restored = await importEncryptedDeviceKey(envelope, password, envelope.sessionId ?? "", account.address)
+      if (restored.holder !== account.address) throw new Error(t("dkg.keyImportWrongContext"))
+      await savePendingDeviceKey(restored)
+      setPendingDeviceKey(restored)
+      setActiveLog(t("dkg.keyImportDone"))
+    } catch (error) {
+      setActiveLog(describeError(error, t("dkg.keyImportInvalidFile")))
+    } finally { setKeyBackupBusy(false) }
+  }
+
+  // F-03: an expired session previously had no UI path to the already-implemented
+  // on-chain timeout and bond-claim entry points, leaving 0.05 SUI per
+  // participant escrowed forever. Both buttons appear once the deadline passed
+  // and act on the session this dialog is viewing.
+  const handleSessionTimeout = async () => {
+    if (!onChainSessionId) return
+    try {
+      const tx = vaultClient.buildHandleSessionTimeoutPTB(onChainSessionId)
+      const { digest } = await signAndExecuteWithWallet(tx)
+      setActiveLog(t("dkg.sessionTimeoutDone", { digest: digest.slice(0, 10) }))
+    } catch (error) {
+      setActiveLog(t("dkg.sessionTimeoutFailed", { error: describeError(error, String(error)) }))
+    }
+  }
+
+  const handleClaimBond = async () => {
+    if (!onChainSessionId) return
+    try {
+      const tx = vaultClient.buildClaimBondPTB(onChainSessionId)
+      const { digest } = await signAndExecuteWithWallet(tx)
+      setActiveLog(t("dkg.claimBondDone", { digest: digest.slice(0, 10) }))
+    } catch (error) {
+      setActiveLog(t("dkg.claimBondFailed", { error: describeError(error, String(error)) }))
+    }
+  }
+
   /** Normalizes an address for both PTB arguments and on-chain comparisons. */
   const normAddress = (value: string, message: string) => {
     try {
@@ -246,6 +360,26 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
   // 当前钱包在链上 confirm_participant 由 handleConfirmWithShares 完成：
   // 它必须先解封并校验收到的份额，才允许确认，单删掉这里的重复调用是刻意的。
 
+  // #28/T04: the on-chain roster is installed by
+  // `create_organization_from_session`, which writes weight 1 per confirmed
+  // member — drafted weights are never carried over. So: with uniform weight-1
+  // members the drafted threshold IS a t-of-n key threshold and is honored
+  // directly; with non-uniform weights (or an out-of-range draft) the previous
+  // hard-coded ceil(n×0.6) applies and the difference must be acknowledged
+  // explicitly before the paid session creation, not discovered after.
+  const participantCount = initialMembers.length;
+  const uniformWeights = participantCount > 0 && initialMembers.every((m) => (m.weight ?? 1) === 1);
+  const draftThresholdNumber = typeof draftThreshold === "number" && Number.isFinite(draftThreshold) ? Math.floor(draftThreshold) : null;
+  const draftableThreshold = draftThresholdNumber !== null && draftThresholdNumber >= 1 && draftThresholdNumber <= participantCount && uniformWeights
+    ? draftThresholdNumber
+    : null;
+  const fallbackThreshold = Math.max(1, Math.min(participantCount, Math.ceil(participantCount * 0.6)));
+  const sessionThreshold = draftableThreshold ?? fallbackThreshold;
+  const weightMismatch = !uniformWeights;
+  const thresholdMismatch = draftThresholdNumber !== null && draftThresholdNumber !== sessionThreshold;
+  const overrideNeedsAck = (weightMismatch || thresholdMismatch) && !deadlineTs;
+  const [weightsAcknowledged, setWeightsAcknowledged] = useState(false);
+
   /**
    * Real turn: every round is a chain transaction, and each participant's
    * commitment and sealed shares are read back from the session object.
@@ -264,6 +398,7 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
     }
     const me = getActiveAccount()
     if (!me) { setActiveLog(t("dkg.connectWalletFirst")); return }
+    if (overrideNeedsAck && !weightsAcknowledged) { setActiveLog(t("dkg.weightAckRequired")); return }
 
     // Phase 0: create the session. Nothing else may run until it exists.
     if (!deadlineTs) {
@@ -271,7 +406,7 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
       setActiveLog(t("dkg.logCreatingSession"))
       try {
         const participants = initialMembers.map((m) => normAddress(m.address, t("dkg.memberAddrInvalid", { address: m.address })))
-        const threshold = Math.max(1, Math.min(participants.length, Math.ceil(participants.length * 0.6)))
+        const threshold = Math.max(1, Math.min(participants.length, sessionThreshold))
         // 准入经济学（#16）：deadline 钳制 [10min,7d]，创建费 0.005 SUI 销毁，bond 地板 0.05 SUI
         const deadlineMs = Date.now() + 30 * 60 * 1000
         const tx = new Transaction()
@@ -1103,6 +1238,31 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
                 </div>
               </div>
 
+              {draftableThreshold !== null && !deadlineTs && (
+                <p className="text-[11px] text-primary">{t("dkg.thresholdHonored", { threshold: String(draftableThreshold), count: String(participantCount) })}</p>
+              )}
+
+              {/* #28/T04: disclose everything the ceremony overrides from the
+                  local draft before the paid session creation, not after. */}
+              {overrideNeedsAck && (
+                <div className="p-3 rounded-xl border border-amber-500/40 bg-amber-500/10 space-y-2">
+                  <div className="flex items-center space-x-2 text-amber-600 dark:text-amber-400 font-medium text-xs">
+                    <AlertTriangle className="h-4 w-4" />
+                    <span>{t("dkg.weightOverrideTitle")}</span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {weightMismatch
+                      ? t("dkg.weightOverrideWeights", { count: String(participantCount), effective: String(sessionThreshold) })
+                      : t("dkg.weightOverrideThreshold", { draft: String(draftThresholdNumber ?? 0), effective: String(sessionThreshold), count: String(participantCount) })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{t("dkg.weightOverrideBody")}</p>
+                  <label className="flex items-start space-x-2 text-xs cursor-pointer">
+                    <Checkbox checked={weightsAcknowledged} onCheckedChange={(checked) => setWeightsAcknowledged(checked === true)} className="mt-0.5" />
+                    <span>{t("dkg.weightOverrideAck")}</span>
+                  </label>
+                </div>
+              )}
+
               {deadlineTs && (
                 <div className={`p-3 rounded-lg border text-xs ${
                   nowTs >= deadlineTs
@@ -1119,13 +1279,28 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
                       <>{t("dkg.deadlineRemaining", { seconds: Math.max(0, Math.ceil((deadlineTs - nowTs) / 1000)) })}</>
                     )}
                   </p>
+                  {nowTs >= deadlineTs && onChainSessionId && (
+                    <div className="mt-2 grid grid-cols-1 gap-1.5">
+                      <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => void handleSessionTimeout()}>
+                        <Clock className="h-3.5 w-3.5 mr-2" />
+                        {t("dkg.sessionTimeoutBtn")}
+                      </Button>
+                      <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => void handleClaimBond()}>
+                        <Coins className="h-3.5 w-3.5 mr-2" />
+                        {t("dkg.claimBondBtn")}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
               {!deadlineTs
-                ? <Button onClick={handleStartDkg} className="w-full mt-2">
-                    <Sparkles className="h-4 w-4 mr-2" />
-                    {t("dkg.startBtn")}
-                  </Button>
+                ? <>
+                    <p className="mt-2 text-[11px] text-muted-foreground">{t("dkg.feePreview", { fee: String(Number(ADMISSION_ECONOMICS.SESSION_CREATION_FEE_MIST) / 1e9), bond: String(Number(ADMISSION_ECONOMICS.MIN_BOND_MIST) / 1e9) })}</p>
+                    <Button onClick={handleStartDkg} className="w-full mt-2" disabled={overrideNeedsAck && !weightsAcknowledged}>
+                      <Sparkles className="h-4 w-4 mr-2" />
+                      {t("dkg.startBtn")}
+                    </Button>
+                  </>
                 : <div className="space-y-1.5 pt-1">
                     {/* Each button drives exactly one chain phase. Nothing here
                         skips ahead: a later phase stays disabled until the chain
@@ -1272,6 +1447,16 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
                     ? t("dkg.shareBound", { epoch: deviceKey.epoch.toString(), index: deviceKey.index.toString() })
                     : deviceKeyError || t("dkg.shareMissing")}
                 </p>
+                <div className="grid grid-cols-2 gap-1.5">
+                  <Button type="button" variant="outline" size="sm" className="h-8" disabled={keyBackupBusy} onClick={() => void handleExportDeviceKey()}>
+                    <Download className="h-3.5 w-3.5 mr-1.5" />
+                    {t("dkg.keyExportBtn")}
+                  </Button>
+                  <Button type="button" variant="outline" size="sm" className="h-8" disabled={keyBackupBusy} onClick={() => void handleImportDeviceKey()}>
+                    <Upload className="h-3.5 w-3.5 mr-1.5" />
+                    {t("dkg.keyImportBtn")}
+                  </Button>
+                </div>
               </div>
 
               {/* 动态成员调整 (Resharing) */}

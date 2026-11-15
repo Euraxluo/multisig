@@ -641,7 +641,7 @@ module agent_vault::onchain_chat_tests {
     }
 
     #[test]
-    fun batch_send_keeps_caller_order_and_spends_one_rebate() {
+    fun batch_send_keeps_caller_order_and_rebates_per_message() {
         let mut scenario = ts::begin(ALICE);
         let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
         clock::set_for_testing(&mut clock, 1_000_000);
@@ -670,9 +670,9 @@ module agent_vault::onchain_chat_tests {
                 ts::ctx(&mut scenario)
             );
             assert!(onchain_chat::message_sequence(&channel) == 3, 501);
-            // One burst = one 0.001 SUI rebate, not one per line.
-            assert!(onchain_chat::total_subsidized_gas(&channel) == 1_000_000, 502);
-            assert!(onchain_chat::gas_subsidy_pool(&channel) == 5_000_000_000 - 1_000_000, 503);
+            // 【审计 T01/M】一次 burst = K × 0.001 SUI 报销，与逐条发信等价。
+            assert!(onchain_chat::total_subsidized_gas(&channel) == 3_000_000, 502);
+            assert!(onchain_chat::gas_subsidy_pool(&channel) == 5_000_000_000 - 3_000_000, 503);
 
             let events = batch_events();
             assert!(events.length() == events_before + 3, 504);
@@ -692,7 +692,7 @@ module agent_vault::onchain_chat_tests {
         ts::next_tx(&mut scenario, ALICE);
         {
             let mut rebate = ts::take_from_sender<coin::Coin<SUI>>(&scenario);
-            assert!(coin::value(&rebate) == 1_000_000, 513);
+            assert!(coin::value(&rebate) == 3_000_000, 513);
             transfer::public_transfer(rebate, ALICE);
         };
 

@@ -378,17 +378,27 @@ module agent_vault::onchain_chat {
     }
 
     /// 内部自动化 Gas 报销辅助函数：将利息代付金额直接打回交易发送者地址！
-    fun auto_subsidize_gas(channel: &mut ChatChannel, recipient: address, ctx: &mut TxContext) {
-        if (channel.gas_subsidy_pool.value() >= GAS_REBATE_PER_MESSAGE) {
-            let rebate_bal = channel.gas_subsidy_pool.split(GAS_REBATE_PER_MESSAGE);
+    ///
+    /// 【审计 T01/M】报销按消息数计价：一次调用发 K 条消息只拿 K ×
+    /// GAS_REBATE_PER_MESSAGE，与逐条发信成本等价，堵死"批量摊薄固定
+    /// 转账开销"之外的套利空间（0.988 MIST/条边际成本 vs 1.0 报销）。
+    fun auto_subsidize_gas(
+        channel: &mut ChatChannel,
+        recipient: address,
+        messages: u64,
+        ctx: &mut TxContext
+    ) {
+        let rebate_amount = GAS_REBATE_PER_MESSAGE * messages;
+        if (channel.gas_subsidy_pool.value() >= rebate_amount) {
+            let rebate_bal = channel.gas_subsidy_pool.split(rebate_amount);
             let rebate_coin = coin::from_balance(rebate_bal, ctx);
             transfer::public_transfer(rebate_coin, recipient);
-            channel.total_subsidized_gas = channel.total_subsidized_gas + GAS_REBATE_PER_MESSAGE;
+            channel.total_subsidized_gas = channel.total_subsidized_gas + rebate_amount;
 
             event::emit(GasSubsidizedEvent {
                 channel_id: object::uid_to_inner(&channel.id),
                 recipient,
-                rebate_amount: GAS_REBATE_PER_MESSAGE,
+                rebate_amount,
                 total_subsidized: channel.total_subsidized_gas,
             });
         };
@@ -526,7 +536,7 @@ module agent_vault::onchain_chat {
         });
 
         // 自动从质押生息池为用户全额返还 Gas！
-        auto_subsidize_gas(channel, sender, ctx);
+        auto_subsidize_gas(channel, sender, 1, ctx);
     }
 
     /// 5. Subagent 免密自主发信（带自动化 Gas 报销，净花费 0 SUI）
@@ -580,7 +590,7 @@ module agent_vault::onchain_chat {
         });
 
         // 自动从质押生息池为 Subagent 报销 Gas 代付！
-        auto_subsidize_gas(channel, sender, ctx);
+        auto_subsidize_gas(channel, sender, 1, ctx);
     }
 
     /// 5b. 主账号一次交易批量发信（单次 Gas 报销，而不是每条消息各转一次）
@@ -636,9 +646,10 @@ module agent_vault::onchain_chat {
             });
         };
 
-        // One rebate for the whole burst: the transfer is fixed overhead, not a
-        // per-line cost, so charging it once is what makes a burst cheaper.
-        auto_subsidize_gas(channel, sender, ctx);
+        // 【审计 T01/M】批量发信按条数报销：K 条 = K × GAS_REBATE_PER_MESSAGE。
+        // 一次调用可摊薄固定 gas 开销，但报销额度与逐条发信完全等价，
+        // 无法通过批量把净成本压到零以下套利。
+        auto_subsidize_gas(channel, sender, count, ctx);
     }
 
     /// 6. 解散解质押：100% 原路退还质押本金 + 创作者收益金库 + 剩余补贴资金给创建者！

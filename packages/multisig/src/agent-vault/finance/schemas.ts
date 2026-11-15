@@ -33,6 +33,18 @@ export const AsyncTransferProposalBcs = bcs.struct('Proposal', {
   voters: FinanceTableBcs, partial_signatures: FinanceTableBcs, deadline_ms: bcs.u64(), status: bcs.u8(),
 });
 
+/** cryptographic_org::Organization 的 BCS 布局（字段顺序与 Move 一致；尾追字段见各注释）。
+ *  唯一布局权威：lib/proposal-chain.ts 与测试 fixture 均从此导入，不再私定义副本。 */
+export const OrganizationContentBcs = bcs.struct('Organization', {
+  id: bcs.Address, group_pk: bcs.vector(bcs.u8()), threshold_weight: bcs.u64(),
+  epoch_version: bcs.u64(), last_nonce: bcs.u64(), chain_id: bcs.vector(bcs.u8()),
+  members_weight: FinanceTableBcs, executed_proposals: FinanceTableBcs,
+  key_signers: bcs.vector(bcs.Address), key_threshold: bcs.u64(),
+  genesis_stake: bcs.u64(), genesis_bonded_total: bcs.u64(),
+  genesis_withdrawn: bcs.u64(), genesis_unlock_at_ms: bcs.u64(),
+  key_generation: bcs.u64(),
+});
+
 export const ScheduleBcs = bcs.enum('Schedule', {
   Recurring: bcs.struct('Recurring', { amount: bcs.u64(), interval_ms: bcs.u64(), max_count: bcs.u64(), end_ms: bcs.u64(), requires_approval: bcs.bool() }),
   Stream: bcs.struct('Stream', { duration_ms: bcs.u64(), curve: bcs.u8() }),

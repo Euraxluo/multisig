@@ -1,0 +1,42 @@
+{
+  "_meta": {
+    "generator": "scripts/golden-vectors-gen.mjs",
+    "chainId": "sui-testnet:",
+    "note": "sha256 of each domain layout, byte-mirrored with node:crypto (no SDK imports). Regenerate + git diff --exit-code as CI gate."
+  },
+  "inputs": {
+    "chainId": "sui-testnet:",
+    "orgId": "0x1111111111111111111111111111111111111111111111111111111111111111",
+    "members": [
+      "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "0x3333333333333333333333333333333333333333333333333333333333333333"
+    ],
+    "weights": [
+      10,
+      20
+    ],
+    "groupPk": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "newGroupPk": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "epochVersion": {
+      "proposal": 3,
+      "approval": 3,
+      "rotation": 4,
+      "pop": 9,
+      "treasury": 6,
+      "roster": 5,
+      "genesis": 1
+    }
+  },
+  "vectors": {
+    "proposal_v2": "e300117240602164dfbd3d0313f3a9fadda66d3333a807bca2652e9613fdf858",
+    "epoch_advance_v2": "adab5c1397e127cb2694462c75ba972334163ebd595f412a67668167e65770da",
+    "key_rotation_v3": "499689850f50b9ed3443b63cbd51f27e4d6dfa1c021c45403fb66bf756c2f0e5",
+    "create_pop_v2": "15c15a09799ab28e9a6812a6c36f87ff43f95ff34bfceb764495c33232ae2c83",
+    "rotate_pop_v1": "bac3faea170089050bc4b8a3355f55401e5af5be3ec15a166eb6a14cc8b619e2",
+    "treasury_transfer_v3": "cd3a5e2489681d8a5390422c8986d57513ab68c20c83d492a939d02e537b4e99",
+    "roster_update_v1": "2dca429a7c1bdf4ab472cfabbb6cecd65cfaf5bc2c5651d5c6a4d6d178aeafbd",
+    "genesis_withdraw_v1": "efe9e29e2ca2b574860623d5e01c662baaaf7d71b407b67a5c12802151abfc56",
+    "dkg_attest_v1": "b8914ccec3776b41fe3c3f7aabbe878e6e9720900dc72ab4fc94e9eca7024a4f",
+    "dkg_mailbox_v1": "b07df5188ebc98eb76d910f505c59cd68806111b7b8092ae76b97d268546b89c"
+  }
+}

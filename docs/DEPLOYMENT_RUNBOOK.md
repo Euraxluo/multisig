@@ -16,7 +16,7 @@
 | 3 | Node.js 版本 | ≥ 20（Vercel 构建一致） | `node -v` | [需人工] |
 | 4 | 依赖安装 | lockfile 无漂移 | `pnpm install --frozen-lockfile` | [需人工] |
 | 5 | Move 单元测试 | **421/421 全绿** | `cd contracts/agent_vault && sui move test` | [已实测] |
-| 6 | SDK 类型检查 | `tsc` 无错误 | `pnpm --filter @multisig/sdk tsc --noEmit` | [已实测] |
+| 6 | SDK 类型检查 | `tsc` 无错误 | `pnpm sdk:typecheck`（= `tsc --noEmit -p packages/multisig/tsconfig.json`；包名是 `multisig`，旧命令 `--filter @multisig/sdk` 会 no matching project） | [已实测] |
 | 7 | 前端构建 | 成功，9/9 静态页 | `pnpm build`（next build） | [已实测] |
 | 8 | Vercel 部署 | Production Ready，HTTP 200 | 平台面板 + `curl -I` | [已实测] |
 | 9 | 链上包对象 | `EXISTS`，version 1 | `sui client object 0xcdc8...4ab44` | [已实测] |
@@ -96,7 +96,7 @@ NEXT_PUBLIC_AGENT_VAULT_PACKAGE_ID = 0x<新包ID>
 | 门禁 | 命令 / 动作 | 通过标准 |
 |------|-------------|----------|
 | G1 合约 | `sui move test` | 421/421 全绿 |
-| G2 SDK | `pnpm --filter @multisig/sdk tsc --noEmit` | 0 error |
+| G2 SDK | `pnpm sdk:typecheck` + `pnpm test:sdk`（CI 的 sdk job 同款） | 0 error / 全绿 |
 | G3 构建 | `pnpm build` | 成功，9/9 静态页 |
 | G4 线上 | `curl -I https://<生产域名>` + 页面实际发起一次只读 RPC（如 `getObject` 新包 ID） | HTTP 200 且返回 `EXISTS` |
 

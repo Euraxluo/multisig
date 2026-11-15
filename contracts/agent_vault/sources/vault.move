@@ -176,6 +176,15 @@ module agent_vault::vault {
     }
 
     /// Master 提现本金
+    ///
+    /// 【审计 T01/L — 显式豁免声明】出金限额的对称性设计（有意为之）：
+    ///   - agents（spend 路径）：deny-by-default —— 未设置策略即拒绝花费；
+    ///   - Master（本路径）：max_epoch_outflow == 0（从未调用 set_epoch_policy）
+    ///     视为 UNLIMITED，Master 可自由提现；一旦设置过策略（>0），
+    ///     Master 与 agents 受同一上限约束（见下方 M-01 门禁）。
+    /// 理由：金库是 Master 的本金，策略是 Master 自愿给自己上的枷锁；
+    /// 若在策略未设时也拒绝，等于初始注资后无法取回。每次提现均
+    /// 发出 MasterWithdrawnEvent，链下可完整审计。
     public fun withdraw<T>(
         master: &MasterCap,
         vault: &mut AgentVault<T>,

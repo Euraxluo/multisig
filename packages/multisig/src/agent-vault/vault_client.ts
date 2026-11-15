@@ -464,17 +464,22 @@ export class AgentVaultClient {
   /**
    * 密钥不变、成员重分（resharing）：要求 epoch > 1（先 advance_epoch），
    * 参与者集合去重且非空；与普通会话共用 DkgSession 状态机。
+   * 准入经济与 DKG 会话对齐（#24）：creation_fee（Coin<SUI>，≥0.005 SUI，
+   * 链上销毁）为第 5 参；缺省时按 tx.coin() 拆出精确 0.005 SUI。
    */
   public buildCreateResharingSessionPTB(
     sender: string,
     epoch: bigint | number,
     threshold: bigint | number,
     participants: string[],
-    deadlineTimestampMs: bigint | number
+    deadlineTimestampMs: bigint | number,
+    creationFee?: FinanceCoinSource,
+    transaction?: Transaction
   ): Transaction {
     validateDkgParticipants(sender, participants);
     if (BigInt(epoch) <= 1n) throw new Error('resharing 会话要求 epoch > 1（先 advance_epoch）。');
-    const tx = new Transaction();
+    const tx = transaction ?? new Transaction();
+    const feeArg = financeCoin(tx, FINANCE_SUI_TYPE, creationFee ?? { amount: ADMISSION_ECONOMICS.SESSION_CREATION_FEE_MIST });
     tx.moveCall({
       target: `${this.packageId}::dkg_committee::create_resharing_session`,
       typeArguments: [],
@@ -483,6 +488,8 @@ export class AgentVaultClient {
         tx.pure.u64(BigInt(threshold)),
         tx.pure.vector('address', participants),
         tx.pure.u64(BigInt(deadlineTimestampMs)),
+        feeArg,
+        tx.object(AgentVaultClient.CLOCK_OBJECT_ID),
       ],
     });
     return tx;

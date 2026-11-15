@@ -45,6 +45,22 @@
       "types": "./src/dkg/index.ts",
       "default": "./src/dkg/index.ts"
     },
+    "./agent-vault/chat": {
+      "types": "./src/agent-vault/chat/index.ts",
+      "default": "./src/agent-vault/chat/index.ts"
+    },
+    "./agent-vault/polls": {
+      "types": "./src/agent-vault/polls/index.ts",
+      "default": "./src/agent-vault/polls/index.ts"
+    },
+    "./agent-vault/scallop": {
+      "types": "./src/agent-vault/scallop/index.ts",
+      "default": "./src/agent-vault/scallop/index.ts"
+    },
+    "./agent-vault/app-policy": {
+      "types": "./src/agent-vault/app-policy/index.ts",
+      "default": "./src/agent-vault/app-policy/index.ts"
+    },
     "./namespace": {
       "types": "./src/namespace/index.ts",
       "default": "./src/namespace/index.ts"

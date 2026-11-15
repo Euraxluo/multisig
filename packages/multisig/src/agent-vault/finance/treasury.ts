@@ -31,7 +31,7 @@ export function buildCreateTreasuryTransfer(input: FinanceTransactionOptions & T
 }
 
 /** Permissionless relay; no recipient/amount override exists on the execution path.
- * The FROST signature commits to computeTreasuryTransferDigest(chainId, orgId, epoch, nonce, proposalId, recipient, amount). */
+ * The FROST signature commits to computeTreasuryTransferDigest(…, amount, keyGeneration, vaultId) — V3, vault-bound. */
 export function buildExecuteTreasuryTransfer(input: FinanceTransactionOptions & { treasuryId: string; bindingId: string; orgId: string; proposalId: string; vaultId: string; nonce: bigint; frostSignature: Uint8Array }): Transaction {
   const ids = [input.treasuryId, input.bindingId, input.orgId, input.proposalId, input.vaultId].map(id => financeAddress(id));
   const tx = input.transaction ?? new Transaction();

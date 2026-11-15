@@ -157,9 +157,12 @@ export function computeRotatePopDigest(input: {
 }
 
 /**
- * 国库转账摘要 V2（round-9）：尾部追加 bcs(key_generation)（域
- * SUI_ORG_TREASURY_TRANSFER_V2:）。rotate 换钥后 key_generation 变化 → 旧代分片
- * 无法签出新摘要，旧分片在 resharing 窗口内的转账签名能力被封死。V1 已废弃。
+ * 国库转账摘要 V3（#23/#25）：在 amount 之后追加 bcs(vault_id)，再追加
+ * bcs(key_generation)（域 SUI_ORG_TREASURY_TRANSFER_V3:）。vault_id 绑定使
+ * 同一 (org, epoch, nonce, proposal) 下的签名不能重放到另一个金库；
+ * rotate 换钥后 key_generation 变化 → 旧代分片无法签出新摘要。
+ * 字节序与 asynchronous_proposal.move::transfer_digest 逐字节一致。
+ * V1/V2 已废弃。
  */
 export function computeTreasuryTransferDigest(input: {
   chainId: Uint8Array | string;
@@ -171,10 +174,12 @@ export function computeTreasuryTransferDigest(input: {
   amount: number | bigint;
   /** 组织当前密钥生成代（org.key_generation，创建为 1，rotate +1）。 */
   keyGeneration: number | bigint;
+  /** 转账目标金库 ID：摘要绑定具体 vault，防跨金库重放。 */
+  vaultId: string;
 }): Uint8Array {
   return sha256(
     concat(
-      utf8('SUI_ORG_TREASURY_TRANSFER_V2:'),
+      utf8('SUI_ORG_TREASURY_TRANSFER_V3:'),
       chainBytes(input.chainId),
       requireAddress(input.orgId, 'orgId'),
       u64le(input.epochVersion),
@@ -182,6 +187,7 @@ export function computeTreasuryTransferDigest(input: {
       requireAddress(input.proposalId, 'proposalId'),
       requireAddress(input.recipient, 'recipient'),
       u64le(input.amount),
+      requireAddress(input.vaultId, 'vaultId'),
       u64le(input.keyGeneration),
     ),
   );
