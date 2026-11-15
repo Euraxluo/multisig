@@ -231,4 +231,40 @@ module agent_vault::vault_policy_tests {
         vault::destroy_master_cap_for_testing(_master_b);
         ts::end(scenario);
     }
+
+    // (#6 社区风险回归) 并发双花同一 epoch 额度：预算 5，两笔 3 同时合法单看，
+    // 共享 AgentVault 顺序执行保证 3+3>5 → 第二笔必拒（E_EXCEEDED_DAILY_QUOTA 2007）。
+    // test_scenario 以逐 tx 顺序模拟链上共享对象串行化；testnet 实弹双 tx 并发
+    // 提交时 Sui runtime 对同一 shared object 写写串行化等价于此处顺序语义。
+    #[test]
+    #[expected_failure(abort_code = agent_vault::vault::E_EXCEEDED_DAILY_QUOTA)]
+    fun test_concurrent_epoch_budget_double_spend_rejected() {
+        let mut scenario = ts::begin(ALICE);
+        setup_with_policy(&mut scenario, 1000, 5);
+        spawn(&mut scenario, AGENT, 5);
+
+        // 第一笔 $3：单笔合法（3 <= 5）
+        ts::next_tx(&mut scenario, AGENT);
+        {
+            let mut agent_cap = ts::take_from_sender<AgentCap>(&scenario);
+            let mut v = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::spend_x402_budget(&agent_cap, &mut v, 3, RECIPIENT, ts::ctx(&mut scenario));
+            assert!(vault::agent_spent_in_epoch(&v, AGENT) == 3, 1);
+            ts::return_to_sender(&scenario, agent_cap);
+            ts::return_shared(v);
+        };
+        collect_payout(&mut scenario);
+
+        // 第二笔 $3：并发到达，但共享对象上 spent=3，3+3=6 > 5 → 拒绝
+        ts::next_tx(&mut scenario, AGENT);
+        {
+            let mut agent_cap = ts::take_from_sender<AgentCap>(&scenario);
+            let mut v = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::spend_x402_budget(&agent_cap, &mut v, 3, RECIPIENT, ts::ctx(&mut scenario));
+            ts::return_to_sender(&scenario, agent_cap);
+            ts::return_shared(v);
+        };
+        collect_payout(&mut scenario);
+        ts::end(scenario);
+    }
 }
