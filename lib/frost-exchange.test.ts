@@ -6,7 +6,7 @@ import { mod, randomScalar, lagrangeCoefficient, scalarToBytes32, bytesToScalar 
 import {
   aggregateNonce, aggregateSignature, createNonceCommitment, createSignatureShare,
   sessionCertificateMessage, signingChallenge, ThresholdExchangeError, verifyGroupSignature,
-  type NonceCommitment,
+  type NonceCommitment, type SignatureShare,
 } from "./frost-exchange"
 
 // These tests pin the property that actually matters: a set of t devices, each
@@ -212,6 +212,47 @@ test("lagrange coefficients reconstruct the secret at zero", () => {
   assert.equal(bytesToScalar(scalarToBytes32(reconstructed)), reconstructed)
 })
 
+test("a share corrupted in transit is attributed to its holder index when every share claims Y_i", () => {
+  const { indices, shares, groupPk } = splitKey(THRESHOLD, 2)
+  const round1 = indices.map((index, position) => createNonceCommitment(ORG, index, shares[position]))
+  const commitments = round1.map(entry => entry.commitment)
+  const produced = round1.map(entry => createSignatureShare({
+    node: entry.node, orgId: ORG, threshold: BigInt(THRESHOLD), signerIndices: indices, commitments, groupPk, message: MESSAGE,
+  }))
+  // Every produced share carries its signer's claimed Y_i (32 bytes).
+  for (const share of produced) assert.equal(share.sharePublicKey?.length, 32)
+
+  // Flip one scalar in transit: per-share verification names holder 2.
+  const corrupted: SignatureShare = { ...produced[1], scalar: scalarToBytes32(mod(bytesToScalar(produced[1].scalar) + 1n)) }
+  assert.throws(
+    () => aggregateSignature(commitments, [produced[0], corrupted], groupPk, MESSAGE),
+    /SHARE_VERIFICATION_FAILED.*index 2/,
+  )
+
+  // Untouched shares aggregate and verify.
+  const { signature } = aggregateSignature(commitments, produced, groupPk, MESSAGE)
+  assert.ok(ed25519.verify(signature, MESSAGE, groupPk))
+})
+
+test("shares without a claimed Y_i still aggregate (wire compatibility) and are caught by the final verification", () => {
+  const { indices, shares, groupPk } = splitKey(THRESHOLD, 2)
+  const round1 = indices.map((index, position) => createNonceCommitment(ORG, index, shares[position]))
+  const commitments = round1.map(entry => entry.commitment)
+  const produced = round1.map(entry => createSignatureShare({
+    node: entry.node, orgId: ORG, threshold: BigInt(THRESHOLD), signerIndices: indices, commitments, groupPk, message: MESSAGE,
+  }))
+  const legacy = produced.map(({ orgId, index, scalar }) => ({ orgId, index, scalar }))
+  const { signature } = aggregateSignature(commitments, legacy, groupPk, MESSAGE)
+  assert.ok(ed25519.verify(signature, MESSAGE, groupPk))
+
+  // A corrupt legacy share (no Y_i anywhere) still cannot yield a signature.
+  const corrupted: SignatureShare = { ...legacy[1], scalar: scalarToBytes32(mod(bytesToScalar(legacy[1].scalar) + 1n)) }
+  assert.throws(
+    () => aggregateSignature(commitments, [legacy[0], corrupted], groupPk, MESSAGE),
+    /未通过群公钥验证|self-verification/i,
+  )
+})
+
 test("round-7 regression: crafted negative commitments cannot cancel honest nonces", () => {
   // Old single-nonce scheme: R = Σ r_i·G with no binding. Holder 2 publishing
   // R_2 = -R_1 zeroes the aggregate and lets holder 2 forge with z_2 = c·λ_2·s_2.
@@ -244,12 +285,16 @@ test("round-7 regression: crafted negative commitments cannot cancel honest nonc
     /未通过群公钥验证|self-verification/i,
   )
   // The forger's own node (which never generated these nonces) must also be
-  // unable to produce a share consistent with the crafted commitments.
+  // unable to produce a share consistent with the crafted commitments. Since the
+  // RFC 9591 §5.2 own-commitment check landed, the node aborts even earlier —
+  // the crafted list shows a commitment for its own index that differs from the
+  // one it actually published (OWN_COMMITMENT_MISMATCH), before any nonce is
+  // burned. Either way the round cannot yield a signature.
   assert.throws(() => {
     const share = forger.node.computeSignatureShare(MESSAGE, groupPk, [
       { participantId: indices[0].toString(), participantIndex: indices[0], hiding: honest.commitment.hiding, binding: honest.commitment.binding },
       { participantId: indices[1].toString(), participantIndex: indices[1], hiding: crafted.hiding, binding: crafted.binding },
     ])
     aggregateSignature(commitments, [honestShare, { orgId: ORG, index: indices[1], scalar: scalarToBytes32(share.shareZ) }], groupPk, MESSAGE)
-  }, /未通过群公钥验证|self-verification/i)
+  }, /OWN_COMMITMENT_MISMATCH|未通过群公钥验证|self-verification/i)
 })

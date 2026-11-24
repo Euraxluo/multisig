@@ -23,6 +23,12 @@ import type { NonceCommitment, SignatureShare } from './threshold_signer';
  * 4. validateCommitments 拒绝重复索引 / 小子群点
  * 5. 腐坏份额 (z+1) -> aggregateSignature 抛错
  * 6. verifyShare 逐份额公钥验证
+ * 7. 抵消攻击回归 (E_2 = -E_1、D_2 = -D_1)
+ * 8. 自身承诺被替换 -> OWN_COMMITMENT_MISMATCH，nonce 不烧，正确列表重试成功 (RFC 9591 §5.2)
+ * 9. 自身承诺缺失 -> OWN_COMMITMENT_MISSING，nonce 不烧
+ * 10. 列表里两条自己的索引 -> 抛错且 nonce 不烧
+ * 11. aggregateSignature 逐份额验签 (RFC 9591 §5.4): 坏份额指认肇事者索引
+ * 12. 非规范 y ≥ p 编码的承诺点被拒绝
  */
 
 const t = 2;
@@ -319,4 +325,137 @@ test('7. 抵消攻击回归: E_2 = -E_1、D_2 = -D_1 的伪造承诺对无法把
   ]);
   assert.ok(verifyShare(honestShare, message, groupPublicKey, commitments, sharePubKeys));
   assert.ok(!verifyShare(attackerAttempt, message, groupPublicKey, commitments, sharePubKeys));
+});
+
+test('8. 自身承诺被替换 -> OWN_COMMITMENT_MISMATCH，nonce 不烧，正确列表重试成功 (RFC 9591 §5.2)', () => {
+  const { participants, groupPublicKey } = buildCommittee();
+  const message = new TextEncoder().encode('own-commitment-substitution');
+  const signingSubset = participants.slice(0, t);
+  const commitments = signingSubset.map((p) => p.node.generateNonceCommitment());
+
+  // 协调者把 node-1 自己的承诺换成另一个合法点 (Drijvers 类攻击的第一步:
+  // 让受害者针对同一批 nonce 按两组不同承诺各签一次)
+  const attackerNode = new ThresholdSignerNode('attacker', 1, 424242n);
+  const forgedSelf = attackerNode.generateNonceCommitment();
+  const tampered = commitments.map((c) =>
+    c.participantIndex === signingSubset[0].index ? forgedSelf : c
+  );
+
+  assert.throws(
+    () => signingSubset[0].node.computeSignatureShare(message, groupPublicKey, tampered),
+    /OWN_COMMITMENT_MISMATCH/,
+    'replaced own commitment must abort round 2'
+  );
+
+  // nonce 未被烧: 用正确的列表重试必须成功 (协议可恢复，受害者不必重新广播承诺)
+  const victimShare = signingSubset[0].node.computeSignatureShare(message, groupPublicKey, commitments);
+  const shares = [
+    victimShare,
+    ...signingSubset.slice(1).map((p) => p.node.computeSignatureShare(message, groupPublicKey, commitments)),
+  ];
+  const signature = ThresholdSignerNode.aggregateSignature(message, groupPublicKey, commitments, shares);
+  assert.ok(
+    ed25519.verify(signature, message, groupPublicKey),
+    'retry with the correct commitment list must produce a valid signature'
+  );
+});
+
+test('9. 自身承诺缺失 -> OWN_COMMITMENT_MISSING，nonce 不烧', () => {
+  const { participants, groupPublicKey } = buildCommittee();
+  const message = new TextEncoder().encode('own-commitment-missing');
+  const signingSubset = participants.slice(0, t);
+  const commitments = signingSubset.map((p) => p.node.generateNonceCommitment());
+
+  // 协调者发回的列表里删掉了 node-1 自己那一条
+  const withoutSelf = commitments.filter((c) => c.participantIndex !== signingSubset[0].index);
+
+  assert.throws(
+    () => signingSubset[0].node.computeSignatureShare(message, groupPublicKey, withoutSelf),
+    /OWN_COMMITMENT_MISSING/,
+    'missing own commitment must abort round 2'
+  );
+
+  // nonce 未被烧: 补回正确列表后重试成功
+  const share = signingSubset[0].node.computeSignatureShare(message, groupPublicKey, commitments);
+  assert.ok(share.shareZ > 0n);
+});
+
+test('10. 列表里两条自己的索引 -> 抛错且 nonce 不烧', () => {
+  const { participants, groupPublicKey } = buildCommittee();
+  const message = new TextEncoder().encode('duplicate-own-index');
+  const signingSubset = participants.slice(0, t);
+  const commitments = signingSubset.map((p) => p.node.generateNonceCommitment());
+
+  // 同一索引出现两条 (第二条内容不同) —— validateCommitments 直接拒绝
+  const duplicated = [...commitments, { ...commitments[0], participantId: 'clone-of-self' }];
+
+  assert.throws(
+    () => signingSubset[0].node.computeSignatureShare(message, groupPublicKey, duplicated),
+    /duplicate participantIndex/,
+    'two entries with the own index must be rejected before nonce use'
+  );
+
+  // nonce 未被烧: 用正确列表重试成功
+  const share = signingSubset[0].node.computeSignatureShare(message, groupPublicKey, commitments);
+  assert.ok(share.shareZ > 0n);
+});
+
+test('11. aggregateSignature 逐份额验签 (RFC 9591 §5.4): 坏份额指认肇事者索引', () => {
+  const { participants, groupPublicKey } = buildCommittee();
+  const message = new TextEncoder().encode('per-share-attribution');
+  const signingSubset = participants.slice(0, t);
+
+  const sharePubKeys = new Map<string, Uint8Array>(
+    signingSubset.map((p) => [p.id, p.pubKeyPoint.toBytes()] as const)
+  );
+
+  const { commitments, shares } = runSigningRound(signingSubset, message, groupPublicKey);
+
+  // (a) 全部诚实 + 提供 sharePublicKeys: 逐份额验证通过，聚合照常成功
+  const signature = ThresholdSignerNode.aggregateSignature(
+    message, groupPublicKey, commitments, shares, sharePubKeys
+  );
+  assert.ok(ed25519.verify(signature, message, groupPublicKey));
+
+  // (b) node-2 (index 2) 发坏份额: 聚合必须抛错并指认该参与者索引
+  const corrupted = shares.map((s, i) =>
+    i === 1 ? { ...s, shareZ: mod(s.shareZ + 1n) } : s
+  );
+  assert.throws(
+    () => ThresholdSignerNode.aggregateSignature(message, groupPublicKey, commitments, corrupted, sharePubKeys),
+    (err: unknown) => {
+      assert.match((err as Error).message, /SHARE_VERIFICATION_FAILED/);
+      assert.match((err as Error).message, /index 2/);
+      return true;
+    },
+    'corrupted share must fail per-share verification naming the culprit index'
+  );
+
+  // (c) sharePublicKeys 缺某参与者的公钥: fail-closed，该份额按验证失败处理
+  const partial = new Map<string, Uint8Array>([[signingSubset[0].id, sharePubKeys.get(signingSubset[0].id)!]]);
+  assert.throws(
+    () => ThresholdSignerNode.aggregateSignature(message, groupPublicKey, commitments, shares, partial),
+    /SHARE_VERIFICATION_FAILED/
+  );
+});
+
+test('12. 非规范 y ≥ p 编码的承诺点被拒绝（noble 严格解码层）', () => {
+  const { participants } = buildCommittee();
+  const [a] = participants.map((p) => p.node.generateNonceCommitment());
+
+  // y = p (2^255-19) 的编码: 小端 0xed, 0xff×30, 0x7f —— 数值上 y ≥ p，
+  // 是同一 y 的非规范编码; RFC 8032 严格解码必须拒绝。
+  // 拦截层说明：该向量在 noble curves 的 Point.fromBytes 严格解码处即被拒
+  // （expected valid point.y …），早于 parseValidPoint 的「解码后再重编码比对」
+  // 纵深分支——后者目前没有已知输入可达，作为解码层的第二道防线保留。
+  const yEqualsP = new Uint8Array(32);
+  yEqualsP[0] = 0xed;
+  yEqualsP.fill(0xff, 1, 31);
+  yEqualsP[31] = 0x7f;
+
+  assert.throws(
+    () => validateCommitments([a, { ...a, participantIndex: 99n, hiding: yEqualsP }]),
+    /point\.y|canonical/i,
+    'non-canonical y >= p commitment encoding must be rejected'
+  );
 });

@@ -14,7 +14,12 @@ import { Transaction } from '@mysten/sui/transactions';
 import type { SuiGrpcClient } from '@mysten/sui/grpc';
 import { normalizeStructTag } from '@mysten/sui/utils';
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { ThresholdSignerNode, type NonceCommitment, type SignatureShare } from '../../dkg/threshold_signer';
+import {
+  ThresholdSignerNode,
+  sharePublicKeyFromPrivate,
+  type NonceCommitment,
+  type SignatureShare,
+} from '../../dkg/threshold_signer';
 import {
   AGENT_VAULT_PACKAGE_ID,
   GOVERNANCE_EVENTS,
@@ -53,6 +58,12 @@ export function verifyFrostSignature(message: Uint8Array, signature: Uint8Array,
 export interface CollectedThresholdSignatures {
   nonces: NonceCommitment[];
   shares: SignatureShare[];
+  /**
+   * 可选：各签名者自报的分片公钥 Y_i = g^{s_i}（键 = participantId）。
+   * 提供时聚合走 RFC 9591 §5.4 逐份额验签，坏份额按索引归因；缺失时
+   * 退化为仅最终聚合验签。多设备生产实现应尽量随份额回传。
+   */
+  sharePublicKeys?: Map<string, Uint8Array>;
 }
 
 /** 可插拔签名收集传输。多设备生产实现：设备密封库 + 私有传输。 */
@@ -73,7 +84,13 @@ export class LocalMemoryShareProvider implements SessionShareProvider {
     const nodes = this.material.map((m) => new ThresholdSignerNode(m.id, m.participantIndex, m.privateShare));
     const nonces = nodes.map((n) => n.generateNonceCommitment());
     const shares = nodes.map((n) => n.computeSignatureShare(digest, groupPublicKey, nonces));
-    return { nonces, shares };
+    // 同机彩排路径也回传 Y_i：单机份额自证无法归因存储腐化（与 z 同源），
+    // 但让 §5.4 路径默认被走到，多设备实现照此契约提供真实跨设备归因。
+    const sharePublicKeys = new Map<string, Uint8Array>();
+    nodes.forEach((node, position) => {
+      sharePublicKeys.set(node.id, sharePublicKeyFromPrivate(this.material[position].privateShare));
+    });
+    return { nonces, shares, sharePublicKeys };
   }
 }
 
@@ -266,7 +283,13 @@ export class ThresholdProposalSession {
     try {
       const collected = await provider.collect({ digest: this.proposalDigest, groupPublicKey: Uint8Array.from(this.signedSnapshot.groupPk) });
       if (this.invalidated) throw new Error('会话已失效，必须新建会话');
-      const signature = ThresholdSignerNode.aggregateSignature(this.derived.digest, this.signedSnapshot.groupPk, collected.nonces, collected.shares);
+      const signature = ThresholdSignerNode.aggregateSignature(
+        this.derived.digest,
+        this.signedSnapshot.groupPk,
+        collected.nonces,
+        collected.shares,
+        collected.sharePublicKeys,
+      );
       if (!verifyFrostSignature(this.derived.digest, signature, this.signedSnapshot.groupPk)) {
         throw new Error('FROST 聚合签名未通过组织群公钥验证');
       }

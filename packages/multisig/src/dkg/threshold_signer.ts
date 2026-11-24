@@ -1,7 +1,36 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { sha512 } from '@noble/hashes/sha2.js';
 import { mod, randomScalar, bytesToScalar, scalarToBytes32, lagrangeCoefficient } from './math';
+import { bytesEqual } from './bytes-equal';
 import type { Point } from './vss';
+
+/**
+ * 自研 FROST1 门限签名器（Ed25519），协议步骤与 RFC 9591 的对应关系：
+ * - Round 1 (§5.1)：`generateNonceCommitment` —— 节点内部生成双 nonce (hide_i, bind_i)，
+ *   广播承诺 (D_i, E_i)，并把「自己的承诺」记在节点上供 Round 2 自校验；
+ * - Round 2 (§5.2)：`computeSignatureShare` —— 消耗 nonce 前先确认协调者承诺列表里
+ *   自己那一条与 Round 1 广播值逐字节一致（OWN_COMMITMENT_MISSING / OWN_COMMITMENT_MISMATCH），
+ *   不一致即中止且 nonce 保持未消耗。这是 Drijvers 类承诺替换攻击（协调者对同一批
+ *   nonce 提交两组不同承诺，联立解出私钥份额）的核心防线；
+ * - 绑定因子 (§4.4)：`computeBindingFactor` —— 逐参与者 ρ_i（域分隔前缀 + 升序承诺
+ *   + 消息 + 群公钥 + 自索引后缀）；
+ * - 聚合 (§5.4)：`aggregateSignature` —— 可选传入各参与者的分片公钥 Y_i
+ *   （`sharePublicKeys`）时，先逐份额验证 z_i·G = D_i + ρ_i·E_i + c·λ_i·Y_i 并
+ *   指认肇事者，再做最终 `ed25519.verify`；未传入时退化为仅最终验签（仍
+ *   fail-closed，但定位不到坏份额来源）。
+ *
+ * 与 `bridge/frost-session.ts` 的分工：bridge 那套封装 noble `ed25519_FROST`，
+ * 带协议消息签名 / transcript / 设备密封库 / 会话存储，用于设备间两轮 FROST
+ * 签名协议；本文件是无传输依赖的进程内 FROST1 签名器，供
+ * `agent-vault/org/session.ts`、前端 `lib/crypto/committee-signing.ts`、
+ * `lib/frost-exchange.ts` 与 `bin/dkg-cli.ts` 使用。两者不共享网络格式。
+ *
+ * 与 bridge / RFC 9591 的已知差异：
+ * - 承诺点合法性校验与 bridge 同级（恒等元、小子群点、非规范编码一律拒绝）；
+ * - RFC 9591 的版本协商与协议消息签名不在本层（由各调用方的传输层负责）；
+ * - ρ_i 哈希布局是本仓库自己的域分隔方案（RFC 9591 §4.4 语义的等价实现，
+ *   见 BINDING_DOMAIN 注释），跨实现不互通。
+ */
 
 /**
  * FROST1 绑定因子域分隔前缀。
@@ -30,7 +59,12 @@ export interface SignatureShare {
 
 /**
  * 解析 32 字节压缩点并做完整合法性校验:
- * 曲线上 (assertValidity)、非恒等元 (!is0)、无小子群分量 (isTorsionFree)
+ * 曲线上 (assertValidity)、非恒等元 (!is0)、无小子群分量 (isTorsionFree)、
+ * 编码规范 (重编码逐字节一致)。
+ * 与 bridge/key-package.ts、bridge/frost-session.ts 的承诺点校验对齐:
+ * noble `Point.fromBytes` 默认走 RFC 8032 严格解码 (zip215=false)，已拒绝
+ * y ≥ p 的非规范 y 编码与 x=0 且符号位为 1 的编码；末尾的重编码比对是
+ * 纵深防御，保证任何被接受的编码都是唯一的规范压缩形式。
  */
 function parseValidPoint(bytes: Uint8Array, label: string): Point {
   if (bytes.length !== 32) {
@@ -43,6 +77,9 @@ function parseValidPoint(bytes: Uint8Array, label: string): Point {
   }
   if (!point.isTorsionFree()) {
     throw new Error(`[FROST1] ${label}: point is not torsion-free (small-order component rejected)`);
+  }
+  if (!bytesEqual(point.toBytes(), bytes)) {
+    throw new Error(`[FROST1] ${label}: point encoding is not canonical (must round-trip to the exact RFC 8032 compressed form)`);
   }
   return point;
 }
@@ -60,8 +97,8 @@ function u64leBytes(value: bigint): Uint8Array {
 
 /**
  * 承诺集合合法性校验:
- * - 索引唯一
- * - hiding/binding 均为 32 字节合法压缩点 (非恒等元、无小子群分量)
+ * - 索引唯一 (任何索引出现两次都拒绝，含「自己的索引出现两条」)
+ * - hiding/binding 均为 32 字节合法压缩点 (非恒等元、无小子群分量、规范编码)
  */
 export function validateCommitments(commitments: NonceCommitment[]): void {
   const seen = new Set<bigint>();
@@ -157,6 +194,19 @@ function computeChallenge(aggregateR: Point, groupPublicKey: Uint8Array, message
 }
 
 /**
+ * 分片公钥 Y_i = g^{s_i}（32 字节压缩点编码）。
+ *
+ * 持有私分片的一方本地即可算出，随签名份额一起交给聚合器后，聚合器的
+ * 逐份额验签（verifyShare / RFC 9591 §5.4）就能归因坏份额。注意：聚合器
+ * 拿到的 Y_i 由签名方自报，单独用它不能证明该成员确是群成员——那一步由
+ * 最终的 ed25519.verify(聚合签名) 把守；逐份额验证的价值是把「谁的份额
+ * 坏了」从一次聚合失败细化成具体索引。
+ */
+export function sharePublicKeyFromPrivate(privateShare: bigint): Uint8Array {
+  return ed25519.Point.BASE.multiply(mod(privateShare)).toBytes();
+}
+
+/**
  * 单份额验证 (可选), RFC 9591 §4.4:
  * z_i · G ?= D_i + ρ_i · E_i + c · λ_i · Y_i
  * 其中 D_i/E_i 为该参与者的隐藏/绑定承诺，ρ_i 按其索引重算，
@@ -197,6 +247,8 @@ export class ThresholdSignerNode {
   // FROST1 双 nonce 秘密标量 (仅本地持有，单次使用后即刻销毁)
   private hidingNonce: bigint = 0n;
   private bindingNonce: bigint = 0n;
+  // 本节点最近一次广播的承诺 (D_i, E_i)，Round 2 与协调者列表比对用 (RFC 9591 §5.2)
+  private ownCommitment: { hiding: Uint8Array; binding: Uint8Array } | null = null;
 
   constructor(id: string, index: number | bigint, privateShare: bigint) {
     this.id = id;
@@ -207,21 +259,31 @@ export class ThresholdSignerNode {
   /**
    * 签名阶段 Round 1 (FROST1): 生成一对临时随机标量 (hide_i, bind_i)
    * 并广播承诺 (D_i = hide_i*G, E_i = bind_i*G)。秘密标量永不上链/出网。
+   * 承诺同时记在节点内部，Round 2 时与协调者发回的列表逐字节比对。
    */
   public generateNonceCommitment(): NonceCommitment {
     this.hidingNonce = randomScalar();
     this.bindingNonce = randomScalar();
+    this.ownCommitment = {
+      hiding: ed25519.Point.BASE.multiply(this.hidingNonce).toBytes(),
+      binding: ed25519.Point.BASE.multiply(this.bindingNonce).toBytes(),
+    };
 
     return {
       participantId: this.id,
       participantIndex: this.index,
-      hiding: ed25519.Point.BASE.multiply(this.hidingNonce).toBytes(),
-      binding: ed25519.Point.BASE.multiply(this.bindingNonce).toBytes(),
+      hiding: this.ownCommitment.hiding,
+      binding: this.ownCommitment.binding,
     };
   }
 
   /**
-   * 签名阶段 Round 2 (FROST1, RFC 9591 §4.4):
+   * 签名阶段 Round 2 (FROST1, RFC 9591 §5.2/§4.4):
+   * 先校验协调者承诺列表 (结构合法性 + 自己那一条与 Round 1 广播值逐字节一致)，
+   * 任何失败都立即中止且 nonce 保持未消耗——用正确的列表重试可以成功。
+   * 这是 Drijvers 类承诺替换攻击的核心防线: 协调者若对同一批 nonce 换发
+   * 修改过的承诺列表，这里会拒绝签名而不是烧掉 nonce。
+   * 通过后再计算:
    * ρ_i  = SHA512("SUI_FROST_BINDING_V1:" ‖ (index‖D‖E)*升序 ‖ message ‖ Y ‖ index_i) mod L
    * d_i  = hide_i + ρ_i * bind_i           (有效 nonce，秘密标量)
    * R̄    = Σ (D_j + ρ_j · E_j)            (ρ_j 逐参与者重算)
@@ -240,7 +302,26 @@ export class ThresholdSignerNode {
       );
     }
 
+    // 拒绝重复索引 (含「自己的索引出现两条」) 与非法承诺点
     validateCommitments(allNonceCommitments);
+
+    // 0. RFC 9591 §5.2: 消耗 nonce 前确认协调者列表里自己那一条与本节点
+    //    Round 1 广播的 (D_i, E_i) 完全一致，不一致即中止 (nonce 不烧)。
+    const own = allNonceCommitments.find((nc) => nc.participantIndex === this.index);
+    if (!own) {
+      throw new Error(
+        `[FROST1] OWN_COMMITMENT_MISSING: coordinator commitment list has no entry for participant ${this.id} (index ${this.index}); aborting without consuming nonce`
+      );
+    }
+    if (
+      !this.ownCommitment ||
+      !bytesEqual(own.hiding, this.ownCommitment.hiding) ||
+      !bytesEqual(own.binding, this.ownCommitment.binding)
+    ) {
+      throw new Error(
+        `[FROST1] OWN_COMMITMENT_MISMATCH: commitment for participant ${this.id} (index ${this.index}) differs from the one this node published in round 1; aborting without consuming nonce`
+      );
+    }
 
     // 1. 本参与者绑定因子 ρ_i 与聚合随机点 R̄ = Σ (D_j + ρ_j · E_j)
     const rho = computeBindingFactor(allNonceCommitments, message, groupPublicKey, this.index);
@@ -267,15 +348,24 @@ export class ThresholdSignerNode {
   }
 
   /**
-   * 签名聚合器 (FROST1): 按每个索引逐个重算 ρ_i 得到 R̄ = Σ (D_i + ρ_i·E_i)，
-   * 求和产出标准 64 字节 Ed25519 签名 (R̄ || z)，并用 ed25519.verify 自校验，
-   * 失败即抛错 (杜绝承诺替换 / 伪造份额悄悄产出垃圾签名)
+   * 签名聚合器 (FROST1, RFC 9591 §5.4): 按每个索引逐个重算 ρ_i 得到
+   * R̄ = Σ (D_i + ρ_i·E_i)，求和产出标准 64 字节 Ed25519 签名 (R̄ || z)。
+   *
+   * 逐份额验证 (§5.4): 传入 `sharePublicKeys` (participantId → 分片公钥 Y_i
+   * 的 32 字节压缩点，可由 Feldman 承诺 / DKG 结果导出) 时，聚合前先用
+   * verifyShare 验证每个份额 z_i·G = D_i + ρ_i·E_i + c·λ_i·Y_i，失败即抛错
+   * 并带上肇事参与者的索引——坏份额不再是笼统的「聚合签名无效」。
+   * 未传入 Y_i 时该步无法执行 (份额验证在数学上必需各参与者的分片公钥)，
+   * 退化为仅最终 ed25519 验签：仍然 fail-closed (任何坏份额都会被抓住)，
+   * 只是定位不到肇事者。传入的 map 若缺某个参与者的公钥，该参与者的份额
+   * 同样按验证失败处理 (fail-closed)。
    */
   public static aggregateSignature(
     message: Uint8Array,
     groupPublicKey: Uint8Array,
     allNonceCommitments: NonceCommitment[],
-    allSignatureShares: SignatureShare[]
+    allSignatureShares: SignatureShare[],
+    sharePublicKeys?: Map<string, Uint8Array>
   ): Uint8Array {
     validateCommitments(allNonceCommitments);
 
@@ -287,6 +377,12 @@ export class ThresholdSignerNode {
       if (!commitment || commitment.participantId !== share.participantId) {
         throw new Error(
           `[FROST1] signature share from ${share.participantId} has no matching nonce commitment`
+        );
+      }
+      // RFC 9591 §5.4: 聚合前逐份额验签，失败指认肇事参与者
+      if (sharePublicKeys && !verifyShare(share, message, groupPublicKey, allNonceCommitments, sharePublicKeys)) {
+        throw new Error(
+          `[FROST1] SHARE_VERIFICATION_FAILED: signature share from participant ${share.participantId} (index ${share.participantIndex}) failed per-share verification (z_i·G ≠ D_i + ρ_i·E_i + c·λ_i·Y_i)`
         );
       }
       aggregateZ = mod(aggregateZ + share.shareZ);

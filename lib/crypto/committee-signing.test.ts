@@ -69,6 +69,19 @@ test("refuses to sign when fewer shares exist than the threshold", () => {
   )
 })
 
+test("a corrupt stored share still fails the aggregate self-verification (no local Y_i path to fool)", () => {
+  const { shares, indices, groupPk } = deal(2, 3, "corrupt-share")
+  // 本机路径不传 sharePublicKeys：份额与其公钥同源，逐份额归因没有意义；
+  // 聚合自校验把腐化份额拦下，调用方拿不到能上链的签名。
+  const poisoned = shares.slice()
+  poisoned[1] = mod(poisoned[1] + 1n)
+  const current = session({ shares: poisoned, indices, groupPk, threshold: 2n })
+  assert.throws(
+    () => signWithCommittee(current, sha256(utf8("corrupt")), { groupPk, epoch: 1n }),
+    (error: unknown) => error instanceof ThresholdSigningError && /聚合签名未通过/.test((error as Error).message),
+  )
+})
+
 test("any threshold-sized subset reconstructs the same key and verifies", () => {
   const { shares, indices, groupPk } = deal(2, 3, "subset-committee")
   // Use the last two shares only, which is a different subset from the default.

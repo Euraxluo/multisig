@@ -76,6 +76,9 @@ export function signWithCommittee(
   const commitments = nodes.map(node => node.generateNonceCommitment())
   const shares = nodes.map(node => node.computeSignatureShare(message, session.groupPk, commitments))
 
+  // 本机持全部分片：per-share 归因无从分辨「存储腐化」与「份额真实公钥」
+  // （Y_i 与 z_i 同源），逐份额验证不增加强度，聚合自校验已足够；刻意不传
+  // sharePublicKeys，也不为本地路径引入额外点乘开销。
   let signature: Uint8Array
   try {
     signature = ThresholdSignerNode.aggregateSignature(message, session.groupPk, commitments, shares)

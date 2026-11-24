@@ -27,6 +27,7 @@ import { sha512 } from "@noble/hashes/sha2.js"
 import {
   ThresholdSignerNode,
   computeAggregateNonce,
+  sharePublicKeyFromPrivate,
   validateCommitments as validateFrost1Commitments,
 } from "multisig/dkg"
 import type { NonceCommitment as Frost1Commitment, SignatureShare as Frost1Share } from "multisig/dkg"
@@ -47,6 +48,14 @@ export interface SignatureShare {
   index: bigint
   /** z_i, 32-byte little-endian scalar. */
   scalar: Uint8Array
+  /**
+   * Signer's share public key Y_i = g^{s_i} (32-byte compressed point), claimed
+   * by the device that produced the share. Optional for wire compatibility with
+   * older messages; when every collected share carries one, the aggregator can
+   * attribute a corrupt share to its holder index (RFC 9591 §5.4). A lying
+   * claimant is still caught by the final aggregate verification.
+   */
+  sharePublicKey?: Uint8Array
 }
 
 export class ThresholdExchangeError extends Error {}
@@ -78,6 +87,16 @@ function frost1Shares(shares: SignatureShare[]): Frost1Share[] {
     participantIndex: share.index,
     shareZ: bytesToScalar(share.scalar),
   }))
+}
+
+/** Per-share public keys keyed by participant id — only when every share claims one. */
+function frost1SharePublicKeys(shares: SignatureShare[]): Map<string, Uint8Array> | undefined {
+  if (shares.length === 0 || shares.some(share => !share.sharePublicKey || share.sharePublicKey.length !== 32)) {
+    return undefined
+  }
+  const map = new Map<string, Uint8Array>()
+  for (const share of shares) map.set(share.index.toString(), share.sharePublicKey!)
+  return map
 }
 
 /**
@@ -138,7 +157,8 @@ export function signingChallenge(aggregateR: Uint8Array, groupPk: Uint8Array, me
  * Round 2, local side. Produces this device's signature share on the node that
  * published the round-1 commitment. A node without unconsumed nonces — i.e. a
  * signer that skipped round 1 or already signed — throws inside the node, so a
- * share cannot exist without a prior commitment of its own.
+ * share cannot exist without a prior commitment of its own. The share carries
+ * this device's claimed Y_i = g^{s_i} so the aggregator can attribute faults.
  */
 export function createSignatureShare(input: {
   node: ThresholdSignerNode
@@ -158,7 +178,12 @@ export function createSignatureShare(input: {
     throw new ThresholdExchangeError(t("dkg.signerNotInRound"))
   }
   const share = input.node.computeSignatureShare(input.message, input.groupPk, frost1Commitments(input.commitments))
-  return { orgId: input.orgId, index: input.node.index, scalar: scalarToBytes32(share.shareZ) }
+  return {
+    orgId: input.orgId,
+    index: input.node.index,
+    scalar: scalarToBytes32(share.shareZ),
+    sharePublicKey: sharePublicKeyFromPrivate(input.node.privateShare),
+  }
 }
 
 export interface AggregateResult {
@@ -171,7 +196,9 @@ export interface AggregateResult {
  * aggregator recomputes every per-participant binding factor, rebuilds R̄ from
  * the commitments (not from a caller-supplied aggregate), and verifies the
  * result against the group key before returning. A share set that does not
- * reconstruct the key fails here, before any transaction is built.
+ * reconstruct the key fails here, before any transaction is built. When every
+ * share carries the signer's claimed Y_i, per-share verification (§5.4) names
+ * the corrupt holder instead of failing opaquely.
  */
 export function aggregateSignature(
   commitments: NonceCommitment[],
@@ -188,7 +215,13 @@ export function aggregateSignature(
   }
   let signature: Uint8Array
   try {
-    signature = ThresholdSignerNode.aggregateSignature(message, groupPk, frost1Commitments(commitments), frost1Shares(shares))
+    signature = ThresholdSignerNode.aggregateSignature(
+      message,
+      groupPk,
+      frost1Commitments(commitments),
+      frost1Shares(shares),
+      frost1SharePublicKeys(shares),
+    )
   } catch (error) {
     throw new ThresholdExchangeError(`${t("dkg.exchangeAggregateVerifyFailed")}: ${(error as Error).message}`)
   }
