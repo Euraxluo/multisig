@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-import {
-  DKGParticipant,
-  ResharingNode,
-  ThresholdSignerNode,
-} from '../src/dkg';
+import { DKGParticipant, ThresholdSignerNode } from '../src/dkg';
+// 演示专用内部模块：ResharingNode 不在 SDK 公开导出里（明文插值路径，
+// 无 dealer 诚实性证明），仅此演示可引用。
+import { ResharingNode } from '../src/dkg/resharing';
 
 const GREEN = '\x1b[32m';
 const CYAN = '\x1b[36m';

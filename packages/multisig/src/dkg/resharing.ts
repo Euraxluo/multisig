@@ -233,6 +233,11 @@ export function recomputeGroupPublicKeyFromShares(
  * 2. 分发刷新份额 u_{i -> k} = h_i(k)
  * 3. 新委员会成员合成新份额 s_k'
  * 4. 保证群公钥 Y = S * G 绝对恒定不变！旧成员被剔除后旧份额立即作废。
+ *
+ * 演示用：份额在单进程内以明文插值（新成员基线份额由旧成员明文份额
+ * 拉格朗日插值得到），没有 GennaroResharingParticipant 的 dealer 诚实性
+ * 证明，不要用于真实密钥。生产路径请使用 GennaroResharingParticipant。
+ * 此类不从 SDK 公开入口导出，仅供 bin/dkg-cli.ts 的本地演示引用。
  */
 export class ResharingNode {
   public readonly id: string;

@@ -2,9 +2,10 @@
  * 协议身份/命名层：`identity::identity` Move 模块（repo 前端仓
  * contracts/identity/sources/identity.move）的 SDK 封装。
  *
- * 合约尚未部署：没有任何默认包 ID——packageId 与 namesId 必须显式传入，
- * 未配置时报错而不是回落到任何猜测值。读取走官方 gRPC client；所有
- * 构造器自建 Transaction 返回（不设置 sender，由调用方签名执行）。
+ * SDK 不内置任何默认包 ID——packageId 与 namesId 必须显式传入，
+ * 未配置时报错而不是回落到任何猜测值（具体部署实例由调用方负责提供）。
+ * 读取走官方 gRPC client；所有构造器自建 Transaction 返回（不设置
+ * sender，由调用方签名执行）。
  */
 import { bcs } from '@mysten/sui/bcs';
 import type { SuiClientTypes } from '@mysten/sui/client';
@@ -27,7 +28,7 @@ export const IDENTITY_LIMITS = {
 } as const;
 
 export interface IdentityNamespaceConfig {
-  /** identity 包地址；合约未部署时由调用方显式配置。 */
+  /** identity 包地址；由调用方显式配置，SDK 不内置默认值。 */
   packageId: string;
   /** Names 共享对象 ID。 */
   namesId: string;

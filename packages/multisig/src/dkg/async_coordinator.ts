@@ -122,10 +122,49 @@ export class AsyncDkgCoordinator {
   }
 
   /**
+   * 截止时间是否已过（纯查询，不改变会话状态；到达 deadlineTimestampMs 即视为超时）
+   */
+  public checkDeadline(nowMs: number = Date.now()): boolean {
+    return !!this.session && nowMs >= this.session.deadlineTimestampMs;
+  }
+
+  /**
+   * 让截止时间真的生效：超过 deadlineTimestampMs 且未 FINALIZED 时置为 TIMED_OUT。
+   * 幂等：FINALIZED 会话永不超时；已 TIMED_OUT 的保持不变。返回会话当前是否处于超时态。
+   */
+  public expireIfNeeded(nowMs: number = Date.now()): boolean {
+    if (!this.session) return false;
+    if (this.session.status === 'FINALIZED') return false;
+    if (this.session.status === 'TIMED_OUT') return true;
+    if (this.checkDeadline(nowMs)) {
+      this.session.status = 'TIMED_OUT';
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 写入闸门：先按当前时钟强制过期，再拒绝超时会话的任何后续写入。
+   * 覆盖全部会改变会话状态的入口：distributeRound1Commitments、
+   * submitRound1、processRound2Shares、confirmParticipant、finalizeSession。
+   * TIMED_OUT 是终态，只能通过 initSession 开启新会话恢复。
+   */
+  private assertNotExpired(nowMs: number = Date.now()): void {
+    const session = this.session;
+    if (!session) throw new Error('No active session');
+    if (this.expireIfNeeded(nowMs)) {
+      throw new Error(
+        `Session ${session.sessionId} timed out at deadline ${session.deadlineTimestampMs}ms; no further submissions accepted`
+      );
+    }
+  }
+
+  /**
    * 参与者异步提交 Round 1 承诺
    */
   public submitRound1(participantId: string): Round1Output {
     if (!this.session) throw new Error('No active session');
+    this.assertNotExpired();
     if (this.session.status !== 'ROUND_1_COMMITMENTS' && this.session.status !== 'ROUND_2_MAILBOX') {
       throw new Error(`Invalid session status: ${this.session.status}`);
     }
@@ -149,6 +188,7 @@ export class AsyncDkgCoordinator {
    */
   public distributeRound1Commitments() {
     if (!this.session) throw new Error('No active session');
+    this.assertNotExpired();
     const allCommitments = Array.from(this.session.commitments.values());
     for (const node of this.dkgNodes.values()) {
       node.receiveRound1Packages(allCommitments);
@@ -165,6 +205,7 @@ export class AsyncDkgCoordinator {
     depositedEnvelopes: MailboxEnvelope[];
   }> {
     if (!this.session) throw new Error('No active session');
+    this.assertNotExpired();
     const sender = this.participants.get(senderId);
     const node = this.dkgNodes.get(senderId);
     if (!sender || !node) throw new Error(`Sender not found: ${senderId}`);
@@ -226,6 +267,8 @@ export class AsyncDkgCoordinator {
     canFinalize: boolean;
   } {
     if (!this.session) throw new Error('No active session');
+    // 超时会话上继续累计确认只会返回误导性的 canFinalize=true；与其它写入口一致拒绝。
+    this.assertNotExpired();
     this.session.confirmations.add(participantId);
     const confirmedCount = this.session.confirmations.size;
     const canFinalize = confirmedCount >= this.session.threshold;
@@ -247,6 +290,7 @@ export class AsyncDkgCoordinator {
     finalizedResults: Map<string, DKGFinalResult>;
   } {
     if (!this.session) throw new Error('No active session');
+    this.assertNotExpired();
     if (this.session.confirmations.size < this.session.threshold) {
       throw new Error(
         `Quorum not reached. Confirmed: ${this.session.confirmations.size}, Threshold: ${this.session.threshold}`
@@ -294,6 +338,13 @@ export class AsyncDkgCoordinator {
     allPeerCommitments: Map<string, Point[]>
   ): Promise<DKGFinalResult> {
     if (!this.session) throw new Error('No active session');
+    // 群公钥只在 finalizeSession 之后才写进会话；未固化就唤醒，返回的
+    // groupPublicKey 只会是 undefined。显式拒绝，不让调用方拿到半个结果。
+    if (this.session.status !== 'FINALIZED') {
+      throw new Error(
+        `Session ${this.session.sessionId} is ${this.session.status}; the group key only exists after finalizeSession`
+      );
+    }
     const participant = this.participants.get(participantId);
     if (!participant) throw new Error(`Participant not found: ${participantId}`);
 
