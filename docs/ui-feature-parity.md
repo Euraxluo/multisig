@@ -5,7 +5,8 @@
 
 ## 验收状态总览
 
-- **门禁**：前端离线测试 696/696（2026-10-25）→ 727/727（2026-11-23，含 SDK 桥接下沉）；Move 全包测试 287/287（2026-10-26）→ 424/424（2026-11-24）；SDK 测试 85 → 118；TypeScript 0 错误；生产构建成功。权威数字见 `PRELAUNCH_CHECKLIST.md` §A。
+- **门禁**：前端离线测试 696/696（2026-10-25）→ 735/735（2026-11-24，`pnpm test` 含 crypto 与 i18n）；Move 全包测试 287/287（2026-10-26）→ 527/527（2026-11-24）；SDK 测试 85 → 177；TypeScript 0 错误；生产构建成功。权威数字见 `PRELAUNCH_CHECKLIST.md` §A。
+- **组织金库授权（2026-11-24 起）**：`delegate_agent_authority` / `set_agent_outflow_policy` 及其 SDK（摘要、builder、会话、签名意图）已在源码，**UI 未接线**——前端暂无入口，验收口径为「SDK 支持，UI 未接」。
 - **合约包**：testnet 血统已演进至 fresh lineage `0x73afe159…`（12 模块，`contracts/agent_vault/Published.toml`）。文档中的 v4/v7/v8 等表述均为对应时期的快照；`post_message_batch` 已随当前包进入源码（`onchain_chat.move:602`），链上 ABI 以前端 `getMoveFunction` 探测为准。
 - **浏览器回归**：390px 与 1280px 各 16/16（含组织金库只读、发票草稿、通知徽标、AI 副卡、名册换届 FROST、群聊双传输切换、组织发现、主题切换、Walrus 策略面板、DKG 信箱密封等场景），全部 pageerror 为空且无横向溢出。
 - **FROST 本地验收**：真实 Chromium IndexedDB 9/9、聚焦门禁 107/107；详见 `docs/FROST_LOCAL_ACCEPTANCE.md`。真实钱包签名与完整链上生命周期验收仍未执行。

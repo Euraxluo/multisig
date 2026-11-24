@@ -2,7 +2,8 @@
 
 > 适用范围：`contracts/agent_vault`（Move）、`packages/multisig`（SDK）、Web 前端、Vercel 托管。
 > 当前血统：`0x73afe159f7b017efdfc7a013a6e444d54317b0147ae7fb182a182c3dc5ba57b5`（testnet，version = 1，`contracts/agent_vault/Published.toml`；血统随发布演进，以该文件为准）。
-> 最近实测：Move 测试 424/424、SDK `tsc` 干净（2026-11-24）；`next build` 成功（9/9 静态页）、Vercel Production Ready（HTTP 200）为此前一次发布演练的结果，每次发布前须重跑。
+> 最近实测：Move 测试 527/527（identity 另 48/48）、SDK `tsc` 干净、SDK 单测 177/177、根测试 735/735（2026-11-24）；`next build` 成功、Vercel Production Ready（HTTP 200）为此前一次发布演练的结果，每次发布前须重跑。
+> 注意：这些数字测的是**当前源码树**；线上 lineage `0x73afe159…` 早于本树（不含 2026-11-24 起的源码修复）。发布前须按 §1 重建包并比对字节码（白皮书 §8 门 2）。
 > 本文中 `[已实测]` 表示相应流水线步骤实测通过，`[需人工]` 表示必须由值班人手工确认。
 
 ---
@@ -15,7 +16,7 @@
 | 2 | Move 框架 pin | `rev = 8fc60f1fa966e90398c93beb67ad4f42992889c7`（对应 mainnet-v1.74.1，见 `contracts/agent_vault/Move.toml:7`） | `grep -n rev contracts/agent_vault/Move.toml` | [已实测] |
 | 3 | Node.js 版本 | ≥ 20（Vercel 构建一致） | `node -v` | [需人工] |
 | 4 | 依赖安装 | lockfile 无漂移 | `pnpm install --frozen-lockfile` | [需人工] |
-| 5 | Move 单元测试 | **424/424 全绿** | `cd contracts/agent_vault && sui move test` | [已实测] |
+| 5 | Move 单元测试 | **527/527 全绿**（identity 另 48/48） | `cd contracts/agent_vault && sui move test` | [已实测] |
 | 6 | SDK 类型检查 | `tsc` 无错误 | `pnpm sdk:typecheck`（= `tsc --noEmit -p packages/multisig/tsconfig.json`；包名是 `multisig`，旧命令 `--filter @multisig/sdk` 会 no matching project） | [已实测] |
 | 7 | 前端构建 | 成功，9/9 静态页 | `pnpm build`（next build） | [已实测] |
 | 8 | Vercel 部署 | Production Ready，HTTP 200 | 平台面板 + `curl -I` | [已实测] |
@@ -91,16 +92,17 @@ NEXT_PUBLIC_AGENT_VAULT_PACKAGE_ID = 0x<新包ID>
 
 校验旧 ID 残留：`grep -rl "0x73afe159f7b017efdfc7a013a6e444d54317b0147ae7fb182a182c3dc5ba57b5" --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=build .`，除 `Published.toml` 的 `original-id` 与历史文档外应无命中。
 
-### 2.4 四道门禁验证（按顺序，一票否决）
+### 2.4 五道门禁验证（按顺序，一票否决）
 
 | 门禁 | 命令 / 动作 | 通过标准 |
 |------|-------------|----------|
-| G1 合约 | `sui move test` | 424/424 全绿 |
-| G2 SDK | `pnpm sdk:typecheck` + `pnpm test:sdk`（CI 的 sdk job 同款） | 0 error / 全绿 |
+| G1 合约 | `sui move test` | 527/527 全绿（identity 48/48；G1 自带 checkout 修复见 I12） |
+| G2 SDK | `pnpm sdk:typecheck` + `pnpm test:sdk`（CI 的 sdk job 同款）；根侧另跑 `pnpm exec tsc --noEmit` + `pnpm test`（CI 的 integration job 同款） | 0 error / 全绿（SDK 177/177、根 735/735） |
 | G3 构建 | `pnpm build` | 成功，9/9 静态页 |
-| G4 线上 | `curl -I https://<生产域名>` + 页面实际发起一次只读 RPC（如 `getObject` 新包 ID） | HTTP 200 且返回 `EXISTS` |
+| G4 lint | 两个 Move 包 `sui move lint --warnings-are-errors` + `pnpm exec eslint . --max-warnings 0` | 0 告警 / 0 error 0 warning（I12 前全仓真值为 320 error / 63 warning；I12 清零且无新增抑制） |
+| G5 线上 | `curl -I https://<生产域名>` + 页面实际发起一次只读 RPC（如 `getObject` 新包 ID） | HTTP 200 且返回 `EXISTS` |
 
-G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到的是新包（可对比页面展示的 package id 与 `NEXT_PUBLIC_AGENT_VAULT_PACKAGE_ID`）。
+G5 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到的是新包（可对比页面展示的 package id 与 `NEXT_PUBLIC_AGENT_VAULT_PACKAGE_ID`）。
 
 ---
 
@@ -179,6 +181,10 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 | `ParticipantConfirmedEvent` | DKG | 参与确认 | 置信度不足（确认数 < 门限） → 告警 |
 | `BondClaimedEvent` / `GenesisStakeRefundedEvent` / `GenesisStakeSweptEvent` / `GenesisStakeRecordedEvent` / `GenesisStakeWithdrawnEvent` | 经济 | 保证金与创世质押 | 任意 `Swept` → P1（通常意味着违约清算） |
 | `OrganizationCreatedEvent` / `RosterUpdatedEvent` / `OrganizationEpochUpdatedEvent` | 组织 | 组织与名册 | `RosterUpdatedEvent` 必须人工复核 |
+| `AgentCapsRevokedEvent` | vault | 治理级停机撤销了全部 Operator/Agent 卡（I3） | 任一出现 → 立即通知（预期内的停机也要确认） |
+| `AgentBudgetUpdatedEvent` | vault | 卡额度被调整（I9 补发） | 调整非计划内 → 告警 |
+| `VaultUnpausedEvent` | vault | 金库解除暂停（I9 补发） | 解除后 5 分钟内异常出金 → P1 |
+| `AgentAuthorityDelegatedEvent` / `TreasuryOutflowPolicyUpdatedEvent` / `TreasuryTransferCreatedEvent` / `TreasuryTransferExecutedEvent` | organization_treasury | 门限授权、策略与治理转账（I3） | 新 operator 授权与任一停机（上限为 0）→ 通知；执行失败率 > 1% → 告警 |
 | `PollPublished` / `BallotCast` | 治理 | 投票 | 投票率异常低（< 10%） → 提醒 |
 
 **通用阈值建议**：所有事件按 `package_id + module + event_type` 聚合；每 5 分钟窗口内出现 **3 倍于 7 日基线** 或任意 `P1` 事件立即告警。链上事件可能有重组，消费端需按 `tx digest` 去重。
@@ -191,7 +197,7 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 
 ### 6.1 判定条件
 
-- G4 门禁失败、线上出现 P1 级资产事件异常、或 SDK/前端与新包 ABI 不匹配且无法在前向修复。
+- G5（线上）门禁失败、线上出现 P1 级资产事件异常、或 SDK/前端与新包 ABI 不匹配且无法在前向修复。
 
 ### 6.2 血统废弃流程
 
@@ -217,7 +223,7 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 
 | # | 项 | 结论 | 依据 |
 |---|----|------|------|
-| 1 | Move 测试 424/424 | ✅ Go | [已实测] |
+| 1 | Move 测试 527/527 | ✅ Go | [已实测] |
 | 2 | SDK `tsc` 干净 | ✅ Go | [已实测] |
 | 3 | `next build` 成功（9/9 静态页） | ✅ Go | [已实测] |
 | 4 | Vercel Production Ready（HTTP 200） | ✅ Go | [已实测] |
@@ -245,7 +251,7 @@ git commit：
 UpgradeCap ID：
 tx digest：
 发布前余额 / 发布后余额：
-G1 / G2 / G3 / G4 结果：
+G1 / G2 / G3 / G4 / G5 结果：
 四处同步核对人：
 监控接入确认：
 回滚预案确认：

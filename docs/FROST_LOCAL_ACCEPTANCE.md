@@ -23,10 +23,10 @@
 
 | 门禁 | 结果 | 证明范围 |
 |---|---|---|
-| 全库离线测试 | 696/696（2026-10-25）→ 727/727（2026-11-23） | 包括 23 项私信 transport、7 项名册会话 recovery、88 项名册提交/回执来源/认证/重开恢复测试；回执加固累计增加 81 项 |
+| 全库离线测试 | 696/696（2026-10-25）→ 735/735（2026-11-24，`pnpm test` 含 crypto 与 i18n） | 包括 23 项私信 transport、7 项名册会话 recovery、88 项名册提交/回执来源/认证/重开恢复测试；回执加固累计增加 81 项 |
 | 聚焦门禁 | 107/107 | `group-roster-transactions`、`group-roster-session`、`frost-session`、`committee-device-store`；真实临时 Sui personal signatures 与 RFC 9591 运算，链上与钱包 I/O 注入 |
 | TypeScript | 0 错误 | 应用与新增浏览器 fixture |
-| ESLint | 0 error / 28 warning（既有 `no-explicit-any` 为主；改动文件 scoped lint 无诊断） | |
+| ESLint | app/components/lib 范围 0 error（`next lint` 口径）；全仓口径 2026-11-24 实测曾为 320 error / 63 warning（react-hooks 30、测试内 any 27、未用表达式 5、失效指令 1），I12 清理后 **0 error / 0 warning**（`eslint . --max-warnings 0` 退出 0，见 PRELAUNCH A6 注） | |
 | 生产构建 | 成功 | `pnpm build` 完成 lint/type/static generation |
 | Chromium IndexedDB | 9/9 | 真实浏览器存储、独立标签页、刷新及重建页面；含过期原回执持久化恢复，钱包/链上 I/O 注入 |
 | 应用浏览器回归 | 390px、1280px 各 16/16 | 无 pageerror、无页面或名册对话框横向溢出；含恢复拒绝与账户/provider 切换 |

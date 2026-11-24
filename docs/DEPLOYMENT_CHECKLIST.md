@@ -41,15 +41,15 @@ scheduled_payments.move            vault.move                    walrus_app_poli
 
 发布后可用只读命令核对模块映射：`sui client object <published-at> --json` 的 `content.Package.module_map`。这只证明模块存在，不证明本地源码等同于部署字节码或真实钱包生命周期通过。
 
-**NOT-DEPLOYED 说明**：`contracts/identity`（独立包，48/48 Move 测试通过）**从未部署**。前端 `NEXT_PUBLIC_IDENTITY_PACKAGE_ID` / `NEXT_PUBLIC_IDENTITY_NAMES_ID` 留空时，身份相关功能保持禁用；原生 SuiNS 不依赖它，仍可用。
+**部署状态**：`contracts/identity` v1 已部署 testnet（包 `0xba0780e7…9251e`，共享对象 `Names` `0x25193e4e…58d8294`；48/48 Move 测试通过）。前端 `NEXT_PUBLIC_IDENTITY_PACKAGE_ID` / `NEXT_PUBLIC_IDENTITY_NAMES_ID` 留空时，身份相关功能保持禁用；原生 SuiNS 不依赖它，仍可用。
 
 ### 1.3 构建与测试门禁
 
 ```bash
 cd contracts/agent_vault
 sui move build
-sui move test                 # 2026-11-24 实测 424/424；发布前重新运行
-sui move lint --warnings-are-errors
+sui move test                 # 2026-11-24 实测 527/527（identity 另 48/48）；发布前重新运行
+sui move lint --warnings-are-errors   # 两个包均须 0 告警（I12 起）
 ```
 
 **部署前必须全绿。** 任一项失败即停止。
@@ -220,7 +220,7 @@ sui client transfer \
 ```bash
 pnpm install
 pnpm exec tsc --noEmit                        # 期望 0 错误
-pnpm exec tsx --test lib/*.test.ts lib/crypto/*.test.ts   # 2026-11-23 实测 727/727
+pnpm test                                                   # lib + crypto + i18n，2026-11-24 实测 735/735
 pnpm build                                    # 生产构建
 ```
 
