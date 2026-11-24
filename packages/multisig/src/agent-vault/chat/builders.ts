@@ -25,8 +25,17 @@ function validateMessagePayload(walrusBlobId: Uint8Array, contentPreview: Uint8A
   if (walrusBlobId.length > CHAT_LIMITS.maxBlobIdBytes) throw new Error(`Walrus Blob ID 最多 ${CHAT_LIMITS.maxBlobIdBytes} 字节。`);
 }
 
-/** 经典无质押建群（兼容旧 ABI；利息 100% 进 Gas 代付池）。 */
+/** 建群入口的持久化输入预检（链上 create_channel_internal 顶部断言的镜像）：
+ * 频道名 ≤ 256 字节、初始成员 ≤ 256 人，超界在这里抛错而不是链上 6021/6022。 */
+function validateChannelCreation(name: string | Uint8Array, initialMembers: readonly string[]): void {
+  if (bytesOf(name).length > CHAT_LIMITS.maxChannelNameBytes) throw new Error(`频道名最多 ${CHAT_LIMITS.maxChannelNameBytes} 字节。`);
+  if (initialMembers.length > CHAT_LIMITS.maxInitialMembers) throw new Error(`初始成员最多 ${CHAT_LIMITS.maxInitialMembers} 人。`);
+}
+
+/** 经典无质押建群（兼容旧 ABI）：链上固定 `gas_subsidy_share_bps = 10000`、
+ * 其余分成为 0——之后经 `deposit_staking_yield` 存入的资金全部进 Gas 补贴池。 */
 export function buildCreateChannel(input: FinanceTransactionOptions & { packageId?: string; orgId: string; name: string | Uint8Array; initialMembers: string[] }): Transaction {
+  validateChannelCreation(input.name, input.initialMembers);
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
     target: chatTarget(input.packageId, 'create_channel'),
@@ -35,10 +44,11 @@ export function buildCreateChannel(input: FinanceTransactionOptions & { packageI
   return tx;
 }
 
-/** 质押建群：永久利息代付 Gas。 */
+/** 质押建群：质押本金不生息；Gas 补贴只来自主动存入（见 scallop 适配器注释）。 */
 export function buildCreateChannelWithStake(
   input: FinanceTransactionOptions & { packageId?: string; orgId: string; name: string | Uint8Array; initialMembers: string[]; stake: FinanceCoinSource },
 ): Transaction {
+  validateChannelCreation(input.name, input.initialMembers);
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
     target: chatTarget(input.packageId, 'create_channel_with_stake'),
@@ -61,8 +71,9 @@ export interface CreatorMonetizedChannelInput {
   memberRebateShareBps: bigint;
 }
 
-/** 星球/会员群：门票 + 保本质押 + 利息自动三路分润。 */
+/** 星球/会员群：门票 + 保本质押 + 存入资金三路分润（分润来自主动存入，无利息来源）。 */
 export function buildCreateCreatorMonetizedChannel(input: FinanceTransactionOptions & { packageId?: string }, monetized: CreatorMonetizedChannelInput): Transaction {
+  validateChannelCreation(monetized.name, []);
   const sum = monetized.creatorYieldShareBps + monetized.gasSubsidyShareBps + monetized.memberRebateShareBps;
   if (sum !== 10000n && sum !== 0n) throw new Error('三个分润基点之和必须为 10000（多路分润）或 0（全进 Gas 代付池）。');
   const tx = input.transaction ?? new Transaction();
@@ -137,6 +148,11 @@ export function buildPostMessagesSequential(
 ): Transaction {
   const tx = input.transaction ?? new Transaction();
   const noBlob = tx.pure.vector('u8', []);
+  // 批量路径逐条走单发预检：任何一条超界在这里抛错，而不是整笔 PTB
+  // 在链上以 E_MESSAGE_TOO_LONG 中止、白付一笔 gas。
+  for (const preview of contentPreviews) {
+    validateMessagePayload(new Uint8Array(0), bytesOf(preview));
+  }
   for (const preview of contentPreviews) {
     tx.moveCall({
       target: chatTarget(input.packageId, 'post_message'),

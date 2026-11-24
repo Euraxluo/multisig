@@ -1018,4 +1018,299 @@ module agent_vault::onchain_chat_tests {
 
         ts::end(scenario);
     }
+
+    // === 【I9】单条发信的载荷上界（成员与 Subagent 两个入口，与批量同界） ===
+
+    /// max_preview_bytes() + 1 = 4097 字节预览。
+    fun oversized_preview(): vector<u8> {
+        let mut v = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_preview_bytes() + 1) {
+            v.push_back(0);
+            index = index + 1;
+        };
+        v
+    }
+
+    /// max_blob_id_bytes() + 1 = 129 字节 blob id。
+    fun oversized_blob_id(): vector<u8> {
+        let mut v = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_blob_id_bytes() + 1) {
+            v.push_back(1);
+            index = index + 1;
+        };
+        v
+    }
+
+    /// 恰好等于上界的合法载荷：预览 4096 字节 + blob id 128 字节。
+    fun boundary_preview(): vector<u8> {
+        let mut v = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_preview_bytes()) {
+            v.push_back(2);
+            index = index + 1;
+        };
+        v
+    }
+
+    fun boundary_blob_id(): vector<u8> {
+        let mut v = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_blob_id_bytes()) {
+            v.push_back(3);
+            index = index + 1;
+        };
+        v
+    }
+
+    #[test]
+    #[expected_failure(abort_code = agent_vault::onchain_chat::E_MESSAGE_TOO_LONG)]
+    fun single_post_rejects_an_oversized_preview() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        onchain_chat::create_channel(DAO_ORG, b"Bounds", vector[ALICE], ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut channel = ts::take_shared<ChatChannel>(&scenario);
+            onchain_chat::post_message(
+                &mut channel, &clock, b"", oversized_preview(), ts::ctx(&mut scenario)
+            );
+            ts::return_shared(channel);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = agent_vault::onchain_chat::E_MESSAGE_TOO_LONG)]
+    fun single_post_rejects_an_oversized_blob_id() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        onchain_chat::create_channel(DAO_ORG, b"Bounds", vector[ALICE], ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut channel = ts::take_shared<ChatChannel>(&scenario);
+            onchain_chat::post_message(
+                &mut channel, &clock, oversized_blob_id(), b"ok", ts::ctx(&mut scenario)
+            );
+            ts::return_shared(channel);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = agent_vault::onchain_chat::E_MESSAGE_TOO_LONG)]
+    fun subagent_post_rejects_an_oversized_preview() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        onchain_chat::create_channel(DAO_ORG, b"Bounds", vector[ALICE], ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let channel = ts::take_shared<ChatChannel>(&scenario);
+            onchain_chat::create_shared_subagent_messaging_cap(
+                &channel, SUBAGENT_ALICE, 2_000_000, 10, ts::ctx(&mut scenario)
+            );
+            ts::return_shared(channel);
+        };
+
+        // 超长预览先于频控窗口推进：本条不发不耗额度
+        ts::next_tx(&mut scenario, SUBAGENT_ALICE);
+        {
+            let mut channel = ts::take_shared<ChatChannel>(&scenario);
+            let mut cap = ts::take_shared<SubagentMessagingCap>(&scenario);
+            onchain_chat::post_message_by_subagent(
+                &mut channel, &mut cap, &clock, b"", oversized_preview(), ts::ctx(&mut scenario)
+            );
+            ts::return_shared(cap);
+            ts::return_shared(channel);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = agent_vault::onchain_chat::E_MESSAGE_TOO_LONG)]
+    fun subagent_post_rejects_an_oversized_blob_id() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        onchain_chat::create_channel(DAO_ORG, b"Bounds", vector[ALICE], ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let channel = ts::take_shared<ChatChannel>(&scenario);
+            onchain_chat::create_shared_subagent_messaging_cap(
+                &channel, SUBAGENT_ALICE, 2_000_000, 10, ts::ctx(&mut scenario)
+            );
+            ts::return_shared(channel);
+        };
+
+        ts::next_tx(&mut scenario, SUBAGENT_ALICE);
+        {
+            let mut channel = ts::take_shared<ChatChannel>(&scenario);
+            let mut cap = ts::take_shared<SubagentMessagingCap>(&scenario);
+            onchain_chat::post_message_by_subagent(
+                &mut channel, &mut cap, &clock, oversized_blob_id(), b"ok", ts::ctx(&mut scenario)
+            );
+            ts::return_shared(cap);
+            ts::return_shared(channel);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    /// 边界值恰好合法：预览 4096 / blob id 128，成员入口成功发信。
+    #[test]
+    fun single_post_accepts_the_boundary_payload() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        onchain_chat::create_channel(DAO_ORG, b"Bounds", vector[ALICE], ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut channel = ts::take_shared<ChatChannel>(&scenario);
+            let events_before = batch_events().length();
+            onchain_chat::post_message(
+                &mut channel, &clock, boundary_blob_id(), boundary_preview(), ts::ctx(&mut scenario)
+            );
+            assert!(onchain_chat::message_sequence(&channel) == 1, 701);
+            // 事件载荷原样携带边界长度的 blob 与预览
+            let events = batch_events();
+            assert!(events.length() == events_before + 1, 702);
+            assert!(batch_blob(&events[events_before]).length() == onchain_chat::max_blob_id_bytes(), 703);
+            assert!(batch_preview(&events[events_before]).length() == onchain_chat::max_preview_bytes(), 704);
+            ts::return_shared(channel);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    /// 边界值恰好合法：预览 4096 / blob id 128，Subagent 入口成功发信。
+    #[test]
+    fun subagent_post_accepts_the_boundary_payload() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        onchain_chat::create_channel(DAO_ORG, b"Bounds", vector[ALICE], ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let channel = ts::take_shared<ChatChannel>(&scenario);
+            onchain_chat::create_shared_subagent_messaging_cap(
+                &channel, SUBAGENT_ALICE, 2_000_000, 10, ts::ctx(&mut scenario)
+            );
+            ts::return_shared(channel);
+        };
+
+        ts::next_tx(&mut scenario, SUBAGENT_ALICE);
+        {
+            let mut channel = ts::take_shared<ChatChannel>(&scenario);
+            let mut cap = ts::take_shared<SubagentMessagingCap>(&scenario);
+            onchain_chat::post_message_by_subagent(
+                &mut channel, &mut cap, &clock, boundary_blob_id(), boundary_preview(), ts::ctx(&mut scenario)
+            );
+            assert!(onchain_chat::message_sequence(&channel) == 1, 705);
+            assert!(onchain_chat::cap_messages_sent(&cap) == 1, 706);
+            ts::return_shared(cap);
+            ts::return_shared(channel);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    // === 【I9 增量】建群入口的持久化输入上界（name / initial_members） ===
+
+    /// 单个十六进制数字 → ASCII 字符（0-9 / a-f）。
+    fun member_hex_digit(d: u8): u8 {
+        if (d < 10) (48 + d) else (87 + d)
+    }
+
+    /// 由序号派生互不相同的成员地址（64 位 hex：前 62 位 '0' + i 的两位十六进制，
+    /// i 须 <= 255）。
+    fun nth_member(i: u64): address {
+        let mut hex = vector[
+            48u8, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48, 48,
+            48, 48,
+        ];
+        vector::push_back(&mut hex, member_hex_digit(((i / 16) as u8)));
+        vector::push_back(&mut hex, member_hex_digit(((i % 16) as u8)));
+        sui::address::from_ascii_bytes(&hex)
+    }
+
+    #[test]
+    #[expected_failure(abort_code = agent_vault::onchain_chat::E_NAME_TOO_LONG)]
+    fun channel_creation_rejects_an_oversized_name() {
+        let mut scenario = ts::begin(ALICE);
+        let mut name = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_channel_name_bytes() + 1) {
+            name.push_back(65); // 'A'
+            index = index + 1;
+        };
+        // 257 字节频道名：先于事件发射与对象创建拒绝
+        onchain_chat::create_channel(DAO_ORG, name, vector[ALICE, BOB], ts::ctx(&mut scenario));
+        ts::end(scenario);
+    }
+
+    #[test]
+    #[expected_failure(abort_code = agent_vault::onchain_chat::E_TOO_MANY_INITIAL_MEMBERS)]
+    fun channel_creation_rejects_too_many_initial_members() {
+        let mut scenario = ts::begin(ALICE);
+        // 257 个初始成员（长度断言先于去重，重复地址同样计入输入长度）
+        let mut members = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_initial_members() + 1) {
+            members.push_back(BOB);
+            index = index + 1;
+        };
+        onchain_chat::create_channel(DAO_ORG, b"Big", members, ts::ctx(&mut scenario));
+        ts::end(scenario);
+    }
+
+    /// 边界值恰好合法：频道名 256 字节 + 初始成员 256 个，建群成功。
+    #[test]
+    fun channel_creation_accepts_the_boundary_name_and_members() {
+        let mut scenario = ts::begin(ALICE);
+        let mut name = vector[];
+        let mut index: u64 = 0;
+        while (index < onchain_chat::max_channel_name_bytes()) {
+            name.push_back(66); // 'B'
+            index = index + 1;
+        };
+        let mut members = vector[];
+        index = 0;
+        while (index < onchain_chat::max_initial_members()) {
+            members.push_back(nth_member(index));
+            index = index + 1;
+        };
+        let _channel_id = onchain_chat::create_channel(DAO_ORG, name, members, ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let channel = ts::take_shared<ChatChannel>(&scenario);
+            assert!(onchain_chat::message_sequence(&channel) == 0, 710);
+            assert!(onchain_chat::is_member(&channel, nth_member(0)), 711);
+            assert!(onchain_chat::is_member(&channel, nth_member(255)), 712);
+            ts::return_shared(channel);
+        };
+
+        ts::end(scenario);
+    }
 }

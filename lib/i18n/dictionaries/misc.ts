@@ -153,7 +153,7 @@ export const misc: Domain = {
     "indexer.fundingDescription": "链上资金转账提案",
     // ---- lib/chat-outbox.ts ----
     "outbox.empty": "消息不能为空。",
-    "outbox.tooLong": "单条消息最多 4096 个字符。",
+    "outbox.tooLong": "单条消息最多 4096 字节（一个汉字占 3 字节）。",
     // ---- lib/message-crypto.ts ----
     "msgCrypto.empty": "消息不能为空，且最多 1000 字节。",
     "msgCrypto.tooLong": "消息长度超限。",
@@ -588,7 +588,7 @@ export const misc: Domain = {
     "indexer.fundingDescription": "On-chain funding transfer proposal",
     // ---- lib/chat-outbox.ts ----
     "outbox.empty": "The message cannot be empty.",
-    "outbox.tooLong": "A message is limited to 4096 characters.",
+    "outbox.tooLong": "A message is limited to 4096 bytes (a CJK character counts as 3).",
     // ---- lib/message-crypto.ts ----
     "msgCrypto.empty": "The message cannot be empty and is limited to 1000 bytes.",
     "msgCrypto.tooLong": "Message length exceeds the limit.",

@@ -14,18 +14,23 @@ module agent_vault::scallop_yield_adapter {
     const E_INSUFFICIENT_SSUI: u64 = 7003;
     const E_WRONG_CHANNEL: u64 = 7004;
     const E_ZERO_DEPOSIT: u64 = 7005;
+    /// 【I9 增量】赎回交割的收款地址为零地址：资金会随转账永久销毁。
+    const E_ZERO_RECIPIENT: u64 = 7006;
 
-    /// 标的 sSUI 模拟 Witness (对应 Scallop MarketCoin<SUI>)
+    /// 【如实声明·I4】本地占位 Witness 类型：Move.toml 没有 Scallop 依赖，链上
+    /// 不存在任何真实的 Coin<SSUI> 来源（仅测试可用 mint_for_testing 铸出）。
+    /// 适配器只做记账，未接入任何借贷协议，不会产生收益。
     public struct SSUI has drop {}
 
-    /// Scallop sSUI 智能群金库适配器 (管理 ChatChannel 对应的 sSUI 头寸与利息收割)
+    /// 频道资金的记账适配器（占位实现：管理 ChatChannel 对应的 sSUI 台账）。
+    /// 未接入 Scallop 或任何借贷协议，不生息、不自动增值。
     public struct ScallopVaultAdapter has key {
         id: UID,
         channel_id: ID,
         admin: address,
         total_staked_sui_principal: u64, // 存入的 SUI 原始本金 (保本基准线)
-        ssui_balance: Balance<SSUI>,      // 持有的 Scallop sSUI 份额 (按出块秒级连续升值)
-        total_harvested_yield_sui: u64,   // 累计已提取并注入群聊的利息总量 (MIST)
+        ssui_balance: Balance<SSUI>,      // 持有的占位 sSUI 份额 (无升值；真实 sSUI 未接入)
+        total_harvested_yield_sui: u64,   // 累计注入群聊的补贴/收益资金 (MIST，全部来自外部存入)
     }
 
     // --- 事件定义 ---
@@ -59,7 +64,7 @@ module agent_vault::scallop_yield_adapter {
         ssui_burned: u64,
     }
 
-    /// 1. 为指定聊天群创建 Scallop sSUI 生息适配金库
+    /// 1. 为指定聊天群创建记账适配金库（占位实现：不生息，未接入借贷协议）
     public fun create_scallop_adapter(
         channel: &ChatChannel,
         ctx: &mut TxContext
@@ -88,9 +93,11 @@ module agent_vault::scallop_yield_adapter {
         adapter_id
     }
 
-    /// 2. 记录一笔 Scallop 存入：PTB 里先调 Scallop::deposit(market, sui_coin) 拿到
-    /// Coin<SSUI>，再把返回的 sSUI 全额转入本适配器。记账的事实源是**实际收到的
-    /// sSUI 币值**——函数不收任何裸 u64，调用方无法申报未发生的存入。
+    /// 2. 记录一笔存入：把调用方传入的 Coin<SSUI> 全额转入本适配器。记账的
+    /// 事实源是**实际收到的 sSUI 币值**——函数不收任何裸 u64，调用方无法申报
+    /// 未发生的存入。
+    /// 注意（I4）：占位实现里没有 Scallop::deposit 可调，链上也没有真实
+    /// Coin<SSUI> 的铸造来源——接入真实协议前，此入口没有可用的生产路径。
     /// （修复 #21：旧签名收 sui_amount: u64 且无鉴权，任何人可用 coin::zero<SSUI>
     /// 把 total_staked_sui_principal 写成任意值。）
     public fun deposit_to_scallop(
@@ -113,7 +120,7 @@ module agent_vault::scallop_yield_adapter {
         });
     }
 
-    /// 3. PTB 第一步：从 sSUI 金库中切出用于赎回利息或本金的 sSUI 份额
+    /// 3. PTB 第一步：从 sSUI 台账中切出用于赎回本金（或外部处置）的 sSUI 份额
     public fun split_ssui_for_redemption(
         adapter: &mut ScallopVaultAdapter,
         ssui_to_redeem: u64,
@@ -125,15 +132,16 @@ module agent_vault::scallop_yield_adapter {
         coin::from_balance(split_bal, ctx)
     }
 
-    /// 4. PTB 第二步：将从 Scallop 借贷池兑回的原生 SUI 增值利息直接注入群聊合约！
-    /// 无论由 24h AI 哨兵自动执行，还是由发信人随手触发，都能单笔 PTB 毫秒级分流！
+    /// 4. 把一笔调用方自备的原生 SUI 注入群聊合约（I4：本适配器未接入任何
+    /// 借贷协议，不会自己产出收益——注入的每笔资金都来自外部）。
+    /// 无论由机器人定期执行，还是由发信人随手触发，都能单笔 PTB 完成注入。
     public fun feed_harvested_yield_to_chat(
         adapter: &mut ScallopVaultAdapter,
         channel: &mut ChatChannel,
         yield_sui: Coin<SUI>,
         ctx: &TxContext
     ) {
-        // 修复 #22：适配器只能向自己绑定频道注入收益；且仅 admin 可触发收割。
+        // 修复 #22：适配器只能向自己绑定频道注入收益；且仅 admin 可触发注入。
         assert!(ctx.sender() == adapter.admin, E_NOT_AUTHORIZED);
         assert!(object::id(channel) == adapter.channel_id, E_WRONG_CHANNEL);
         let yield_val = yield_sui.value();
@@ -141,7 +149,7 @@ module agent_vault::scallop_yield_adapter {
 
         adapter.total_harvested_yield_sui = adapter.total_harvested_yield_sui + yield_val;
 
-        // 原子注入 onchain_chat 触发三路智能分润 (70% 创作者 + 20% Gas池 + 10% 粉丝分红)
+        // 原子注入 onchain_chat，按频道各自配置的 bps 三路分润（示例 7000/2000/1000 并非固定值）
         onchain_chat::distribute_staking_yield(channel, yield_sui);
 
         event::emit(YieldHarvestedAndDistributedEvent {
@@ -153,7 +161,8 @@ module agent_vault::scallop_yield_adapter {
     }
 
     /// 5. 成员退群或群解散：本金对账清算。PTB 先用 split_ssui_for_redemption 切出
-    /// sSUI、经 Scallop::withdraw 兑回 Coin<SUI>，再把**实际兑回的币**传入本函数。
+    /// sSUI、在外部把份额处置成 Coin<SUI>（占位实现没有 Scallop::withdraw 可调），
+    /// 再把**实际收到的币**传入本函数。
     /// 事实源 = coin.value()（修复 #21 同病：旧签名收裸 u64，可对虚构基线"赎回"）。
     /// 币在函数内真实交付 recipient；ssui_burned 由传入的 sSUI 份额扣减记账。
     public fun record_principal_redemption(
@@ -166,6 +175,8 @@ module agent_vault::scallop_yield_adapter {
         assert!(ctx.sender() == adapter.admin, E_NOT_AUTHORIZED);
         let sui_val = sui_returned.value();
         assert!(sui_val > 0, E_NO_YIELD_AVAILABLE);
+        // 【I9 增量】零地址收款 = 资金永久销毁，先于台账扣减与真实交割拒绝。
+        assert!(recipient != @0x0, E_ZERO_RECIPIENT);
 
         if (adapter.total_staked_sui_principal >= sui_val) {
             adapter.total_staked_sui_principal = adapter.total_staked_sui_principal - sui_val;

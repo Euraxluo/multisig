@@ -31,6 +31,8 @@ module agent_vault::onchain_chat {
     const E_MESSAGE_TOO_LONG: u64 = 6018;
     const E_MEMBER_STAKE_AT_RISK: u64 = 6019;
     const E_CANNOT_REMOVE_CREATOR: u64 = 6020;
+    const E_NAME_TOO_LONG: u64 = 6021;
+    const E_TOO_MANY_INITIAL_MEMBERS: u64 = 6022;
 
     // 单条消息 Gas 报销常量 (1,000,000 MIST = 0.001 SUI)
     const GAS_REBATE_PER_MESSAGE: u64 = 1_000_000;
@@ -44,6 +46,14 @@ module agent_vault::onchain_chat {
     const MAX_PREVIEW_BYTES: u64 = 4096;
     const MAX_BLOB_ID_BYTES: u64 = 128;
 
+    /// 【I9 增量】频道名上限：name 原样进事件与共享对象，持久化输入必须有界
+    /// （与事件/标题类的 256 字节级对齐）。
+    const MAX_CHANNEL_NAME_BYTES: u64 = 256;
+
+    /// 【I9 增量】建群初始成员数上限：成员表是 Table（无隐含上限），初始
+    /// 名单作为单笔交易的持久化输入必须有界；后续付费进群路径不受此限。
+    const MAX_INITIAL_MEMBERS: u64 = 256;
+
     /// Fixed-point scale of the yield accumulator (`accrued MIST of yield per
     /// MIST of stake, times this scale`). Chosen so a 1-MIST stake over a pool
     /// of the entire SUI supply still resolves one distribution step without
@@ -51,6 +61,11 @@ module agent_vault::onchain_chat {
     const YIELD_ACC_SCALE: u128 = 1_000_000_000_000;
 
     /// 链上聊天频道（共享对象，管理频道成员、顺序序号、质押本金、Gas 补贴池与知识星球/OnlyFans 会员经济学）
+    ///
+    /// 如实声明：本合约没有任何收益来源——质押本金与各池都不生息，补贴池与
+    /// 分润池里的资金只能来自 deposit_staking_yield 的外部主动存入；发信照常
+    /// 消耗 Gas，报销仅在补贴池有余额时发生，每条最多 GAS_REBATE_PER_MESSAGE，
+    /// 池空即停。
     public struct ChatChannel has key {
         id: UID,
         org_id: address,
@@ -58,18 +73,18 @@ module agent_vault::onchain_chat {
         creator: address,
         members: Table<address, bool>,
         message_sequence: u64,
-        staked_principal: Balance<SUI>,    // 创建者质押建群本金 (保本，解散时 100% 原路退还创建者)
-        gas_subsidy_pool: Balance<SUI>,    // 质押利息注入的 Gas 代付池 (全自动为成员发信报销)
+        staked_principal: Balance<SUI>,    // 创建者质押建群本金 (保本不生息，解散时 100% 原路退还创建者)
+        gas_subsidy_pool: Balance<SUI>,    // Gas 代付补贴池 (初始为 0，只能经 deposit_staking_yield 存入；有余额才报销，池空即停)
         total_subsidized_gas: u64,         // 累计为全员代付补贴的 Gas 总量 (MIST)
         // 知识星球 / OnlyFans / 舰长会员群扩展经济学字段
         entry_fee: u64,                    // 门票收费 (归创作者，0 为无门票)
         required_member_stake: u64,        // 进群保本质押 (退群 100% 赎回，0 为无质押要求)
-        creator_yield_share_bps: u64,      // 创作者利息分润基点 (如 7000 = 70%)
+        creator_yield_share_bps: u64,      // 创作者收益分润基点 (如 7000 = 70%，分配存入资金)
         gas_subsidy_share_bps: u64,        // 聊天 Gas 代付池分润基点 (如 2000 = 20%)
-        member_rebate_share_bps: u64,      // 成员利息分红返还基点 (如 1000 = 10%)
+        member_rebate_share_bps: u64,      // 成员分红返还基点 (如 1000 = 10%，分配存入资金)
         members_staked_pool: Balance<SUI>, // 全体进群成员质押本金总池 (隔离保本)
-        creator_revenue_pool: Balance<SUI>,// 创作者收益金库 (门票收入 + 利息分润)
-        member_yield_pool: Balance<SUI>,   // 成员利息分红金库
+        creator_revenue_pool: Balance<SUI>,// 创作者收益金库 (门票收入 + 收益分润)
+        member_yield_pool: Balance<SUI>,   // 成员分红金库 (存入资金的成员份额)
         total_staked_members: u64,         // 当前质押进群的有效会员总数
     }
 
@@ -212,7 +227,9 @@ module agent_vault::onchain_chat {
         create_channel_internal(org_id, name, initial_members, balance::zero<SUI>(), 0, 0, 0, 10000, 0, ctx)
     }
 
-    /// 1b. 【质押建群 · 永动免费】质押 SUI 建立频道，享受永久利息代付 Gas！
+    /// 1b. 质押建群：质押 SUI 只作保本本金（解散时原路退还，不产生任何收益）。
+    /// 发信 Gas 报销另需补贴池有预存余额——池子初始为 0，由创建者或任何人
+    /// 经 deposit_staking_yield 存入，每条最多返还 GAS_REBATE_PER_MESSAGE，池空即停。
     public fun create_channel_with_stake(
         org_id: address,
         name: vector<u8>,
@@ -226,7 +243,8 @@ module agent_vault::onchain_chat {
         create_channel_internal(org_id, name, initial_members, principal, 0, 0, 0, 10000, 0, ctx)
     }
 
-    /// 1d. 【知识星球 / OnlyFans / 舰长群】支持入群门票收费 + 进群保本质押 + 利息自动多路分润！
+    /// 1d. 【知识星球 / OnlyFans / 舰长群】支持入群门票收费 + 进群保本质押 +
+    /// 收益自动多路分润（分配的是 deposit_staking_yield 存入的资金，非利息）！
     public fun create_creator_monetized_channel(
         org_id: address,
         name: vector<u8>,
@@ -265,6 +283,10 @@ module agent_vault::onchain_chat {
         member_rebate_share_bps: u64,
         ctx: &mut TxContext
     ): ID {
+        // 【I9 增量】三个建群入口共用同一界：先于事件发射与对象创建拒绝，
+        // 超界输入不留半成品频道。
+        assert!(name.length() <= MAX_CHANNEL_NAME_BYTES, E_NAME_TOO_LONG);
+        assert!(initial_members.length() <= MAX_INITIAL_MEMBERS, E_TOO_MANY_INITIAL_MEMBERS);
         assert!(creator_yield_share_bps + gas_subsidy_share_bps + member_rebate_share_bps == 10000 || (creator_yield_share_bps + gas_subsidy_share_bps + member_rebate_share_bps == 0), E_INVALID_BPS_SUM);
         let uid = object::new(ctx);
         let channel_id = object::uid_to_inner(&uid);
@@ -318,7 +340,9 @@ module agent_vault::onchain_chat {
         channel_id
     }
 
-    /// 1c. 注入质押利息收益：支持自动多路分润 (创作者收益 + 聊天 Gas 代付池 + 会员分红)
+    /// 1c. 注入收益/补贴资金（permissionless）：本合约不产生利息，池子里的
+    /// 每一分钱都来自有人主动存入。普通频道 100% 进 Gas 代付补贴池；星球/
+    /// 会员频道按 bps 多路分润 (创作者收益 + 聊天 Gas 代付池 + 会员分红)。
     public fun deposit_staking_yield(
         channel: &mut ChatChannel,
         yield_coin: Coin<SUI>
@@ -377,7 +401,8 @@ module agent_vault::onchain_chat {
         };
     }
 
-    /// 内部自动化 Gas 报销辅助函数：将利息代付金额直接打回交易发送者地址！
+    /// 内部 Gas 补贴辅助函数：补贴池余额不低于 K × GAS_REBATE_PER_MESSAGE 时，
+    /// 把该金额直接打回交易发送者地址；池子不足或为空则静默跳过（不报错、不垫付）。
     ///
     /// 【审计 T01/M】报销按消息数计价：一次调用发 K 条消息只拿 K ×
     /// GAS_REBATE_PER_MESSAGE，与逐条发信成本等价，堵死"批量摊薄固定
@@ -511,7 +536,7 @@ module agent_vault::onchain_chat {
         });
     }
 
-    /// 4. 主账号自身亲自发信（带自动化 Gas 报销）
+    /// 4. 主账号自身亲自发信（补贴池有余额时报销每条 GAS_REBATE_PER_MESSAGE）
     public fun post_message(
         channel: &mut ChatChannel,
         clock: &Clock,
@@ -521,6 +546,9 @@ module agent_vault::onchain_chat {
     ) {
         let sender = ctx.sender();
         assert!(channel.members.contains(sender), E_NOT_CHANNEL_MEMBER);
+        // 【I9】单条入口与 post_message_batch 同界：超长载荷不得推进序号。
+        assert!(content_preview.length() <= MAX_PREVIEW_BYTES, E_MESSAGE_TOO_LONG);
+        assert!(walrus_blob_id.length() <= MAX_BLOB_ID_BYTES, E_MESSAGE_TOO_LONG);
 
         channel.message_sequence = channel.message_sequence + 1;
         let channel_id = object::uid_to_inner(&channel.id);
@@ -535,11 +563,11 @@ module agent_vault::onchain_chat {
             timestamp_ms: clock.timestamp_ms(),
         });
 
-        // 自动从质押生息池为用户全额返还 Gas！
+        // 补贴池有预存余额才报销，每条最多 GAS_REBATE_PER_MESSAGE，池空即停。
         auto_subsidize_gas(channel, sender, 1, ctx);
     }
 
-    /// 5. Subagent 免密自主发信（带自动化 Gas 报销，净花费 0 SUI）
+    /// 5. Subagent 免密自主发信（补贴池有余额时报销每条 GAS_REBATE_PER_MESSAGE）
     public fun post_message_by_subagent(
         channel: &mut ChatChannel,
         cap: &mut SubagentMessagingCap,
@@ -565,7 +593,12 @@ module agent_vault::onchain_chat {
         // 强校验 4: 主账号必须仍在频道成员列表中
         assert!(channel.members.contains(cap.master_owner), E_NOT_CHANNEL_MEMBER);
 
-        // 强校验 5: 频控速率限制 (60秒滑动窗口)
+        // 强校验 5: 载荷长度与 post_message_batch 同界（先于频控与序号推进，
+        // 超长载荷不消耗频控额度、不推进序号）
+        assert!(content_preview.length() <= MAX_PREVIEW_BYTES, E_MESSAGE_TOO_LONG);
+        assert!(walrus_blob_id.length() <= MAX_BLOB_ID_BYTES, E_MESSAGE_TOO_LONG);
+
+        // 强校验 6: 频控速率限制 (60秒滑动窗口)
         // #20: 复位分支同样受限 — rate_limit 0 的 Cap 连第一条消息都发不出，
         // 否则刷屏者只需等待窗口翻转即可每分钟白嫖一条。
         if (now >= cap.window_start_ms + 60_000) {
@@ -589,7 +622,7 @@ module agent_vault::onchain_chat {
             timestamp_ms: now,
         });
 
-        // 自动从质押生息池为 Subagent 报销 Gas 代付！
+        // 补贴池有预存余额才报销，每条最多 GAS_REBATE_PER_MESSAGE，池空即停。
         auto_subsidize_gas(channel, sender, 1, ctx);
     }
 
@@ -597,8 +630,9 @@ module agent_vault::onchain_chat {
     ///
     /// `content_previews[i]` 与 `walrus_blob_ids[i]` 一一对应。每条仍然依次占用
     /// 一个 `message_sequence` 并发出独立事件，所以读取端、排序与既有 ABI 完全不变；
-    /// 区别只在交易层：一次签名、一次证明、一次共享对象变更，并且整批只做一次
-    /// 0.001 SUI 报销转账。批量上限 32 条，空批次、长度不一致或单条超长都直接拒绝。
+    /// 区别只在交易层：一次签名、一次证明、一次共享对象变更，并且整批只做
+    /// 一次「条数 × GAS_REBATE_PER_MESSAGE」的报销转账（补贴池有余额才返还，
+    /// 池空即停）。批量上限 32 条，空批次、长度不一致或单条超长都直接拒绝。
     public fun post_message_batch(
         channel: &mut ChatChannel,
         clock: &Clock,
@@ -775,7 +809,7 @@ module agent_vault::onchain_chat {
         transfer::public_transfer(receipt, ctx.sender());
     }
 
-    /// 8. 创作者随时提现群收益 (门票收入 + 70% 生息分润)
+    /// 8. 创作者随时提现群收益 (门票收入 + 按频道 bps 配置的收益分润)
     public fun claim_creator_revenue(
         channel: &mut ChatChannel,
         ctx: &mut TxContext
@@ -806,7 +840,7 @@ module agent_vault::onchain_chat {
         transfer::public_transfer(claim_coin, ctx.sender());
     }
 
-    /// 9. 成员退群：交还凭证，100% 赎回质押本金 + 按质押加权的利息分红
+    /// 9. 成员退群：交还凭证，100% 赎回质押本金 + 按质押加权的存入资金分红
     /// (分红只累计入群之后的分配，快进快出无法染指存量分红池)
     public fun member_unstake_and_leave(
         channel: &mut ChatChannel,
@@ -992,5 +1026,20 @@ module agent_vault::onchain_chat {
     #[test_only]
     public fun max_preview_bytes(): u64 {
         MAX_PREVIEW_BYTES
+    }
+
+    #[test_only]
+    public fun max_blob_id_bytes(): u64 {
+        MAX_BLOB_ID_BYTES
+    }
+
+    #[test_only]
+    public fun max_channel_name_bytes(): u64 {
+        MAX_CHANNEL_NAME_BYTES
+    }
+
+    #[test_only]
+    public fun max_initial_members(): u64 {
+        MAX_INITIAL_MEMBERS
     }
 }

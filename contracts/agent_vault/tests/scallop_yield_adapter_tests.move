@@ -222,4 +222,37 @@ module agent_vault::scallop_yield_adapter_tests {
         };
         ts::end(scenario);
     }
+
+    /// 【I9 增量】赎回交割到 @0x0 → 7006 (E_ZERO_RECIPIENT)：先于台账扣减与
+    /// 真实交割拒绝，资金不得随转账永久销毁。
+    #[test]
+    #[expected_failure(abort_code = scallop_yield_adapter::E_ZERO_RECIPIENT, location = agent_vault::scallop_yield_adapter)]
+    fun redemption_to_zero_recipient_is_rejected() {
+        let mut scenario = ts::begin(ALICE);
+        let creator_stake = coin::mint_for_testing<SUI>(100_000_000_000, ts::ctx(&mut scenario));
+        let _channel_id = onchain_chat::create_creator_monetized_channel(
+            DAO_ORG, b"Zero Recipient", creator_stake, 0, 50_000_000_000, 7000, 2000, 1000,
+            ts::ctx(&mut scenario)
+        );
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let channel = ts::take_shared<ChatChannel>(&scenario);
+            scallop_yield_adapter::create_scallop_adapter(&channel, ts::ctx(&mut scenario));
+            ts::return_shared(channel);
+        };
+
+        // admin 试图把赎回本金交割给 @0x0 → abort 7006
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut adapter = ts::take_shared<ScallopVaultAdapter>(&scenario);
+            let redeemed = coin::mint_for_testing<SUI>(1_000_000, ts::ctx(&mut scenario));
+            scallop_yield_adapter::record_principal_redemption(
+                &mut adapter, redeemed, 0, @0x0, ts::ctx(&mut scenario)
+            );
+            ts::return_shared(adapter);
+        };
+
+        ts::end(scenario);
+    }
 }

@@ -105,7 +105,7 @@ export const RED_PACKET_ERRORS: Readonly<Record<number, { name: string; message:
   14: { name: 'ENotExpired', message: 'Refund must occur strictly after the expiry millisecond.' },
 };
 
-/** cryptographic_org 数字错误码（1004 已随清理删除，不在表内；创建与改册统一用 EUnreachableThreshold）。 */
+/** cryptographic_org 数字错误码（1004 已随清理删除，不在表内；创建与改册统一用 EUnreachableThreshold；1013 为 I9 新增零地址防线）。 */
 export const ORG_ERRORS: Readonly<Record<number, string>> = {
   1001: 'E_INVALID_SIGNATURE',
   1002: 'E_PROPOSAL_ALREADY_EXECUTED',
@@ -118,6 +118,7 @@ export const ORG_ERRORS: Readonly<Record<number, string>> = {
   1010: 'E_INVALID_POP',
   1011: 'E_GENESIS_LOCKED',
   1012: 'E_KEY_SIGNER_SHORTFALL',
+  1013: 'E_ZERO_RECIPIENT',
 };
 
 /**
@@ -131,7 +132,8 @@ export const ORG_NAMED_ERRORS: Readonly<Record<number, { name: string; message: 
   4: { name: 'EKeySignerRemoved', message: 'Removing a key signer from the roster requires rotating the group key first.' },
 };
 
-/** agent_vault::vault 数字错误码（2001–2011 与合约常量逐一对齐）。 */
+/** agent_vault::vault 数字错误码（2001–2015 与合约常量逐一对齐；2011 在合约中不存在——
+ * 2012 起 E_EXCEEDS_AGENT_BUDGET_CAP、2015 为 E_INVALID_SERVICE_HASH）。 */
 export const VAULT_ERRORS: Readonly<Record<number, string>> = {
   2001: 'E_EXCEEDED_DAILY_QUOTA',
   2002: 'E_AGENT_PAUSED',
@@ -143,10 +145,10 @@ export const VAULT_ERRORS: Readonly<Record<number, string>> = {
   2008: 'E_AGENT_NOT_FOUND',
   2009: 'E_AGENT_LIMIT_REACHED',
   2010: 'E_AGENT_ALREADY_SPAWNED',
-  2011: 'E_INVALID_SERVICE_HASH',
   2012: 'E_EXCEEDS_AGENT_BUDGET_CAP',
   2013: 'E_EXCEEDS_EPOCH_OUTFLOW',
   2014: 'E_ZERO_RECIPIENT',
+  2015: 'E_INVALID_SERVICE_HASH',
 };
 
 /** asynchronous_proposal 数字错误码（2701 门限签名校验失败，与合约逐一对齐）。 */
@@ -229,10 +231,14 @@ export const GOVERNANCE_POLL_ERRORS: Readonly<Record<number, { name: string; mes
   12: { name: 'EInvalidBallot', message: 'Ballot must contain distinct valid indices with the cardinality required by the poll mode.' },
 };
 
+/** scallop_yield_adapter 数字错误码（7001–7006 与合约常量逐一对齐；7004/7005 为既有码补录，7006 为 I9 新增零地址防线）。 */
 export const SCALLOP_ERRORS: Readonly<Record<number, string>> = {
   7001: 'E_NOT_AUTHORIZED',
   7002: 'E_NO_YIELD_AVAILABLE',
   7003: 'E_INSUFFICIENT_SSUI',
+  7004: 'E_WRONG_CHANNEL',
+  7005: 'E_ZERO_DEPOSIT',
+  7006: 'E_ZERO_RECIPIENT',
 };
 
 export const WALRUS_POLICY_ERRORS: Readonly<Record<number, { name: string; message: string }>> = {
@@ -258,7 +264,7 @@ export const WALRUS_POLICY_ERRORS: Readonly<Record<number, { name: string; messa
   20: { name: 'EExceededEpochBudget', message: "Actual payment coin value must fit the app's remaining epoch budget." },
 };
 
-/** onchain_chat 数字错误码（6001–6020 与合约常量逐一对齐）。 */
+/** onchain_chat 数字错误码（6001–6022 与合约常量逐一对齐；6021/6022 为 I9 新增建群输入上界）。 */
 export const CHAT_ERRORS: Readonly<Record<number, string>> = {
   6001: 'E_NOT_CHANNEL_MEMBER',
   6002: 'E_CAP_EXPIRED',
@@ -280,6 +286,8 @@ export const CHAT_ERRORS: Readonly<Record<number, string>> = {
   6018: 'E_MESSAGE_TOO_LONG',
   6019: 'E_MEMBER_STAKE_AT_RISK',
   6020: 'E_CANNOT_REMOVE_CREATOR',
+  6021: 'E_NAME_TOO_LONG',
+  6022: 'E_TOO_MANY_INITIAL_MEMBERS',
 };
 
 /** 治理事件名；匹配时必须同时固定完整类型来源包，不能仅比较后缀。 */
@@ -289,6 +297,15 @@ export const GOVERNANCE_EVENTS = {
   groupKeyRotated: 'cryptographic_org::GroupKeyRotatedEvent',
   rosterUpdated: 'cryptographic_org::RosterUpdatedEvent',
   organizationCreated: 'cryptographic_org::OrganizationCreatedEvent',
+} as const;
+
+/**
+ * vault 审计事件名（I9 新增的两条；同 GOVERNANCE_EVENTS 约定，匹配时固定
+ * 完整类型来源包）。调额与解暂停改变资金可用性，链下监控必须可观测。
+ */
+export const VAULT_EVENTS = {
+  agentBudgetUpdated: 'vault::AgentBudgetUpdatedEvent',
+  vaultUnpaused: 'vault::VaultUnpausedEvent',
 } as const;
 
 /** 把执行回执里的 MoveAbort 子状态翻译成可读错误。 */

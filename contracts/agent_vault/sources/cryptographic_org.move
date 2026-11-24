@@ -55,6 +55,9 @@ module agent_vault::cryptographic_org {
     /// Confirmed-but-not-attested members left the key-signer roster smaller
     /// than the DKG key threshold: the finalized key could never be signed for.
     const E_KEY_SIGNER_SHORTFALL: u64 = 1012;
+    /// 【I9】创世质押提取的收款地址为零地址：资金会随转账永久销毁（先于
+    /// 摘要计算与签名校验拒绝，无需为 @0x0 摘要准备签名）。
+    const E_ZERO_RECIPIENT: u64 = 1013;
     /// The caller of create_organization_from_session is not a session
     /// participant (mirrors dkg_committee::E_NOT_A_PARTICIPANT = 3001).
     const E_NOT_A_PARTICIPANT: u64 = 3001;
@@ -689,6 +692,8 @@ module agent_vault::cryptographic_org {
     /// 安全约束：
     ///   - 协议级硬锁：clock.timestamp_ms() >= genesis_unlock_at_ms 才可提取，
     ///     任何门限签名、任何治理动作都无法提前解锁（E_GENESIS_LOCKED）。
+    ///   - 收款地址必须非零（【I9】E_ZERO_RECIPIENT）：转给 @0x0 即永久销毁，
+    ///     门限签名摘要里的 recipient 也必须是真实地址。
     ///   - 域隔离 + 单调 nonce + epoch 绑定（与 advance_organization_epoch 同型）。
     ///   - 金额必须为正且不超过余额；部分提取允许，提取后余额可继续为零。
     /// 网络信号读取方：live 质押 = genesis_bonded_total() - genesis_withdrawn()。
@@ -704,6 +709,7 @@ module agent_vault::cryptographic_org {
         assert!(nonce > org.last_nonce, E_INVALID_NONCE);
         assert!(clock.timestamp_ms() >= org.genesis_unlock_at_ms, E_GENESIS_LOCKED);
         assert!(amount > 0 && amount <= org.genesis_stake.value(), E_GENESIS_LOCKED);
+        assert!(recipient != @0x0, E_ZERO_RECIPIENT);
 
         let org_id = object::uid_to_inner(&org.id);
         let digest = compute_genesis_withdraw_digest(

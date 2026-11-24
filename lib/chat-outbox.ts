@@ -19,7 +19,9 @@ const key = (channelId: string) => channelId.toLowerCase()
 export function enqueueChatMessage(channelId: string, text: string): { queued: number; full: boolean } {
   const value = text.trim()
   if (!value) throw new Error(t("misc.outbox.empty"))
-  if (value.length > 4_096) throw new Error(t("misc.outbox.tooLong"))
+  // 链上界是 UTF-8 字节数（onchain_chat E_MESSAGE_TOO_LONG，4096 字节），
+  // 不是字符数：1500 个汉字是 4500 字节，按 .length 放行会在链上被拒。
+  if (new TextEncoder().encode(value).length > 4_096) throw new Error(t("misc.outbox.tooLong"))
   const current = outboxes.get(key(channelId)) ?? []
   if (current.length >= MAX_OUTBOX_MESSAGES) return { queued: current.length, full: true }
   current.push(value)

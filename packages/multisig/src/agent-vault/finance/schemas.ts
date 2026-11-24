@@ -60,6 +60,13 @@ export const PaymentCreatedBcs = bcs.struct('PaymentCreated', {
   payment_id: bcs.Address, recipient: bcs.Address, scope: bcs.Address, name: bcs.vector(bcs.u8()),
   schedule: ScheduleBcs, start_ms: bcs.u64(), funded: bcs.u64(),
 });
+
+/** vault::AgentBudgetUpdatedEvent（I9：Operator 调额审计事件，老/新额度成对）。 */
+export const AgentBudgetUpdatedBcs = bcs.struct('AgentBudgetUpdatedEvent', {
+  vault_id: bcs.Address, agent_id: bcs.Address, old_daily_budget: bcs.u64(), new_daily_budget: bcs.u64(),
+});
+/** vault::VaultUnpausedEvent（I9：Master 解除全金库暂停审计事件）。 */
+export const VaultUnpausedBcs = bcs.struct('VaultUnpausedEvent', { vault_id: bcs.Address });
 export type PaymentSnapshot = ReturnType<typeof PaymentBcs.parse> & { coinType: string; capId?: string };
 
 /** BCS parse alone can accept trailing bytes. Roundtrip requires the exact canonical layout. */

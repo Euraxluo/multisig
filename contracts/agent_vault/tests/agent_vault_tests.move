@@ -490,6 +490,214 @@ module agent_vault::agent_vault_tests {
         ts::end(scenario);
     }
 
+    // ===== 【I9】合约边界回归：零地址收款、清除登记表、缺失事件 =====
+
+    /// 【I9】Master 提现到 @0x0 → E_ZERO_RECIPIENT。断言先于 epoch 记账与
+    /// 余额切分，Move abort 原子回滚保证金库余额不变。
+    #[test]
+    #[expected_failure(abort_code = agent_vault::vault::E_ZERO_RECIPIENT)]
+    fun test_withdraw_to_zero_recipient_rejected() {
+        let mut scenario = ts::begin(ALICE);
+        let master_cap = vault::initialize_vault<SUI>(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            let coin = coin::mint_for_testing<SUI>(100, ts::ctx(&mut scenario));
+            vault::deposit(&mut vault, coin);
+
+            vault::withdraw(&master_cap, &mut vault, 20, @0x0, ts::ctx(&mut scenario));
+
+            ts::return_shared(vault);
+        };
+
+        vault::destroy_master_cap_for_testing(master_cap);
+        ts::end(scenario);
+    }
+
+    /// 【I9】紧急清除扫款到 @0x0 → E_ZERO_RECIPIENT：整仓资金不得随转账销毁。
+    #[test]
+    #[expected_failure(abort_code = agent_vault::vault::E_ZERO_RECIPIENT)]
+    fun test_purge_to_zero_sweep_recipient_rejected() {
+        let mut scenario = ts::begin(ALICE);
+        let master_cap = vault::initialize_vault<SUI>(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            let coin = coin::mint_for_testing<SUI>(100, ts::ctx(&mut scenario));
+            vault::deposit(&mut vault, coin);
+
+            vault::emergency_unilateral_purge(&master_cap, &mut vault, @0x0, ts::ctx(&mut scenario));
+
+            ts::return_shared(vault);
+        };
+
+        vault::destroy_master_cap_for_testing(master_cap);
+        ts::end(scenario);
+    }
+
+    /// 【I9】清除废表：purge 后 agents 清空、total_subagents 归零；Master
+    /// 重新签发 Operator 后可对同址重新发卡（旧实现会命中 E_AGENT_ALREADY_SPAWNED）。
+    #[test]
+    fun test_purge_clears_agent_registry_and_allows_respawn() {
+        let mut scenario = ts::begin(ALICE);
+        let master_cap = vault::initialize_vault<SUI>(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            let coin = coin::mint_for_testing<SUI>(100, ts::ctx(&mut scenario));
+            vault::deposit(&mut vault, coin);
+            vault::issue_operator_cap(&master_cap, &vault, BOB, ts::ctx(&mut scenario));
+            vault::set_outflow_policy(&master_cap, &mut vault, 1_000_000_000, 1_000_000_000);
+            ts::return_shared(vault);
+        };
+
+        ts::next_tx(&mut scenario, BOB);
+        {
+            let op_cap = ts::take_from_sender<OperatorCap>(&scenario);
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::spawn_agent_card(&op_cap, &mut vault, CHARLIE_AGENT, 30, b"x402_hash", ts::ctx(&mut scenario));
+            assert!(vault::agent_count(&vault) == 1, 90);
+            assert!(vault::total_subagents(&vault) == 1, 91);
+            ts::return_to_sender(&scenario, op_cap);
+            ts::return_shared(vault);
+        };
+
+        // Master 紧急清除：凭证与登记表一并废除
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::emergency_unilateral_purge(&master_cap, &mut vault, ALICE, ts::ctx(&mut scenario));
+
+            assert!(vault::vault_balance(&vault) == 0, 92);
+            assert!(vault::vault_version(&vault) == 2, 93);
+            assert!(vault::is_vault_paused(&vault), 94);
+            assert!(vault::agent_count(&vault) == 0, 95);
+            assert!(vault::total_subagents(&vault) == 0, 96);
+
+            ts::return_shared(vault);
+        };
+
+        // 验证 ALICE 收到扫出的 100 SUI；同 tx 重新签发 Operator（新版本号）给 RECIPIENT
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let swept_coin = ts::take_from_sender<coin::Coin<SUI>>(&scenario);
+            assert!(coin::value(&swept_coin) == 100, 97);
+            ts::return_to_sender(&scenario, swept_coin);
+
+            let vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::issue_operator_cap(&master_cap, &vault, RECIPIENT, ts::ctx(&mut scenario));
+            ts::return_shared(vault);
+        };
+
+        // 新 Operator 可对被废的同址重新发卡：登记表已清空，不再占用名额
+        ts::next_tx(&mut scenario, RECIPIENT);
+        {
+            let op_cap = ts::take_from_sender<OperatorCap>(&scenario);
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::spawn_agent_card(&op_cap, &mut vault, CHARLIE_AGENT, 50, b"x402_hash_v2", ts::ctx(&mut scenario));
+            assert!(vault::agent_count(&vault) == 1, 98);
+            assert!(vault::total_subagents(&vault) == 1, 99);
+            assert!(vault::agent_daily_limit(&vault, CHARLIE_AGENT) == 50, 100);
+            ts::return_to_sender(&scenario, op_cap);
+            ts::return_shared(vault);
+        };
+
+        vault::destroy_master_cap_for_testing(master_cap);
+        ts::end(scenario);
+    }
+
+    /// 【I9】set_agent_budget 发 AgentBudgetUpdatedEvent：老/新额度成对可审计。
+    #[test]
+    fun test_set_agent_budget_emits_event() {
+        let mut scenario = ts::begin(ALICE);
+        let master_cap = vault::initialize_vault<SUI>(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            let coin = coin::mint_for_testing<SUI>(100, ts::ctx(&mut scenario));
+            vault::deposit(&mut vault, coin);
+            vault::issue_operator_cap(&master_cap, &vault, BOB, ts::ctx(&mut scenario));
+            vault::set_outflow_policy(&master_cap, &mut vault, 1_000_000_000, 1_000_000_000);
+            ts::return_shared(vault);
+        };
+
+        ts::next_tx(&mut scenario, BOB);
+        {
+            let op_cap = ts::take_from_sender<OperatorCap>(&scenario);
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::spawn_agent_card(&op_cap, &mut vault, CHARLIE_AGENT, 30, b"x402_hash", ts::ctx(&mut scenario));
+            vault::set_agent_budget(&op_cap, &mut vault, CHARLIE_AGENT, 80);
+            assert!(vault::agent_daily_limit(&vault, CHARLIE_AGENT) == 80, 101);
+
+            let events = sui::event::events_by_type<vault::AgentBudgetUpdatedEvent>();
+            assert!(events.length() == 1, 102);
+            let e = vector::borrow(&events, 0);
+            let (vault_id, agent_id, old_budget, new_budget) = vault::agent_budget_updated_fields_for_testing(e);
+            assert!(vault_id == vault::master_vault_id(&master_cap), 103);
+            assert!(agent_id == CHARLIE_AGENT, 104);
+            assert!(old_budget == 30, 105);
+            assert!(new_budget == 80, 106);
+
+            ts::return_to_sender(&scenario, op_cap);
+            ts::return_shared(vault);
+        };
+
+        vault::destroy_master_cap_for_testing(master_cap);
+        ts::end(scenario);
+    }
+
+    /// 【I9】unpause_vault 发 VaultUnpausedEvent：解除全金库暂停可审计。
+    #[test]
+    fun test_unpause_vault_emits_event() {
+        let mut scenario = ts::begin(ALICE);
+        let master_cap = vault::initialize_vault<SUI>(ts::ctx(&mut scenario));
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            let coin = coin::mint_for_testing<SUI>(100, ts::ctx(&mut scenario));
+            vault::deposit(&mut vault, coin);
+            ts::return_shared(vault);
+        };
+
+        // 先熔断（唯一把 paused 置 true 的入口），再解除
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::emergency_unilateral_purge(&master_cap, &mut vault, ALICE, ts::ctx(&mut scenario));
+            assert!(vault::is_vault_paused(&vault), 107);
+            ts::return_shared(vault);
+        };
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let swept_coin = ts::take_from_sender<coin::Coin<SUI>>(&scenario);
+            assert!(coin::value(&swept_coin) == 100, 108);
+            ts::return_to_sender(&scenario, swept_coin);
+        };
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut vault = ts::take_shared<AgentVault<SUI>>(&scenario);
+            vault::unpause_vault(&master_cap, &mut vault);
+            assert!(!vault::is_vault_paused(&vault), 109);
+
+            let events = sui::event::events_by_type<vault::VaultUnpausedEvent>();
+            assert!(events.length() == 1, 110);
+            let e = vector::borrow(&events, 0);
+            assert!(vault::vault_unpaused_fields_for_testing(e) == vault::master_vault_id(&master_cap), 111);
+
+            ts::return_shared(vault);
+        };
+
+        vault::destroy_master_cap_for_testing(master_cap);
+        ts::end(scenario);
+    }
+
     #[test]
     fun test_cryptographic_org_initialization() {
         let mut scenario = ts::begin(ALICE);

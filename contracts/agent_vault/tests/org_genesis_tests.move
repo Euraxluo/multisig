@@ -358,6 +358,27 @@ fun withdraw_over_amount_aborts() {
         ts::end(s);
 }
 
+/// 【I9】零地址收款：先于摘要计算与签名校验拒绝（E_ZERO_RECIPIENT = 1013，
+/// 无需为 @0x0 的摘要准备签名 fixture）；abort 原子回滚保证质押余额与 nonce 不变。
+#[test, expected_failure(abort_code = org::E_ZERO_RECIPIENT, location = agent_vault::cryptographic_org)]
+fun withdraw_to_zero_recipient_aborts_1013() {
+    let (mut s, _org_id) = start_org_with_stake(UNLOCK_AT);
+    let mut clock = clock::create_for_testing(ctx(&mut s));
+    clock::set_for_testing(&mut clock, UNLOCK_AT + 1);
+
+    ts::next_tx(&mut s, ALICE);
+    {
+        let mut org_obj = ts::take_shared<Organization>(&s);
+        org::withdraw_genesis_stake(
+            &mut org_obj, 1, 7_000, @0x0, GARBAGE_SIG_64, &clock, ctx(&mut s),
+        );
+        ts::return_shared(org_obj);
+    };
+
+    clock::destroy_for_testing(clock);
+    ts::end(s);
+}
+
 /// 打印器：一次性确定 ORG_ID（test_scenario 内确定性派生），
 /// 之后用 SK1 对 compute_genesis_withdraw_digest 的字节离线签名，
 /// 把签名回填进 WITHDRAW_SIG_N1_A / WITHDRAW_SIG_N2_A 常量。

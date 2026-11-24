@@ -139,6 +139,19 @@ module agent_vault::vault {
         is_active: bool,
     }
 
+    /// 【I9】Operator 按 Agent 地址调额的审计事件：改变资金上限必须可观测。
+    public struct AgentBudgetUpdatedEvent has copy, drop {
+        vault_id: ID,
+        agent_id: address,
+        old_daily_budget: u64,
+        new_daily_budget: u64,
+    }
+
+    /// 【I9】Master 解除全金库暂停的审计事件：解 pause 与加 pause 必须同样可观测。
+    public struct VaultUnpausedEvent has copy, drop {
+        vault_id: ID,
+    }
+
     // --- 核心方法 ---
 
     /// 1. 初始化金库 (颁发 MasterCap 给调用者)
@@ -194,6 +207,8 @@ module agent_vault::vault {
     ) {
         assert!(master.vault_id == object::uid_to_inner(&vault.id), E_UNAUTHORIZED_OPERATOR);
         assert!(amount > 0, E_ZERO_AMOUNT);
+        // 【I9】零地址收款 = 资金永久销毁，与 spend 路径同一防线（E_ZERO_RECIPIENT）。
+        assert!(recipient != @0x0, E_ZERO_RECIPIENT);
         assert!(vault.balance.value() >= amount, E_INSUFFICIENT_VAULT_BALANCE);
 
         // 【审计 M-01】Master 出口同样记账 epoch_outflow，使该上限对所有出金入口成立；
@@ -323,7 +338,16 @@ module agent_vault::vault {
 
         let record = vec_map::get_mut(&mut vault.agents, &agent_address);
         assert!(record.daily_budget_limit != new_daily_budget, E_UNCHANGED_VALUE);
+        let old_daily_budget = record.daily_budget_limit;
         record.daily_budget_limit = new_daily_budget;
+
+        // 【I9】调额改变资金上限，必须发审计事件（与启停同一事件密度）。
+        event::emit(AgentBudgetUpdatedEvent {
+            vault_id: op.vault_id,
+            agent_id: agent_address,
+            old_daily_budget,
+            new_daily_budget,
+        });
     }
 
     /// Operator 按 Agent 地址暂停卡片
@@ -421,6 +445,13 @@ module agent_vault::vault {
     }
 
     /// 5. Master 独有：一键单向熔断并废除所有副卡 (Purge)
+    ///
+    /// 「废除所有副卡」包括登记表本身：递增 vault_version 让所有旧
+    /// OperatorCap / AgentCap 失效，同时清空 `agents` 表并把
+    /// `total_subagents` 置 0。包内没有单独移除 Agent 的入口，若只作废
+    /// 凭证而保留登记，被废地址将永久占用 `MAX_AGENTS_PER_VAULT` 名额
+    /// （重新签发 Operator 后也无法对同址再发卡），链下监控也会把已废
+    /// Agent 读成仍处于激活状态。
     public fun emergency_unilateral_purge<T>(
         master: &MasterCap,
         vault: &mut AgentVault<T>,
@@ -428,12 +459,18 @@ module agent_vault::vault {
         ctx: &mut TxContext
     ) {
         assert!(master.vault_id == object::uid_to_inner(&vault.id), E_UNAUTHORIZED_OPERATOR);
+        // 【I9】扫款目标不得为零地址，否则全部余额随转账永久销毁。
+        assert!(sweep_recipient != @0x0, E_ZERO_RECIPIENT);
         // 递增全局版本号：所有旧的 OperatorCap 和 AgentCap 校验 vault_version 立即全部失效！
         vault.vault_version = vault.vault_version + 1;
         vault.paused = true;
         // 【审计 M-01】紧急出口不设限流（必须能扫空），但把 epoch_outflow 置满以便监控告警。
         vault.outflow_epoch = ctx.epoch();
         vault.epoch_outflow = vault.max_epoch_outflow;
+        // 【I9】登记表随凭证一并废除：旧记录不再占用名额，重新签发 Operator
+        // 后可对同址重新发卡。AgentRecord 具有 drop，直接以空表替换旧表。
+        vault.agents = vec_map::empty();
+        vault.total_subagents = 0;
 
         // 一键将所有余额全额归集到老板指定安全地址
         let total_val = vault.balance.value();
@@ -457,6 +494,10 @@ module agent_vault::vault {
     ) {
         assert!(master.vault_id == object::uid_to_inner(&vault.id), E_UNAUTHORIZED_OPERATOR);
         vault.paused = false;
+        // 【I9】解除全金库暂停改变资金可用性，必须发审计事件。
+        event::emit(VaultUnpausedEvent {
+            vault_id: master.vault_id,
+        });
     }
 
     // --- 只读查询方法 ---
@@ -473,6 +514,12 @@ module agent_vault::vault {
 
     public fun vault_version<T>(vault: &AgentVault<T>): u64 {
         vault.vault_version
+    }
+
+    /// 【I9】累计签发副卡数读取（purge 后归零；与 agent_count 分列，便于
+    /// 链下核对登记表与计数器是否一致）。
+    public fun total_subagents<T>(vault: &AgentVault<T>): u64 {
+        vault.total_subagents
     }
 
     public fun is_vault_paused<T>(vault: &AgentVault<T>): bool {
@@ -526,5 +573,19 @@ module agent_vault::vault {
     public fun destroy_master_cap_for_testing(master: MasterCap) {
         let MasterCap { id, vault_id: _ } = master;
         id.delete();
+    }
+
+    // --- 【I9】测试专用：新审计事件的字段快照（生产读事件 BCS，不走这里） ---
+
+    #[test_only]
+    public fun agent_budget_updated_fields_for_testing(
+        event: &AgentBudgetUpdatedEvent
+    ): (ID, address, u64, u64) {
+        (event.vault_id, event.agent_id, event.old_daily_budget, event.new_daily_budget)
+    }
+
+    #[test_only]
+    public fun vault_unpaused_fields_for_testing(event: &VaultUnpausedEvent): ID {
+        event.vault_id
     }
 }

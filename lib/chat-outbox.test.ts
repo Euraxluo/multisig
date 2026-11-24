@@ -24,6 +24,18 @@ test("outbox rejects empty and oversized lines instead of silently dropping them
   assert.deepEqual(peekChatOutbox(channelId), [])
 })
 
+test("outbox measures the on-chain byte limit, not UTF-16 characters (I9 regression)", () => {
+  clearChatOutbox(channelId)
+  // 1500 个汉字 = 4500 个 UTF-8 字节：按 .length（1500 < 4096）会放行，
+  // 链上 E_MESSAGE_TOO_LONG(6018) 才拒绝，白付一笔 gas。修复后按字节拒绝。
+  const wide = "汉".repeat(1_500)
+  assert.throws(() => enqueueChatMessage(channelId, wide), /4096/)
+  // 边界：1365 个汉字 = 4095 字节可入队（每字 3 字节）。
+  assert.equal(enqueueChatMessage(channelId, "汉".repeat(1_365)).queued, 1)
+  assert.deepEqual(peekChatOutbox(channelId), ["汉".repeat(1_365)])
+  clearChatOutbox(channelId)
+})
+
 test("outbox stops at the cap and reports it so the caller can flush early", () => {
   clearChatOutbox(channelId)
   for (let index = 0; index < MAX_OUTBOX_MESSAGES; index++) enqueueChatMessage(channelId, `line ${index}`)

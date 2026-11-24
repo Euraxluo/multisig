@@ -12,6 +12,9 @@ export const CHAT_LIMITS = {
   maxBatchMessages: 32,
   maxPreviewBytes: 4096,
   maxBlobIdBytes: 128,
+  /** 建群入口的持久化输入上界（I9）：频道名与初始成员名单。 */
+  maxChannelNameBytes: 256,
+  maxInitialMembers: 256,
   /** 收益累加器定点比例（ accrued MIST / MIST stake × scale ）。 */
   yieldAccScale: 1_000_000_000_000n,
 } as const;
