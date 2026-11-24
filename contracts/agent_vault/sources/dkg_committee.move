@@ -842,7 +842,15 @@ module agent_vault::dkg_committee {
     /// org_id 标记。调用方必须先通过 `assert_org_not_created`；本函数对
     /// 重复标记直接 abort（dynamic_field::add 拒绝已存在的键），宁可响
     /// 也不静默覆盖。
-    public fun mark_org_created(session: &mut DkgSession, org_id: ID) {
+    /// 可见性 public(package)（I1 修复）：DkgSession 是共享对象，而本函数
+    /// 体没有任何验签/发送者/状态门禁 —— 若对外公开，任意地址花一笔 gas
+    /// 就能抢先给任意会话落上「已创建组织」标记。标记不可撤销（包内没有
+    /// 删除 OrgCreatedSlot 的代码），被抢占的固化会话从此建不了组织、
+    /// 也走不了 handle_session_timeout（FINALIZED 被第一条断言挡住），
+    /// 创世质押只能走 claim_stake 而 claim_stake 只认 TIMED_OUT —— 质押
+    /// 永久锁死。与 take_genesis_stakes 同理：只允许本包 Organization 的
+    /// 固化路径调用。
+    public(package) fun mark_org_created(session: &mut DkgSession, org_id: ID) {
         dynamic_field::add(&mut session.id, OrgCreatedSlot { dummy: true }, org_id);
     }
 

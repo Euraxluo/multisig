@@ -2090,6 +2090,244 @@ module agent_vault::dkg_committee_tests {
         ts::end(scenario);
     }
 
+    // ===== I1 回归：mark_org_created 收紧为 public(package) 后的行为边界 =====
+    // 可见性本身由 SDK 侧 source-guards.test.ts + 仓库外跨包探针钉住；
+    // 这里的三个测试钉「锁死」后果的行为边界：固化会话超时入口焊死、
+    // 保证金可退而创世质押只能随组织创建扫入、参与者仍恰好能建一次组织。
+
+    /// I1 边界 1：FINALIZED 会话过了截止时间，handle_session_timeout 仍在
+    /// 第一条断言（status != FINALIZED → 3002）中止。assert_org_not_created
+    /// 先于失败调用执行且通过，证标记未被落下；整笔交易原子回滚 ⇒ 状态
+    /// 与「未创建组织」标记原样保留 —— 这正是 I1 抢占标记后超时退路被
+    /// 焊死、只能锁仓不能退出的一环。
+    #[test]
+    #[expected_failure(abort_code = agent_vault::dkg_committee::E_INVALID_SESSION_STATUS)]
+    fun i1_finalized_session_timeout_aborts_with_marker_untouched() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+
+        let participants = vector[ALICE, BOB, CHARLIE];
+        dkg_committee::create_dkg_session(2, participants, 2_000_000, fee_coin(ts::ctx(&mut scenario)), &clock, ts::ctx(&mut scenario));
+
+        let mut i = 0;
+        while (i < 2) {
+            let who = if (i == 0) { ALICE } else { BOB };
+            ts::next_tx(&mut scenario, who);
+            {
+                let mut session = ts::take_shared<DkgSession>(&scenario);
+                let commitment = if (i == 0) {
+                    x"eb00000000000000000000000000000000000000000000000000000000000000"
+                } else {
+                    x"ec00000000000000000000000000000000000000000000000000000000000000"
+                };
+                dkg_committee::submit_commitment(&mut session, &clock, commitment, ATTEST_PK, bond_coin(ts::ctx(&mut scenario)), ts::ctx(&mut scenario));
+                ts::return_shared(session);
+            };
+            i = i + 1;
+        };
+
+        let mut i = 0;
+        while (i < 2) {
+            let who = if (i == 0) { ALICE } else { BOB };
+            ts::next_tx(&mut scenario, who);
+            {
+                let mut session = ts::take_shared<DkgSession>(&scenario);
+                dkg_committee::confirm_participant(&mut session, &clock, ts::ctx(&mut scenario));
+                dkg_committee::attest_group_key_for_testing(&mut session, &clock, GROUP_PK_7, ts::ctx(&mut scenario));
+                ts::return_shared(session);
+            };
+            i = i + 1;
+        };
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            dkg_committee::finalize_session(&mut session, GROUP_PK_7, ts::ctx(&mut scenario));
+            assert!(dkg_committee::status(&session) == 3, 731);
+            ts::return_shared(session);
+        };
+
+        clock::set_for_testing(&mut clock, 3_000_000);
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            // 标记未落下（否则此处先 abort 3026，与本测试期望的中止码不符）。
+            dkg_committee::assert_org_not_created(&session);
+            // 过了截止时间也一样：FINALIZED 的超时入口第一道断言即拒绝。
+            dkg_committee::handle_session_timeout(&mut session, &clock);
+            ts::return_shared(session);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    /// I1 边界 2（资金侧锁死本身）：固化但尚未建组织的会话上，claim_bond
+    /// 全额可退，claim_stake 必定 abort 3002（只认 TIMED_OUT —— 质押按
+    /// 设计只能随组织创建被 take_genesis_stakes 扫入）。标记一旦被抢占，
+    /// 扫入与 claim_stake 两条路同时关闭，创世质押即永久锁死；本测试把
+    /// 这两条边界写死，供修复前后对照。
+    #[test]
+    #[expected_failure(abort_code = agent_vault::dkg_committee::E_INVALID_SESSION_STATUS)]
+    fun i1_finalized_session_bond_refundable_but_claim_stake_locked() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+        let (min_bond, _max) = dkg_committee::bond_bounds();
+        let extra_stake = 20_000_000u64;
+
+        let participants = vector[ALICE, BOB, CHARLIE];
+        dkg_committee::create_dkg_session(2, participants, 2_000_000, fee_coin(ts::ctx(&mut scenario)), &clock, ts::ctx(&mut scenario));
+
+        // ALICE 超额缴款：bond 之外的部分是创世质押（锁死的正是这笔钱）。
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            let paid = coin::mint_for_testing<SUI>(min_bond + extra_stake, ts::ctx(&mut scenario));
+            dkg_committee::submit_commitment(&mut session, &clock, x"ed00000000000000000000000000000000000000000000000000000000000000", ATTEST_PK, paid, ts::ctx(&mut scenario));
+            assert!(dkg_committee::participant_stake_mist(&session, ALICE) == extra_stake, 732);
+            ts::return_shared(session);
+        };
+        ts::next_tx(&mut scenario, BOB);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            dkg_committee::submit_commitment(&mut session, &clock, x"ee00000000000000000000000000000000000000000000000000000000000000", ATTEST_PK, bond_coin(ts::ctx(&mut scenario)), ts::ctx(&mut scenario));
+            ts::return_shared(session);
+        };
+
+        let mut i = 0;
+        while (i < 2) {
+            let who = if (i == 0) { ALICE } else { BOB };
+            ts::next_tx(&mut scenario, who);
+            {
+                let mut session = ts::take_shared<DkgSession>(&scenario);
+                dkg_committee::confirm_participant(&mut session, &clock, ts::ctx(&mut scenario));
+                dkg_committee::attest_group_key_for_testing(&mut session, &clock, GROUP_PK_7, ts::ctx(&mut scenario));
+                ts::return_shared(session);
+            };
+            i = i + 1;
+        };
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            dkg_committee::finalize_session(&mut session, GROUP_PK_7, ts::ctx(&mut scenario));
+            assert!(dkg_committee::status(&session) == 3, 733);
+            ts::return_shared(session);
+        };
+
+        // 固化后保证金可退：全额到账。
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            dkg_committee::claim_bond(&mut session, ts::ctx(&mut scenario));
+            ts::return_shared(session);
+        };
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let refund = ts::take_from_sender<coin::Coin<SUI>>(&scenario);
+            assert!(coin::value(&refund) == min_bond, 734);
+            ts::return_to_sender(&scenario, refund);
+        };
+
+        // 创世质押则被锁在两条路之外：FINALIZED 下 claim_stake → 3002。
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            dkg_committee::claim_stake(&mut session, ts::ctx(&mut scenario));
+            ts::return_shared(session);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
+    /// I1 边界 3：修复只收紧「谁能落标记」，包内固化路径原样 —— 过了截止
+    /// 时间的固化会话仍由参与者建成组织（标记经 create_organization_from_session
+    /// 的包内调用落下），且第二次兑换（另一参与者发起也一样）abort 3026。
+    #[test]
+    #[expected_failure(abort_code = agent_vault::dkg_committee::E_ORG_ALREADY_CREATED, location = agent_vault::dkg_committee)]
+    fun i1_finalized_session_org_created_once_by_participant_after_deadline() {
+        let mut scenario = ts::begin(ALICE);
+        let mut clock = clock::create_for_testing(ts::ctx(&mut scenario));
+        clock::set_for_testing(&mut clock, 1_000_000);
+
+        let participants = vector[ALICE, BOB, CHARLIE];
+        dkg_committee::create_dkg_session(2, participants, 2_000_000, fee_coin(ts::ctx(&mut scenario)), &clock, ts::ctx(&mut scenario));
+
+        let mut i = 0;
+        while (i < 2) {
+            let who = if (i == 0) { ALICE } else { BOB };
+            ts::next_tx(&mut scenario, who);
+            {
+                let mut session = ts::take_shared<DkgSession>(&scenario);
+                let commitment = if (i == 0) {
+                    x"ef00000000000000000000000000000000000000000000000000000000000000"
+                } else {
+                    x"f000000000000000000000000000000000000000000000000000000000000000"
+                };
+                dkg_committee::submit_commitment(&mut session, &clock, commitment, ATTEST_PK, bond_coin(ts::ctx(&mut scenario)), ts::ctx(&mut scenario));
+                ts::return_shared(session);
+            };
+            i = i + 1;
+        };
+
+        let mut i = 0;
+        while (i < 2) {
+            let who = if (i == 0) { ALICE } else { BOB };
+            ts::next_tx(&mut scenario, who);
+            {
+                let mut session = ts::take_shared<DkgSession>(&scenario);
+                dkg_committee::confirm_participant(&mut session, &clock, ts::ctx(&mut scenario));
+                dkg_committee::attest_group_key_for_testing(&mut session, &clock, GROUP_PK_7, ts::ctx(&mut scenario));
+                ts::return_shared(session);
+            };
+            i = i + 1;
+        };
+
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            dkg_committee::finalize_session(&mut session, GROUP_PK_7, ts::ctx(&mut scenario));
+            assert!(dkg_committee::status(&session) == 3, 735);
+            ts::return_shared(session);
+        };
+
+        // 过了截止时间，固化会话的组织创建窗口对参与者保持开放。
+        clock::set_for_testing(&mut clock, 3_000_000);
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            let _org_id = cryptographic_org::create_organization_from_session(
+                &mut session, 2, &clock, ts::ctx(&mut scenario)
+            );
+            // 建成后状态仍是 FINALIZED（标记落下不改会话状态）。
+            assert!(dkg_committee::status(&session) == 3, 736);
+            ts::return_shared(session);
+        };
+        ts::next_tx(&mut scenario, ALICE);
+        {
+            let org = ts::take_shared<Organization>(&scenario);
+            assert!(cryptographic_org::member_weight(&org, ALICE) == 1, 737);
+            assert!(cryptographic_org::key_signers(&org) == vector[ALICE, BOB], 738);
+            ts::return_shared(org);
+        };
+
+        // 第二次兑换（BOB 也是参与者）：标记已在 → 3026。
+        ts::next_tx(&mut scenario, BOB);
+        {
+            let mut session = ts::take_shared<DkgSession>(&scenario);
+            let _ = cryptographic_org::create_organization_from_session(
+                &mut session, 2, &clock, ts::ctx(&mut scenario)
+            );
+            ts::return_shared(session);
+        };
+
+        clock::destroy_for_testing(clock);
+        ts::end(scenario);
+    }
+
     /// Round-7 约束 5：32 字节 X25519 信箱加密公钥现在可登记（双栈共存），
     /// 65 字节 P-256 依旧可登记；两者独立占位。
     #[test]
