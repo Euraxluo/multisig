@@ -491,7 +491,7 @@ module agent_vault::asynchronous_proposal {
         // （V3：换金库重放 = 摘要改变 = 2701）。签名验证通过后才推进 nonce。
         assert!(nonce > cryptographic_org::last_nonce(org), E_INVALID_NONCE);
         let vault_id = vault::master_vault_id(master_cap);
-        let digest = transfer_digest(
+        let digest = compute_transfer_digest(
             &cryptographic_org::chain_id(org),
             &org_id,
             epoch,
@@ -560,10 +560,12 @@ module agent_vault::asynchronous_proposal {
     /// 攻击者换一个 vault 即摘要改变、验签必然失败。
     /// V2 追加 key_generation（Round-9 P0）的语义保留：rotate_group_key
     /// 落地后生成代递增，旧密钥分片签出的旧摘要不再可重放。
-    /// Implemented locally (std::hash) so cryptographic_org keeps no public
-    /// helper for it; org_id/epoch/key_generation are read at call time and
-    /// equality with the proposal snapshot is already asserted above.
-    fun transfer_digest(
+    /// org_id/epoch/key_generation are read at call time and equality with the
+    /// proposal snapshot is already asserted above. Public as a pure function
+    /// (it takes no object and changes nothing), like
+    /// cryptographic_org::compute_*_digest, so a test can compare it with the
+    /// SDK's golden vector.
+    public fun compute_transfer_digest(
         chain_id: &vector<u8>,
         org_id: &ID,
         epoch: u64,

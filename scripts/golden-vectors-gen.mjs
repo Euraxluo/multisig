@@ -69,8 +69,10 @@ vectors.roster_update_v1 = sha256(
 );
 
 // 8. SUI_ORG_GENESIS_WITHDRAW_V1: || chain || org || epoch || nonce || amount || recipient
+//     Every field has its own value here too (the nonce was 1, equal to the
+//     epoch, which hid an epoch/nonce swap).
 vectors.genesis_withdraw_v1 = sha256(
-  utf8('SUI_ORG_GENESIS_WITHDRAW_V1:'), CHAIN, ORG, u64le(1n), u64le(1n), u64le(500n), addr('0x' + '99'.repeat(32)),
+  utf8('SUI_ORG_GENESIS_WITHDRAW_V1:'), CHAIN, ORG, u64le(1n), u64le(8n), u64le(500n), addr('0x' + '99'.repeat(32)),
 );
 
 // 9. SUI_DKG_ATTEST_V1: || bcs(ID 32B) || group_pk

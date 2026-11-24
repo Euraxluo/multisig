@@ -697,6 +697,18 @@ module agent_vault::dkg_committee {
 
     /// 7c. 确认成员申报群公钥。
     ///
+    /// 密钥背书摘要：H(DOMAIN_ATTESTATION || bcs(session_id) || group_pk)。
+    /// 不含 chain_id，靠 session_id 全局唯一隔离。纯函数（不取对象、不改状态），
+    /// public 的理由与 `cryptographic_org::compute_*_digest` 相同：测试拿它与
+    /// SDK 的 golden vector 逐字节比对。
+    public fun compute_attestation_digest(session_id: &ID, group_public_key: &vector<u8>): vector<u8> {
+        let mut digest = vector[];
+        vector::append(&mut digest, DOMAIN_ATTESTATION);
+        vector::append(&mut digest, bcs::to_bytes(session_id));
+        vector::append(&mut digest, *group_public_key);
+        sha2_256(digest)
+    }
+
     /// 必须在 `confirm_participant` 之后调用：只确认了份额、还没算出群公钥的
     /// 成员无法为任何密钥背书。同一成员可重复调用以修改申报（链上承诺在
     /// Round 2 冻结，正常情况下不会变；允许覆盖是为了让误算的成员能纠正）。
@@ -727,13 +739,11 @@ module agent_vault::dkg_committee {
         assert!(dynamic_field::exists(&session.id, key_slot), E_ATTEST_KEY_MISSING);
         let attest_pk = *dynamic_field::borrow(&session.id, key_slot);
         assert!(attestation_signature.length() == 64, E_ATTEST_SIGNATURE_INVALID);
-        let mut digest = vector[];
-        vector::append(&mut digest, DOMAIN_ATTESTATION);
         let sid = object::uid_to_inner(&session.id);
-        vector::append(&mut digest, bcs::to_bytes(&sid));
-        vector::append(&mut digest, group_public_key);
         assert!(
-            ed25519::ed25519_verify(&attestation_signature, &attest_pk, &sha2_256(digest)),
+            ed25519::ed25519_verify(
+                &attestation_signature, &attest_pk, &compute_attestation_digest(&sid, &group_public_key),
+            ),
             E_ATTEST_SIGNATURE_INVALID,
         );
 
