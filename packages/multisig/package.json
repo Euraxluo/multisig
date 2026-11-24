@@ -64,6 +64,10 @@
     "./namespace": {
       "types": "./src/namespace/index.ts",
       "default": "./src/namespace/index.ts"
+    },
+    "./bridge": {
+      "types": "./src/bridge/index.ts",
+      "default": "./src/bridge/index.ts"
     }
   },
   "scripts": {

@@ -1,6 +1,7 @@
 "use client"
 
 import { t } from "@/lib/i18n/t"
+import type { DeviceVault, SealedSecretBox } from "multisig/bridge"
 import { bytesToHex, hexToBytes } from "./bytes"
 
 /**
@@ -13,19 +14,10 @@ import { bytesToHex, hexToBytes } from "./bytes"
  * This boundary deliberately does NOT claim protection against an attacker who
  * already runs arbitrary same-origin script in a live page; that requires the
  * passphrase envelope in `encrypted-keystore.ts` or a hardware passkey (SIP-9).
+ *
+ * 接口定义在 `multisig/bridge`，本文件只保留 IndexedDB/WebCrypto 实现。
  */
-export interface SealedSecretBox {
-  version: 1
-  /** 12-byte AES-GCM IV, hex. */
-  iv: string
-  /** AES-GCM ciphertext incl. the 16-byte tag, hex. */
-  data: string
-}
-
-export interface DeviceVault {
-  seal(plaintext: Uint8Array, context: string): Promise<SealedSecretBox>
-  open(box: SealedSecretBox, context: string): Promise<Uint8Array>
-}
+export type { DeviceVault, SealedSecretBox } from "multisig/bridge"
 
 export interface DeviceVaultOptions {
   databaseName?: string

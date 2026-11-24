@@ -1,9 +1,9 @@
-# agent_vault 第三方安全审计报告
+# agent_vault 内部安全评审报告（Internal Security Review）
 
 - 审计对象：`contracts/agent_vault/sources/`（12 模块，7,230 行 Move）
-- 审计类型：源码审计（白盒，定向核查 + 抽查），未含形式化验证
+- 评审类型：内部源码评审（白盒，定向核查 + 抽查，AI 辅助完成、结论逐条对照源码核对），未含形式化验证
 - 报告版本：v1.0
-- 依据基线：Move 单元测试 418/418 全绿；红队 10 轮、35+ 发现全部闭环（本报告不重复计分，仅在残余风险中复述未闭环项）
+- 依据基线：Move 单元测试 424/424 全绿（2026-11-24 实测）；10 轮定向攻击核查、35+ 发现全部闭环（本报告不重复计分，仅在残余风险中复述未闭环项）
 - 结论摘要：**有条件通过**，2 项 High（1 项部署面、1 项资金锁定路径）需在 TGE/主网上线前处置，详见 §6
 
 ---
@@ -28,8 +28,8 @@
 
 ### 1.3 明确未覆盖（不在本报告担保范围内）
 
-- **无形式化验证**：未对摘要编码、FROST 聚合验签、状态机做机器证明；本报告结论为人工推理。
-- **无第三方审计历史**：本次为首次外部白盒审计；此前仅有内部复核与红队演练，二者不可替代第三方意见。
+- **无形式化验证**：未对摘要编码、FROST 聚合验签、状态机做机器证明；本报告结论为逐条源码核对推理。（独立的形式化模型见 `formal/`。）
+- **非独立第三方审计**：本报告为内部评审，与 `docs/PRELAUNCH_CHECKLIST.md` 中「第三方审计 GAP / UNVERIFIED」的口径一致；独立第三方审计完成前，本报告不可作为外部审计意见引用。
 - **无主网部署验证**：未对主网字节码/ABI/对象布局做比对；`Published.toml` 记录的是测试网 lineage，源码与已部署字节码的一致性未验证。
 - 未做链上模糊测试、未做 gas/存储成本分析、未审 `packages/multisig` 其余业务代码、未审前端与密钥管理。
 - 未评估密码学原语实现本身（FROST/DKG 正确性依赖客户端库，链上只做 ed25519 验签与小阶点拒绝）。
@@ -206,7 +206,7 @@ flowchart TB
 
 附录（同法核对，均一致）：`POP_V2` 77+40n、`POP_V1` 92、`ROSTER_V1` 141+40n、`GENESIS_WITHDRAW_V1` 133、`DKG_ATTEST_V1` 82（不含 chain_id，靠 session_id 唯一性隔离）。
 
-### 3.5 核查结论（对应任务问题 6）
+### 3.5 核查结论
 
 **SDK 与 Move 侧 4 个摘要逐字节一致，未发现编码歧义或字段顺序漂移。** 9 个摘要全部对齐。三点保留意见：
 
@@ -228,7 +228,7 @@ flowchart TB
 
 #### H-01 升级权限仍由单地址 EOA 持有，治理封印未生效（部署面）
 
-- 位置：`docs/THIRD_PARTY_AUDIT_SCOPE.md` §1（现行 lineage UpgradeCap `0xa1c3a646…`，owner `AddressOwner: 0x8ac06d3d…`，policy `0.0`）；12 个源码模块中**不含** `governed_upgrade`。
+- 位置：现行 lineage（`0x73afe159…`，`contracts/agent_vault/Published.toml`）的 UpgradeCap `0xc4b50706…` 为单址持有、未封印；12 个源码模块中**不含** `governed_upgrade`。
 - 攻击场景：该 EOA 私钥泄露或被钓鱼 → 攻击者以 compatible policy 发布任意逻辑的升级包，替换 `organization_treasury::execute` 的绑定校验或 `vault::withdraw` 的 `MasterCap` 断言，一次性转走全部受治理金库与托管资产。链上所有既有对象仍归新字节码解释，FROST 门限、epoch、nonce 全部失效。
 - 影响：全协议资金与治理完整性，且不可回滚（升级后旧逻辑不可恢复）。
 - 修复建议：主网发布后立即把 UpgradeCap 封入 `governed_upgrade` 共享 wrapper，由组织 FROST 门限（建议 threshold_weight ≥ key_threshold 且 ≥ 2/3）审批升级；将 policy 从 `compatible` 收紧并公开 `UpgradeAuthorized` 事件监控；上线前在 PRELAUNCH_CHECKLIST 增加"cap owner 非单地址"硬门禁。
@@ -256,7 +256,7 @@ flowchart TB
   3. `organization_treasury` 场景下 MasterCap 被封死，风险不成立——但两种 vault 用法共用同一模块与同一份文档。
 - 影响：MasterCap 泄露时损失不设上限；监控/风控模型若按 `epoch_outflow` 做告警会漏报 100% 的 Master 流出。
 - 修复建议：把 `withdraw`/`emergency_unilateral_purge` 也纳入同一套 `epoch_outflow` 记账（purge 可豁免但必须发事件并把 `epoch_outflow` 置为 `max` 以便监控）；或在文档与 `set_outflow_policy` 注释中明确"该上限仅约束 Agent 卡"，并增加独立的 `MasterWithdrawnEvent` 监控口径。
-- 结论文本（对应任务问题 1）：**不覆盖**。`spend_x402_budget` 的 outflow 上限未覆盖所有出金入口；`transfer::public_transfer` 在 12 模块中共 20 处，其中 5 处直接或间接从 `AgentVault.balance` 拆分（`vault.move:184`、`:373`、`:401`，`asynchronous_proposal.move:507`、`:537` 经 `vault::withdraw`），仅 `:373` 一条路径记账。
+- 结论：**不覆盖**。`spend_x402_budget` 的 outflow 上限未覆盖所有出金入口；`transfer::public_transfer` 在 12 模块中共 20 处，其中 5 处直接或间接从 `AgentVault.balance` 拆分（`vault.move:184`、`:373`、`:401`，`asynchronous_proposal.move:507`、`:537` 经 `vault::withdraw`），仅 `:373` 一条路径记账。
 
 #### M-02 Subagent 可单方面占用主账号投票席位且不可撤销
 
@@ -271,7 +271,7 @@ flowchart TB
 #### L-01 托管"借出"实为单事务原子借用，无法支持跨交易借贷
 
 - 位置：`asset_custody.move:229-238`（`CustodyReceipt` **无任何 abilities**）、`:541-599`（`take_asset` 返回 `(Asset, CustodyReceipt)`）、`:606-622`（`return_asset` 消费 receipt）。
-- 分析（对应任务问题 3）：hot potato 语义正确。receipt 无 `drop`/`store`/`key`/`copy`，因此：
+- 分析：hot potato 语义正确。receipt 无 `drop`/`store`/`key`/`copy`，因此：
   - 无法存入对象、无法转给他人、无法跨交易携带；
   - 若 PTB 结束仍持有 receipt，VM 报"unused value without drop"并**整体 abort**；
   - 若 PTB 中途 abort，Sui 事务原子回滚，资产与槽位恢复原状。
@@ -352,13 +352,13 @@ flowchart TB
 | R-06 | 门限不可达导致资金搁浅 | 设计上明确无个人找回权限（`organization_treasury.move:15-17` 注释承认）；`rotate_group_key` 需旧钥门限签名，无法自救。属"去中心化代价"。 | 中（需在用户协议与 UI 明示） |
 | R-07 | 链下聚合器信任 `partial_signatures` | 表内部分签名不在链上验证，链上只验最终聚合签名 over `group_pk`。任何链下服务不得把该表当作"已签名集合"。 | 低（已由最终验签兜底） |
 
-红队历史（10 轮、35+ 发现）已全部闭环的修复，本次抽查未见回归：轮次修复痕迹仍保留在代码中（如 `#12` borrow 窗口 `asset_custody.move:548-554`、`:79`；`#14` action_type 进摘要；`#20` 超时清退；`#21/#22` scallop 事实源与频道绑定；Round-9 `key_generation`；Round-10 mailbox 3028/3029）。
+历轮定向攻击（10 轮、35+ 发现）已闭环的修复，抽查未见回归：修复痕迹仍保留在代码中（如 borrow 窗口 `asset_custody.move:548-554`、`:79`；action_type 进摘要；超时清退；scallop 事实源与频道绑定；`key_generation` 换代；mailbox 载荷上限 3028/3029）。
 
 ---
 
 ## 7. 结论：能否上主网
 
-**结论：当前源码质量达到"可上主网候选"水平，但不满足无条件放行。** 核心资金路径（加权提案 + FROST over V2 摘要 + 单调 nonce + key_generation 换代封窗 + treasury 身份五元绑定）经人工核查成立，未发现可直接绕过的授权缺口；摘要跨语言一致性成立；418/418 Move 测试与 10 轮红队闭环提供了较强的回归保障。
+**结论：当前源码质量达到"可上主网候选"水平，但不满足无条件放行。** 核心资金路径（加权提案 + FROST over V2 摘要 + 单调 nonce + key_generation 换代封窗 + treasury 身份五元绑定）经人工核查成立，未发现可直接绕过的授权缺口；摘要跨语言一致性成立；424/424 Move 测试与历轮定向攻击闭环提供了较强的回归保障。
 
 **放行条件（全部满足方可上线）：**
 
@@ -373,4 +373,4 @@ flowchart TB
 
 ---
 
-*本报告仅为第三方白盒审计意见，不构成投资建议或对未审计代码/部署环境的担保。审计基于当前工作区源码快照；任何后续变更需重新评估受影响条目。*
+*本报告为内部安全评审意见，不构成投资建议或对未审计代码/部署环境的担保。评审基于当前工作区源码快照；任何后续变更需重新评估受影响条目。*

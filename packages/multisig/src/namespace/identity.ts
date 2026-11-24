@@ -89,7 +89,7 @@ export interface ResolvedRecipient { address: string; kind: ResolvedRecipientKin
 
 // === 读取客户端 ===
 
-export type IdentityRpc = Pick<SuiGrpcClient, 'getObject' | 'getDynamicField' | 'listDynamicFields' | 'listEvents' | 'listOwnedObjects' | 'waitForTransaction'>;
+export type IdentityRpc = Pick<SuiGrpcClient, 'getObject' | 'getDynamicField' | 'listDynamicFields' | 'listEvents' | 'listOwnedObjects' | 'waitForTransaction' | 'getTransaction'>;
 
 export class IdentityClient {
   readonly config: IdentityNamespaceConfig;

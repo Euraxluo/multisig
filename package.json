@@ -8,7 +8,7 @@
     "start": "next start",
     "lint": "next lint",
     "test": "node --import=tsx --test lib/*.test.ts",
-    "test:sdk": "node --import=tsx --test packages/multisig/src/agent-vault/org/*.test.ts packages/multisig/src/dkg/*.test.ts",
+    "test:sdk": "node --import=tsx --test packages/multisig/src/agent-vault/org/*.test.ts packages/multisig/src/dkg/*.test.ts packages/multisig/src/bridge/*.test.ts",
     "sdk:typecheck": "tsc --noEmit -p packages/multisig/tsconfig.json"
   },
   "dependencies": {

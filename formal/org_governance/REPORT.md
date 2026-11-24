@@ -5,7 +5,7 @@
 
 ## 1. 覆盖表
 
-| 对象 | 已有手段 | 缺口 | 本次补的层 |
+| 对象 | 已有手段 | 缺口 | 本报告补充的层 |
 |---|---|---|---|
 | 摘要字节布局（9 个域） | `golden-vectors.test.ts` + CI `git diff --exit-code` | 无 | 复用，不重复建 |
 | 单条入口的拒绝路径（nonce、PoP、名册形状） | 317 个 `#[test]`，分布在 16 个测试文件 | 只覆盖单笔交易，不覆盖交易交错 | 不动，TLA+ 不重测这些 |
@@ -37,7 +37,7 @@
 | `NoSignerOutsideGovernance` | `RESHARING_SECURITY.md` §4；`:997` | 成立 |
 | `GovernanceCoversKeyThreshold` | `:892-899`，issue #15 | 成立 |
 | `RotationBindsNewKey` | `:510-528`，issue #23 | 成立 |
-| `AdvanceBindsKeyGeneration` | `:562-578`，round 9 `:833` | 成立 |
+| `AdvanceBindsKeyGeneration` | `:562-578`（key_generation 递增 `:833`） | 成立 |
 | `GenesisStakeHardLock` | `:687-706`，错误码 1011 | 成立 |
 | `NonceMonotonic` | `:620` 及五处同源检查 | 成立 |
 | `AdvanceSurvivesResharing` | `RESHARING_SECURITY.md` §3.2 | 成立（这是被接受的残余，不是缺陷） |
@@ -63,12 +63,12 @@
 破坏演练：从 `binds` 删掉 `Rotate -> FNewPk` 后，`RotationBindsItsKey` 立即给出反例。
 
 边界标注：ed25519 曲线运算、BCS 布局、nonce 单调性是 ExcludeSafe（分别由 TLA+ 和 golden vector 覆盖）；dealer 诚实性是 ExcludeRisky，由 GapDealerHonestyOffChain 明示；没有 Stub。
-## 3. 拷问缺口
+## 3. 缺口审查（design-tree 前沿十题）
 
-出题按 design-tree 只取前沿：前置已落定、现在就能问的十题，覆盖失败模式、并发乱序、
-权限边界、状态机角落、数据一致性。核对交给 `judge`（独立于本会话的小模型，逐题给
-handled / mentioned / absent），本会话用回源文抽查了两个 handled 判定，都站得住：
-q4 对应 §1 第 15 行与 §3.2，q5 对应 §6 第 194 行与第 207 行。
+出题按 design-tree 只取前沿：前置已落定、当前就能问的十题，覆盖失败模式、并发乱序、
+权限边界、状态机角落、数据一致性。逐题判定（handled / mentioned / absent）由独立小模型给出，
+另按原文回查复核了两个 handled 判定（q4、q5），均成立：q4 对应 §1 第 15 行与 §3.2，
+q5 对应 §6 第 194 行与第 207 行。
 
 | 题 | 判定 | 文档位置 | 回流 |
 |---|---|---|---|
@@ -95,6 +95,6 @@ q9 是唯一留在文字层的，理由是它在物理上不可达。
   部分提取的金额由 `balance::split` 的类型保证，没有单独证明。
 - **有界性**。TLC 用 2 把钥匙、3 个 nonce、时钟 0..2。结论是这个范围内无反例，不是任意规模。
   nonce 单调和摘要绑定两条的论证不依赖界的大小。
-- **DKG 会话的准入与最终化**（`dkg_committee.move`，1145 行）不在本次范围内。
+- **DKG 会话的准入与最终化**（`dkg_committee.move`，1145 行）不在本报告范围内。
 - **国库转账摘要 V3**（`organization_treasury.move`）绑定 `vault_id` 与 `key_generation`，
-  本次只验证了 `key_generation` 在组织侧的递增，没有重跑国库那一侧的重放论证。
+  本报告只验证了 `key_generation` 在组织侧的递增，没有重跑国库那一侧的重放论证。

@@ -108,84 +108,87 @@ The protocol cleanly separates routine committee transitions from hostile revoca
 | **Erasure Assumption** | **Strictly Required**: honest local deletion of old shares | **Zero Trust**: even if 100% of old shares leak, $Y_{\text{new}}$ is secure |
 | **Primary Use Case** | Periodic proactive refresh, routine node turnover, threshold adjustment | Stolen private keys, rogue operator, adversarial expulsion |
 | **On-Chain Function** | `cryptographic_org::advance_organization_epoch` | `cryptographic_org::rotate_group_key` |
-| **Domain Constant** | `SUI_ORG_APPROVAL_V1:` | `SUI_ORG_KEY_ROTATION_V1:` |
-| **Authorization** | Threshold signature from current epoch | Threshold signature from current epoch |
+| **Domain Constant** | `SUI_ORG_EPOCH_ADVANCE_V2:` | `SUI_ORG_KEY_ROTATION_V3:` |
+| **Authorization** | Threshold signature from current epoch | Threshold signature from current epoch **+ PoP of the new key** |
 
 ---
 
 ## 5. On-Chain Smart Contract Implementation
 
-Both operations are secured by Move smart contracts in `packages/contracts/agent_vault/sources/cryptographic_org.move`.
+Both operations are secured by Move smart contracts in `contracts/agent_vault/sources/cryptographic_org.move`.
 
 ### 5.1 Replay Protection & Domain Separation
-All administrative updates require a strictly monotonic `nonce > org.last_nonce` and cryptographic domain separation:
+
+All administrative updates require a strictly monotonic `nonce > org.last_nonce` and cryptographic domain separation. The epoch-advance digest additionally binds the new epoch version and the key-generation counter, so a resharing that keeps the public key still invalidates every signature authorized by the previous key generation:
 
 ```move
-const DOMAIN_PROPOSAL: vector<u8> = b"SUI_ORG_PROPOSAL_V1:";
+const DOMAIN_PROPOSAL: vector<u8> = b"SUI_ORG_THRESHOLD_PROPOSAL_V2:";
 const DOMAIN_THRESHOLD_APPROVAL: vector<u8> = b"SUI_ORG_APPROVAL_V1:";
-const DOMAIN_KEY_ROTATION: vector<u8> = b"SUI_ORG_KEY_ROTATION_V1:";
-
-// Digest binding: SHA256(DOMAIN || chain_id || org_id || epoch || nonce || new_group_pk)
-public fun compute_key_rotation_digest(
-    chain_id: &vector<u8>,
-    org_id: ID,
-    epoch_version: u64,
-    nonce: u64,
-    new_group_pk: &vector<u8>
-): vector<u8> {
-    let mut data = vector::empty<u8>();
-    vector::append(&mut data, DOMAIN_KEY_ROTATION);
-    vector::append(&mut data, *chain_id);
-    vector::append(&mut data, bcs::to_bytes(&org_id));
-    vector::append(&mut data, bcs::to_bytes(&epoch_version));
-    vector::append(&mut data, bcs::to_bytes(&nonce));
-    vector::append(&mut data, *new_group_pk);
-    hash::sha2_256(data)
-}
+const DOMAIN_EPOCH_ADVANCE_V2: vector<u8> = b"SUI_ORG_EPOCH_ADVANCE_V2:";
+const DOMAIN_KEY_ROTATION: vector<u8> = b"SUI_ORG_KEY_ROTATION_V3:";
 ```
 
 ### 5.2 Atomic Key Rotation
-`rotate_group_key` verifies authorization under the *current* valid threshold key before atomically updating `org.group_pk`:
+
+`rotate_group_key` is the full hostile-recovery primitive. Beyond the threshold signature under the *current* key, it validates the replacement committee itself:
 
 ```move
 public fun rotate_group_key(
     org: &mut Organization,
     nonce: u64,
     new_group_pk: vector<u8>,
+    new_signers: vector<address>,
+    key_threshold: u64,
+    pop_signature: vector<u8>,
     frost_signature: vector<u8>,
     _ctx: &mut TxContext
 ) {
-    assert!(vector::length(&new_group_pk) == 32, E_INVALID_PK_LENGTH);
-    assert!(nonce > org.last_nonce, E_INVALID_NONCE);
-    let org_id = object::uid_to_inner(&org.id);
-    let next_epoch = org.epoch_version + 1;
+    assert!(new_group_pk.length() == 32, E_INVALID_PK_LENGTH);
 
-    let rotation_digest = compute_key_rotation_digest(
-        &org.chain_id,
-        org_id,
-        org.epoch_version,
-        nonce,
-        &new_group_pk
+    // Validate the new signer list: non-empty, bounded, distinct, nonzero.
+    let signer_count = new_signers.length();
+    assert!(signer_count > 0 && signer_count <= MAX_ROSTER_MEMBERS, EInvalidRoster);
+    // ... distinct + nonzero checks per signer ...
+    // The new key's threshold must be a real quorum of the new signers.
+    assert!(key_threshold > 0 && key_threshold <= signer_count, EInvalidRoster);
+
+    assert!(nonce > org.last_nonce, E_INVALID_NONCE);
+
+    // PoP: the NEW key must prove possession of its own private key, bound
+    // to this org and the epoch the rotation produces, so an attacker can
+    // neither register an uncontrolled key nor replay the PoP elsewhere.
+    assert!(pop_signature.length() == 64, E_INVALID_POP);
+    let pop_digest = compute_rotate_pop_digest(&org.chain_id, org_id, next_epoch, &new_group_pk);
+    assert!(
+        ed25519::ed25519_verify(&pop_signature, &new_group_pk, &pop_digest),
+        E_INVALID_POP
     );
 
-    assert!(!table::contains(&org.executed_proposals, rotation_digest), E_PROPOSAL_ALREADY_EXECUTED);
+    let rotation_digest = compute_key_rotation_digest(
+        &org.chain_id, org_id, org.epoch_version, nonce,
+        &new_group_pk, &new_signers, key_threshold
+    );
+    assert!(!org.executed_proposals.contains(rotation_digest), E_PROPOSAL_ALREADY_EXECUTED);
     let is_valid = ed25519::ed25519_verify(&frost_signature, &org.group_pk, &rotation_digest);
     assert!(is_valid, E_INVALID_SIGNATURE);
 
-    let old_pk = org.group_pk;
-    table::add(&mut org.executed_proposals, rotation_digest, true);
     org.last_nonce = nonce;
     org.epoch_version = next_epoch;
     org.group_pk = new_group_pk;
+    org.key_signers = new_signers;
+    org.key_threshold = key_threshold;
 
-    event::emit(GroupKeyRotatedEvent {
-        org_id,
-        old_group_pk: old_pk,
-        new_group_pk,
-        new_epoch_version: next_epoch,
-    });
+    // Round-9 P0: a rotation invalidates every shard of the previous key
+    // generation. Bump the counter so both V2 digests (epoch advance and
+    // treasury transfer) stop accepting signatures from the old shards the
+    // moment this transaction lands, closing the resharing window.
+    org.key_generation = org.key_generation + 1;
+
+    event::emit(GroupKeyRotatedEvent { /* old_pk, new_pk, new_epoch, key_generation */ });
 }
 ```
+
+Three layers close the window between "old committee compromised" and "rotation lands": the FROST signature under the current key authorizes the swap; the PoP proves the new key is controlled by the caller and bound to this org + epoch; and the `key_generation` bump makes every pre-rotation shard (and every digest they could have signed under V2 domains) dead on arrival.
 
 ---
 
@@ -199,8 +202,9 @@ Verifying that $C_{i,0} = \lambda_i(0) \cdot Y_i$ on-chain would require native 
 ### Schnorr PoK Specification
 Each dealer $P_i$ produces a non-interactive Schnorr Proof of Knowledge (Fiat-Shamir transformed):
 1. Dealer chooses random scalar $r \leftarrow \mathbb{Z}_\ell^*$ and computes commitment $R = r \cdot G$.
-2. Challenge is computed with explicit domain and context binding:
-   $$\text{challenge} = \text{SHA-256}(\text{"POK\_V1:"} \parallel \text{org\_id} \parallel \text{epoch} \parallel i \parallel C_{i,0} \parallel R)$$
+2. Challenge is computed with explicit domain and context binding (`computeDealerChallenge`, `resharing.ts`):
+   $$\text{challenge} = \text{SHA-512}(\text{"DEALER\_POK\_V1:"} \parallel \text{org\_id} \parallel \text{epoch} \parallel \text{session\_id} \parallel i \parallel C_{i,0} \parallel Y_i \parallel R)$$
+   reduced to a scalar; the binding includes the dealer's previous-epoch verification share $Y_i$, so $C_{i,0} = \lambda_i(0) \cdot Y_i$ holds by construction of the proof statement.
 3. Dealer computes response $s = r + \text{challenge} \cdot z_i \pmod \ell$.
 4. Every peer verifies:
    $$s \cdot G \stackrel{?}{=} R + \text{challenge} \cdot C_{i,0}$$

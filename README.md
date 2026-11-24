@@ -1,38 +1,68 @@
-# frontend
+# Sui Multisig — Group Vaults, DAO Governance & Threshold Signatures
 
-Local feature setup and validation:
+A Sui application consisting of a Next.js frontend, a TypeScript SDK (`packages/multisig`), and Move contracts. It turns a group chat into an on-chain organization: the organization is not a multisig address but a set of FROST threshold key shares held on members' own devices.
 
-- [Identity, SuiNS, follows, private messages and QR sharing](docs/identity.md)
-- [Google zkLogin configuration and acceptance checks](docs/zklogin.md)
-- [Unpublished identity Move package and test results](contracts/identity/README.md)
-- [UI feature parity and remaining implementation work](docs/ui-feature-parity.md)
-- [Original frontend feature review against the 2026-10-19 gap audit](docs/original-feature-review.md)
-- [Reusable prompt for driving the project to production](docs/PRODUCTION_PROMPT.md)
-- [Deployment checklist: package ids, upgrade path, env vars, init order](docs/DEPLOYMENT_CHECKLIST.md)
-- [Pre-launch checklist: gates, on-chain evidence, claims that must not be made](docs/PRELAUNCH_CHECKLIST.md)
-- Environment template: `.env.example`
+## Core capabilities
 
-Local verification (no deployment or wallet submission):
+- **Organizations & vaults** — weighted member voting, proposals, treasury transfers
+- **FROST threshold signatures (RFC 9591)** — roster updates and key rotation; shares are sealed on-device (non-extractable AES-GCM key in IndexedDB)
+- **DKG** — sealed-mailbox share delivery; the group key is fixed on-chain by threshold member attestations
+- **Agent vaults** — sub-accounts constrained by per-day budgets and per-epoch outflow caps
+- **Identity & encrypted DMs** — on-chain identities (`.id`), follows, ECDH P-256 + HKDF + AES-256-GCM direct messages, used as the FROST round transport
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `app/`, `components/` | Next.js pages and UI |
+| `lib/` | Frontend logic and offline tests |
+| `packages/multisig/` | SDK: `agent-vault/*`, `namespace/*`, `dkg/*`, `account/*`, `bridge/*` |
+| `contracts/agent_vault/` | Move contracts: organization, vault, proposals, DKG, custody, polls, payments |
+| `contracts/identity/` | Move contracts: identity and private messages |
+| `formal/` | TLA+ and Alloy formal models |
+| `scripts/` | On-chain E2E, UI regression, digest-vector generation |
+| `docs/` | Project documentation — see the [documentation guide](docs/README.md) |
+
+## Status
+
+Development and testnet verification only. There is no mainnet deployment and no production hosting. Which capabilities are verified, which are local-only, and which claims must not be made yet are tracked authoritatively in the [pre-launch checklist](docs/PRELAUNCH_CHECKLIST.md).
+
+## Quick start
 
 ```sh
-pnpm exec tsx --test lib/*.test.ts
-pnpm exec tsc --noEmit --incremental false
-# Start the local app separately. Install Playwright separately or set PLAYWRIGHT_MODULE.
+pnpm install
+pnpm dev
+```
+
+Environment variables: see `.env.example`.
+
+## Verification
+
+```sh
+# SDK
+pnpm sdk:typecheck
+pnpm test:sdk
+
+# Frontend
+pnpm exec tsx --test lib/*.test.ts lib/crypto/*.test.ts
+pnpm exec tsc --noEmit
+pnpm lint
+pnpm build
+
+# Digest vectors (must produce no diff)
+node scripts/golden-vectors-gen.mjs && git diff --exit-code -- packages/multisig/src/agent-vault/org/digest-vectors.json
+
+# Contracts
+cd contracts/agent_vault && sui move test
+```
+
+Browser regression requires a locally running app (`pnpm dev`, or `pnpm build && pnpm start`) and a separate Playwright install:
+
+```sh
 UI_BASE_URL=http://127.0.0.1:3005 node scripts/ui-regression.mjs
 UI_BASE_URL=http://127.0.0.1:3005 UI_VIEWPORT_WIDTH=1280 node scripts/ui-regression.mjs
 ```
 
-On 2026-10-26, 696 offline frontend tests, the independent TypeScript check, the production build, and 287 strict Move tests passed. The local production-server browser regression passed all sixteen scenarios at both 390px and 1280px, including the treasury read-only path, reopening/deleting a local invoice draft, the notification unread badge, on-chain group membership discovery, the light/dark theme switch, and the read-only Walrus app-policy registry with its fail-closed administration status, with no page errors or horizontal overflow. Associated SDK tests in `sui_project_a` passed under vitest. The legacy Walrus registry remains read-only: ABI presence such as `policy_revision()` cannot prove deployed return values, old-entry isolation, or real payment. The independent `walrus_app_policy_v2` implementation binds a real `MemberStakeReceipt` to `Coin<SUI>` payment, but is not deployed; V2 publication, live ABI verification, and migration remain GAP. ESLint reports 0 errors and 28 warnings; the production build runs lint and type checking.
+## Documentation
 
-The browser regression checks profile navigation, wallet discovery, payment tools, preserving historical group files, read-only group polls, local invoice draft reopen/delete, notification unread state, and on-chain group discovery: with a connected account, the group list scans `OrganizationCreatedEvent` and each live organization roster instead of trusting local storage, and an account with no memberships must show zero discovered groups rather than a fabricated one. Browser-only historical fixtures and offline wallet stubs do not demonstrate a live chain lifecycle. Notifications are derived from group proposals already synchronized into this browser; the app has no push subscription. The default testnet v7 package (`0xca0650d4…`) contains `governance_poll`, `scheduled_payments`, `red_packet_v2`, and `organization_treasury`, confirmed by a read-only package-object query on 2026-10-26. Their unset package variables follow `NEXT_PUBLIC_PROPOSAL_PACKAGE_ID`, which defaults to v7; overrides must preserve each module's defining type origin and compatible ABI. Module presence does not prove a full wallet/transaction lifecycle. The independent identity package and the local `walrus_app_policy_v2` module remain NOT-DEPLOYED / GAP. `lib/p2p/` was deleted on 2026-10-22: its 390 lines had no importer, and its "MLS" derived the epoch key as `SHA-256("MLS_EPOCH_SECRET_" + groupId + "_" + epoch + "_TREEKEM")` from fields that travel in cleartext in every message header, so a non-member could decrypt it (verified by script). It also relied on Node's `Buffer`, which does not exist in the browser bundle. The same `Buffer` mistake was present in the live DKG path (`lib/crypto/ceremony.ts`, `resharing.ts`), where creating an organization would have thrown `ReferenceError`; that is fixed with `lib/crypto/bytes.ts` and verified by running a real 3-of-4 DKG in a browser with no `Buffer` global. Each tab panel is wrapped in its own `components/error-boundary.tsx`, so one panel failing to render no longer blanks the whole app or strands the navigation; the fallback shows the thrown message only (no stack, no wallet data) and its retry re-renders the panel without resending any transaction. Network calls are bounded: `lib/suins.ts` races `getNameRecord` (which accepts no signal) against a timeout and reports a timeout as a failure rather than as an unregistered name; `lib/sui-wallet-signer.ts` bounds `executeTransaction` at 60s and routes a timeout to its "uncertain" path, which keeps the digest and refuses to re-sign instead of inviting a duplicate send. Real group encryption is `lib/message-crypto.ts` (ECDH P-256 + HKDF-SHA256 + AES-256-GCM with a fresh ephemeral key per message), not MLS. The same v5 upgrade adds `dkg_committee::register_encryption_key`, so a participant can publish the 65-byte P-256 key that shares are sealed to; without it `deposit_mailbox_share` could only carry plaintext, which every RPC reader can see. `lib/dkg-mailbox.ts` implements the sealing (ephemeral ECDH + HKDF-SHA256 + AES-256-GCM, with session, sender, recipient and epoch bound into the AAD so a payload cannot be replayed into another session) and a reader for the registered keys. That sealing is now wired into `components/dkg-ceremony-dialog.tsx`, which walks the session in five chain-status-driven phases (commitments, encryption key, sealed deposit, confirmation, finalize) and reads each step back from chain instead of trusting tab memory; `lib/dkg-session.ts` reads the session and its three dynamic-field tables, and `lib/dkg-mailbox-keys.ts` keeps the non-extractable P-256 key in IndexedDB so another device reports "no key on this device" rather than minting one that could never open the existing shares. Verified on testnet with three real accounts by `scripts/dkg-mailbox-e2e.ts`: status 1→2, 65-byte key, 64-byte commitment, 137-byte sealed share, no plaintext in the ciphertext, and the recipient opens it. That script sends real transactions. The current v7 DKG finalization path uses member `attest_group_key` calls, then `finalize_session_v3` and `create_organization_from_session`; historical testnet CLI evidence is recorded in `docs/PRELAUNCH_CHECKLIST.md`. The current package rejects the v1/v2 finalizers, but this does not disable older published bytecode. Browser multi-device DKG and extension-wallet lifecycles remain UNVERIFIED. Roster FROST uses a separate session/store/private-transport path; its identity package and Names configuration remain NOT-DEPLOYED / GAP, so real cross-device delivery, event indexing, and pending-receipt recovery remain GAP / UNVERIFIED. `walrus_app_policy` remains a legacy read-only surface: its caller-supplied stake and charge inputs are still callable in old bytecode, and the presence of `policy_revision()` or other ABI functions cannot prove deployed return values, old-entry isolation, or real payment. The profile panel therefore stays fail-closed and displays the legacy risk. The independent `walrus_app_policy_v2` module binds a real `MemberStakeReceipt` to a `Coin<SUI>` payment, but it is not deployed; V2 publication, live ABI verification, and legacy registry migration remain GAP. The registry itself still has no on-chain discovery event (`create_registry` emits none), so its object id must be supplied by hand.
-
-## Deployment Status & Verification
-
-This project is in local development and offline verification mode. There is no live production deployment or public hosting (e.g. Vercel). Live network interaction is restricted to local or testnet validation as documented in `docs/DEPLOYMENT_CHECKLIST.md` and `docs/PRELAUNCH_CHECKLIST.md`.
-
-## Local Development
-
-```bash
-pnpm install
-pnpm dev
-```
+The full documentation set is organized in [docs/README.md](docs/README.md): overview & product, protocol & cryptography, security review & audit materials, deployment & operations, and internal working records.

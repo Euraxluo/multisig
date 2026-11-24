@@ -43,9 +43,9 @@
 - **分片备份**：丢 t 份 = 永久冻结。dealer 保管 / social recovery 需在 Phase 0 定案。
 - **自指风险**：委员会能（兼容地）升级治理代码自身；审计范围必须明示。
 
-## 4. 本次（2026-10-27）已闭环的缺口
+## 4. 已闭环项（2026-10-27）
 
-1. ~~chain-id 会话变体~~：已按「审计按行计费、编排走 PTB」决策**回退**（含 2 项测试与版本标记测试，Move 回到 303/303）；mainnet 方案改为 §1 第 5 条的 PTB 编排。
+1. chain-id 会话变体：已按「审计按行计费、编排走 PTB」决策**回退**（含 2 项测试与版本标记测试）；mainnet 方案改为 §1 第 5 条的 PTB 编排。
 2. `scripts/verify_upgrade_artifacts.ts`：digest 独立复算工具（自一致 MATCH / 对冻结 v11 产物 MISMATCH / 退出码均已实测）。
 3. `scripts/read_org_state.ts`：组织状态与 nonce 台账读取（对自举组织实测：threshold 3、epoch 1、last_nonce 1→next 2、sui-testnet:、3 成员、重放表 1 条）。
 4. 本 runbook。
@@ -56,4 +56,4 @@
 - 加密设备分片库接入自举/委员会签名路径（前端基建在，CLI 路径未接）。
 - 同批成员/设备 testnet 彩排（单机全链已绿——狗粮存入/借出升级/转出；多设备条件未满足）与 RELEASE 放行的多设备验收。
 - 第三方审计。
-- ~~下次封印前把 `bootstrap_self_governance.ts` 参数化~~ 自举路径改走 E2E Step 4（`run_live_user_story_e2e.ts`，断电续跑按 AssetDeposited 事件恢复 custody）。**现行包**：`0xb5b7c3f4…7a5165`（12 模块，2026-10-29 二轮加固 fresh publish），UpgradeCap `0x92299c11…7a1ae`。历史包不再登记、不再支持。合约演进维持一律 fresh publish。
+- 自举路径走 E2E Step 4（`run_live_user_story_e2e.ts`，断电续跑按 AssetDeposited 事件恢复 custody）。**现行包**：`0x73afe159f7b017efdfc7a013a6e444d54317b0147ae7fb182a182c3dc5ba57b5`（12 模块，`contracts/agent_vault/Published.toml`），UpgradeCap `0xc4b50706…0310`。合约演进维持一律 fresh publish。

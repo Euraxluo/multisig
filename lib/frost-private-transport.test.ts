@@ -232,12 +232,12 @@ test("local integration requires explicit click, configured transport and matchi
   const round = await prepareFrostCommitment(f.request, device.key, device)
   const input = { request: f.request, round, sender: device.profile, recipient: peer.profile, userClickConfirmed: true as const }
   await assert.rejects(f.transport().send({ ...input, userClickConfirmed: false as true }), /明确点击/)
-  await assert.rejects(f.transport({ isConfigured: () => false }).send(input), /GAP/)
+  await assert.rejects(f.transport({ isConfigured: () => false }).send(input), /尚未配置/)
   await assert.rejects(f.transport().send({ ...input, sender: peer.profile }), /round 与发送者/)
   await assert.rejects(f.transport().send({ ...input, round: { ...round, address: peer.profile.address } }), /identity\/index mismatch/)
   assert.equal(f.io.sends, 0)
   const unavailable = await f.transport({ isConfigured: () => false }).list({ request: f.request, me: device.profile, peers: [peer.profile] })
-  assertUnavailable(unavailable[0], /GAP/)
+  assertUnavailable(unavailable[0], /尚未配置/)
   assert.equal(f.io.reads, 0)
 })
 

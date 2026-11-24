@@ -1,9 +1,9 @@
 # 生产部署 Runbook（Agent Vault / Multisig）
 
 > 适用范围：`contracts/agent_vault`（Move）、`packages/multisig`（SDK）、Web 前端、Vercel 托管。
-> 当前血统：`0xcdc87b8ef5b071a293966f4329f1e9b4a443f49f1cf599cc188009cf7524ab44`（testnet，包对象链上 EXISTS，version = 1）
-> 最后实测：Move 测试 421/421 全绿；SDK `tsc` 干净；`next build` 成功（9/9 静态页）；Vercel Production Ready（HTTP 200）。
-> 本文中 `[已实测]` 表示本次发布流水线实测通过，`[需人工]` 表示必须由值班人手工确认。
+> 当前血统：`0x73afe159f7b017efdfc7a013a6e444d54317b0147ae7fb182a182c3dc5ba57b5`（testnet，version = 1，`contracts/agent_vault/Published.toml`；血统随发布演进，以该文件为准）。
+> 最近实测：Move 测试 424/424、SDK `tsc` 干净（2026-11-24）；`next build` 成功（9/9 静态页）、Vercel Production Ready（HTTP 200）为此前一次发布演练的结果，每次发布前须重跑。
+> 本文中 `[已实测]` 表示相应流水线步骤实测通过，`[需人工]` 表示必须由值班人手工确认。
 
 ---
 
@@ -15,14 +15,14 @@
 | 2 | Move 框架 pin | `rev = 8fc60f1fa966e90398c93beb67ad4f42992889c7`（对应 mainnet-v1.74.1，见 `contracts/agent_vault/Move.toml:7`） | `grep -n rev contracts/agent_vault/Move.toml` | [已实测] |
 | 3 | Node.js 版本 | ≥ 20（Vercel 构建一致） | `node -v` | [需人工] |
 | 4 | 依赖安装 | lockfile 无漂移 | `pnpm install --frozen-lockfile` | [需人工] |
-| 5 | Move 单元测试 | **421/421 全绿** | `cd contracts/agent_vault && sui move test` | [已实测] |
+| 5 | Move 单元测试 | **424/424 全绿** | `cd contracts/agent_vault && sui move test` | [已实测] |
 | 6 | SDK 类型检查 | `tsc` 无错误 | `pnpm sdk:typecheck`（= `tsc --noEmit -p packages/multisig/tsconfig.json`；包名是 `multisig`，旧命令 `--filter @multisig/sdk` 会 no matching project） | [已实测] |
 | 7 | 前端构建 | 成功，9/9 静态页 | `pnpm build`（next build） | [已实测] |
 | 8 | Vercel 部署 | Production Ready，HTTP 200 | 平台面板 + `curl -I` | [已实测] |
-| 9 | 链上包对象 | `EXISTS`，version 1 | `sui client object 0xcdc8...4ab44` | [已实测] |
+| 9 | 链上包对象 | `EXISTS`，version 1 | `sui client object 0x73af…e57b5` | [已实测] |
 | 10 | 发布 gas 余额 | **≥ 1.0 SUI**（安全边际） | `sui client gas` | [需人工] |
 | 11 | 部署者地址 | 非共享/非多签地址，私钥在硬件钱包或 KMS | 人工核对 | [需人工] |
-| 12 | UpgradeCap 持有者 | 见第 3 节（当前为单地址 EOA，审计 H-01） | `sui client object 0x6e73...72f8` | [需人工] |
+| 12 | UpgradeCap 持有者 | 见第 3 节（当前为单地址 EOA，审计 H-01） | `sui client object 0xc4b5…0310` | [需人工] |
 
 ### Gas 预算说明
 
@@ -89,13 +89,13 @@ scripts/rt9-t2-silent-loss.ts（及各集成测试里内联的旧包 ID）
 NEXT_PUBLIC_AGENT_VAULT_PACKAGE_ID = 0x<新包ID>
 ```
 
-校验旧 ID 残留：`grep -rl "0xcdc87b8ef5b071a293966f4329f1e9b4a443f49f1cf599cc188009cf7524ab44" --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=build .`，除 `Published.toml` 的 `original-id` 与历史文档外应无命中。
+校验旧 ID 残留：`grep -rl "0x73afe159f7b017efdfc7a013a6e444d54317b0147ae7fb182a182c3dc5ba57b5" --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=build .`，除 `Published.toml` 的 `original-id` 与历史文档外应无命中。
 
 ### 2.4 四道门禁验证（按顺序，一票否决）
 
 | 门禁 | 命令 / 动作 | 通过标准 |
 |------|-------------|----------|
-| G1 合约 | `sui move test` | 421/421 全绿 |
+| G1 合约 | `sui move test` | 424/424 全绿 |
 | G2 SDK | `pnpm sdk:typecheck` + `pnpm test:sdk`（CI 的 sdk job 同款） | 0 error / 全绿 |
 | G3 构建 | `pnpm build` | 成功，9/9 静态页 |
 | G4 线上 | `curl -I https://<生产域名>` + 页面实际发起一次只读 RPC（如 `getObject` 新包 ID） | HTTP 200 且返回 `EXISTS` |
@@ -108,7 +108,7 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 
 ### 3.1 现状与风险（审计 H-01）
 
-- 升级由 **`UpgradeCap` 单地址 EOA 持有**（`Published.toml` → `upgrade-capability = 0x6e737a652c7b660869768ad07c06309e62b4a50404a05562b91d7d1459f072f8`）。
+- 升级由 **`UpgradeCap` 单地址 EOA 持有**（`Published.toml` → `upgrade-capability = 0xc4b50706bf89d1436006b84c091927095a7e32bb5fa7fed90c15b5eebe700310`）。
 - **风险**：一把私钥即可全量升级逻辑，绕过任何治理/多签流程；私钥泄露 = 协议被完全接管；私钥丢失 = 永不可升级（见第 6 节）。
 - 这是已知的审计发现，属于可接受的**过渡态**，但不得长期保持。
 
@@ -130,7 +130,7 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 
 ---
 
-## 4. 密钥瓷典（Capability 管理）
+## 4. 密钥与 Capability 管理（Capability 管理）
 
 ### 4.1 Capability 清单（源自 `contracts/agent_vault/sources/vault.move`）
 
@@ -140,7 +140,7 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 | `OperatorCap` | `vault.move:74`（`has key`，**不可 store**） | 运营操作，绑定地址 | 运维主体 |
 | `AgentCap` | `vault.move:84`（`has key`，**不可 store**） | 代理执行，绑定地址 | 单 Agent |
 | `SubagentCap` | 运行时签发（`SubagentCapIssuedEvent` / `SubagentCapRevokedEvent`） | 子代理临时权限，可撤销 | 按会话签发 |
-| `UpgradeCap` | `0x6e73...72f8` | 包升级 | **单地址 EOA（H-01 风险）** |
+| `UpgradeCap` | `0xc4b5…0310` | 包升级 | **单地址 EOA（H-01 风险）** |
 | DKG 分片 | 链下生成，链上仅登记公钥（`EncryptionKeyRegisteredEvent`） | 门限解密 | 各委员独立持有 |
 
 > `OperatorCap` / `AgentCap` 均 `has key` 而**无 `store`**，意味着不能放进容器/共享对象转移——只能由指定地址持有，丢失即需重新签发。
@@ -217,7 +217,7 @@ G4 额外要求：在 UI 中打开一次 Agent Vault 页面，确认 SDK 读到�
 
 | # | 项 | 结论 | 依据 |
 |---|----|------|------|
-| 1 | Move 测试 421/421 | ✅ Go | [已实测] |
+| 1 | Move 测试 424/424 | ✅ Go | [已实测] |
 | 2 | SDK `tsc` 干净 | ✅ Go | [已实测] |
 | 3 | `next build` 成功（9/9 静态页） | ✅ Go | [已实测] |
 | 4 | Vercel Production Ready（HTTP 200） | ✅ Go | [已实测] |

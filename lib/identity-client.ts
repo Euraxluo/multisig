@@ -46,6 +46,11 @@ function namespaceConfig() {
   return { packageId: normalizeSuiAddress(packageId), namesId: normalizeSuiAddress(namesId) }
 }
 
+/** 供 SDK 工厂组装：前端 env 的 identity 命名空间配置（未配置时抛错）。 */
+export function identityConfig() {
+  return namespaceConfig()
+}
+
 let cachedNamespace: IdentityClient | null = null
 function namespace(): IdentityClient {
   const config = namespaceConfig()
@@ -86,6 +91,11 @@ async function submit(tx: Transaction, profile?: IdentityProfile): Promise<void>
 
 /** SDK 构造器返回其自身 @mysten/sui 版本的 Transaction；跨界后由前端签名。 */
 const cross = (tx: unknown): Transaction => tx as Transaction
+
+/** 供 SDK 工厂组装：PTB 交给钱包签名、等待确认并广播刷新事件。 */
+export async function executeIdentityTransaction(tx: unknown, profile?: IdentityProfile): Promise<void> {
+  await submit(cross(tx), profile)
+}
 
 export async function mintIdentity(label: string): Promise<void> {
   await submit(cross(buildMintName(namespaceConfig(), label)))
