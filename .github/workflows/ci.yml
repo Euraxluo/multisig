@@ -44,6 +44,12 @@ jobs:
           sui --version
           cd contracts/agent_vault
           sui move test
+      - name: sui move build + test (contracts/identity)
+        run: |
+          export PATH="$HOME/sui-bin:$PATH"
+          cd contracts/identity
+          sui move build
+          sui move test
 
   sdk:
     name: G2 · SDK tsc + tests + golden vectors
