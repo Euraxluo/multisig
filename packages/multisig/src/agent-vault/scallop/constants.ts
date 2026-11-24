@@ -1,9 +1,9 @@
 /**
- * scallop_yield_adapter 常量：群金库 sSUI 生息适配。
+ * scallop_yield_adapter 常量：群金库 sSUI 适配器的记账入口。
  *
- * SSUI 是本包内的模拟 Witness（对应 Scallop MarketCoin<SUI> 的测试网替身）；
- * 主网真实组合 = 同一 PTB 内调 Scallop 包 deposit/redeem，中间的 Coin 以
- * TransactionArgument 传入本模块入口（见 builders 的组合约定）。
+ * 适配器没有接入任何借贷协议：`Move.toml` 没有 Scallop 依赖，SSUI 只是本包内的
+ * 占位 Witness，没有铸造入口，链上不存在有值的 `Coin<SSUI>`。项目决定不接入真实
+ * Scallop，所以存入本金与赎回两条路径目前都没有可用的调用方式，sSUI 份额不升值。
  */
 import { AGENT_VAULT_PACKAGE_ID, MODULES } from '../org/constants';
 import { normalizeSuiAddress } from '@mysten/sui/utils';

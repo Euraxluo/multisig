@@ -1,6 +1,10 @@
 /**
  * onchain_chat 的 PTB 构造器：建群（三种）、发信（单条/代发/批量）、
- * Subagent Cap、会员经济学（进群/退群/提现/解散/移除）与收益注入。
+ * Subagent Cap、会员经济学（进群/退群/提现/解散/移除）与分润注资。
+ *
+ * 分润池没有收益来源：`deposit_staking_yield` / `distribute_staking_yield` 存入的
+ * 只是调用方自己提供的 SUI，按频道创建者设定的 bps 分配（创作者/Gas 补贴/成员）；
+ * 质押本金是普通的 `Balance<SUI>`，不产生利息。
  *
  * 客户端校验镜像合约常量：bps 合计须为 10000 或 0；批量 1..32 条且逐条
  * 校验 preview/blob 界，整批先验后发（合约语义：坏行不能推进序号前缀）。
@@ -25,17 +29,9 @@ function validateMessagePayload(walrusBlobId: Uint8Array, contentPreview: Uint8A
   if (walrusBlobId.length > CHAT_LIMITS.maxBlobIdBytes) throw new Error(`Walrus Blob ID 最多 ${CHAT_LIMITS.maxBlobIdBytes} 字节。`);
 }
 
-/** 建群入口的持久化输入预检（链上 create_channel_internal 顶部断言的镜像）：
- * 频道名 ≤ 256 字节、初始成员 ≤ 256 人，超界在这里抛错而不是链上 6021/6022。 */
-function validateChannelCreation(name: string | Uint8Array, initialMembers: readonly string[]): void {
-  if (bytesOf(name).length > CHAT_LIMITS.maxChannelNameBytes) throw new Error(`频道名最多 ${CHAT_LIMITS.maxChannelNameBytes} 字节。`);
-  if (initialMembers.length > CHAT_LIMITS.maxInitialMembers) throw new Error(`初始成员最多 ${CHAT_LIMITS.maxInitialMembers} 人。`);
-}
-
 /** 经典无质押建群（兼容旧 ABI）：链上固定 `gas_subsidy_share_bps = 10000`、
  * 其余分成为 0——之后经 `deposit_staking_yield` 存入的资金全部进 Gas 补贴池。 */
 export function buildCreateChannel(input: FinanceTransactionOptions & { packageId?: string; orgId: string; name: string | Uint8Array; initialMembers: string[] }): Transaction {
-  validateChannelCreation(input.name, input.initialMembers);
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
     target: chatTarget(input.packageId, 'create_channel'),
@@ -44,11 +40,15 @@ export function buildCreateChannel(input: FinanceTransactionOptions & { packageI
   return tx;
 }
 
-/** 质押建群：质押本金不生息；Gas 补贴只来自主动存入（见 scallop 适配器注释）。 */
+/**
+ * 质押建群：质押全部进入 `staked_principal`，一个普通的 `Balance<SUI>`，不产生利息。
+ *
+ * 发消息照常消耗 Gas；Gas 补贴池初始为 0，只有 `deposit_staking_yield` 的主动存入
+ * 才会增加。池余额足够时每条消息返还最多 0.001 SUI（`gasRebatePerMessage`），池空即停。
+ */
 export function buildCreateChannelWithStake(
   input: FinanceTransactionOptions & { packageId?: string; orgId: string; name: string | Uint8Array; initialMembers: string[]; stake: FinanceCoinSource },
 ): Transaction {
-  validateChannelCreation(input.name, input.initialMembers);
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({
     target: chatTarget(input.packageId, 'create_channel_with_stake'),
@@ -65,15 +65,19 @@ export interface CreatorMonetizedChannelInput {
   entryFee: bigint;
   /** 进群保本质押（退群 100% 赎回，0 为无要求）。 */
   requiredMemberStake: bigint;
-  /** 三个分润基点合计须为 10000（多路分润）或 0（全进 Gas 池）。 */
+  /** 三个分润基点合计须为 10000（多路分润）或 0（全进 Gas 补贴池）。分配的是 `deposit_staking_yield` 存入的资金，没有收益来源。 */
   creatorYieldShareBps: bigint;
   gasSubsidyShareBps: bigint;
   memberRebateShareBps: bigint;
 }
 
-/** 星球/会员群：门票 + 保本质押 + 存入资金三路分润（分润来自主动存入，无利息来源）。 */
+/**
+ * 星球/会员群：门票 + 保本质押。
+ *
+ * `deposit_staking_yield` 存入的资金按创建者设定的 bps 自动三路分配（创作者/Gas 补贴/成员），
+ * 没有利息来源。
+ */
 export function buildCreateCreatorMonetizedChannel(input: FinanceTransactionOptions & { packageId?: string }, monetized: CreatorMonetizedChannelInput): Transaction {
-  validateChannelCreation(monetized.name, []);
   const sum = monetized.creatorYieldShareBps + monetized.gasSubsidyShareBps + monetized.memberRebateShareBps;
   if (sum !== 10000n && sum !== 0n) throw new Error('三个分润基点之和必须为 10000（多路分润）或 0（全进 Gas 代付池）。');
   const tx = input.transaction ?? new Transaction();
@@ -88,7 +92,12 @@ export function buildCreateCreatorMonetizedChannel(input: FinanceTransactionOpti
   return tx;
 }
 
-/** 注入质押利息：deposit 与 distribute 是同一入口的两个名字。 */
+/**
+ * 向频道分润池注资：deposit 与 distribute 是同一入口的两个名字。
+ *
+ * `yield` 只是合约沿用的参数名：存入的是调用方自己提供的 SUI，按创建者设定的 bps 分配，
+ * 不是质押产生的利息。
+ */
 export function buildDepositStakingYield(input: FinanceTransactionOptions & { packageId?: string; channelId: string; yield: FinanceCoinSource }): Transaction {
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({ target: chatTarget(input.packageId, 'deposit_staking_yield'), arguments: [tx.object(financeAddress(input.channelId)), financeCoin(tx, FINANCE_SUI_TYPE, input.yield)] });
@@ -122,7 +131,7 @@ export function buildClaimCreatorRevenue(input: FinanceTransactionOptions & { pa
   return tx;
 }
 
-/** 退群：交还凭证，本金 + 按质押加权的利息分红自动退给发送者（entry 版）。 */
+/** 退群：交还凭证，本金 + 按质押加权的成员分红自动退给发送者（entry 版）。分红来自 `deposit_staking_yield` 存入资金的成员份额，不是利息。 */
 export function buildMemberUnstakeAndLeave(input: FinanceTransactionOptions & { packageId?: string; channelId: string; receiptId: string }): Transaction {
   const tx = input.transaction ?? new Transaction();
   tx.moveCall({ target: chatTarget(input.packageId, 'member_unstake_and_leave_entry'), arguments: [tx.object(financeAddress(input.channelId)), tx.object(financeAddress(input.receiptId))] });
@@ -137,10 +146,10 @@ export function buildRemoveZeroStakeMember(input: FinanceTransactionOptions & { 
 }
 
 /**
- * 旧包回退：一个 PTB 里逐条 post_message（每条各付一次链上报销）。
+ * 旧包回退：一个 PTB 里逐条 post_message（每条各触发一次链上 Gas 返还，补贴池有余额时才实际返还）。
  *
  * 整段 burst 共享同一个空 blob 输入，只有正文逐条编码；文本-only 场景与
- * post_message_batch 的语义差异只在 gas 报销次数，事件与序号推进一致。
+ * post_message_batch 的语义差异只在 gas 返还的出账次数，事件与序号推进一致。
  */
 export function buildPostMessagesSequential(
   input: FinanceTransactionOptions & { packageId?: string; channelId: string },
@@ -148,11 +157,6 @@ export function buildPostMessagesSequential(
 ): Transaction {
   const tx = input.transaction ?? new Transaction();
   const noBlob = tx.pure.vector('u8', []);
-  // 批量路径逐条走单发预检：任何一条超界在这里抛错，而不是整笔 PTB
-  // 在链上以 E_MESSAGE_TOO_LONG 中止、白付一笔 gas。
-  for (const preview of contentPreviews) {
-    validateMessagePayload(new Uint8Array(0), bytesOf(preview));
-  }
   for (const preview of contentPreviews) {
     tx.moveCall({
       target: chatTarget(input.packageId, 'post_message'),
@@ -175,7 +179,7 @@ function messageArgs(tx: Transaction, payload: ChatMessagePayload) {
   return [tx.pure.vector('u8', [...blob]), tx.pure.vector('u8', [...preview])];
 }
 
-/** 主账号亲自发信（带自动化 Gas 报销）。 */
+/** 主账号亲自发信（补贴池有余额时自动返还最多 0.001 SUI；池空则照常自付 Gas）。 */
 export function buildPostMessage(
   input: FinanceTransactionOptions & { packageId?: string; channelId: string },
   payload: ChatMessagePayload,

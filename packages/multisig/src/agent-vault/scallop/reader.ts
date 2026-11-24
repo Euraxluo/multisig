@@ -1,4 +1,4 @@
-/** scallop_yield_adapter 读取层：适配器快照（本金 / sSUI 份额 / 已收利息）。 */
+/** scallop_yield_adapter 读取层：适配器快照（记账本金 / sSUI 份额 / 累计注入）。适配器未接入任何借贷协议，以下都是记账数字。 */
 import type { SuiGrpcClient } from '@mysten/sui/grpc';
 import { normalizeStructTag } from '@mysten/sui/utils';
 import { canonicalAddress } from '../org/bcs';
@@ -12,11 +12,11 @@ export interface ScallopAdapterSnapshot {
   id: string;
   channelId: string;
   admin: string;
-  /** 存入的 SUI 原始本金（保本基准线）。 */
+  /** 记账的 SUI 本金（适配器上的记账数字，不对应任何借贷市场头寸）。 */
   totalStakedSuiPrincipal: bigint;
-  /** 持有的 sSUI 份额（按出块秒级连续升值）。 */
+  /** 持有的 sSUI 份额（占位类型，不升值）。 */
   ssuiBalance: bigint;
-  /** 累计已提取并注入群聊的利息总量（MIST）。 */
+  /** 累计经适配器注入群聊的 SUI 总量（MIST）。字段名带 yield，但钱只是有人主动存入的，不是利息。 */
   totalHarvestedYieldSui: bigint;
 }
 

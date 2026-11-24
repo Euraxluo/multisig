@@ -1888,7 +1888,7 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
                   </motion.div>
                 </TabsContent>
               )}
-              {/* 7. Scallop 收益 Tab */}
+              {/* 7. Scallop 适配器 Tab：未接入借贷协议，文案如实标注 */}
               {activeTab === "yield" && (
                 <TabsContent value="yield" className="mt-3">
                   <motion.div

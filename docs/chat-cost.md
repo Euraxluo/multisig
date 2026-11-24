@@ -10,11 +10,11 @@
 |---|---|---|
 | 交易信封 | ≈1.0–1.9 MIST ×10⁶（0.001–0.002 SUI） | 签名校验、证书、gas coin、共享 `ChatChannel` 的读写访问。来自本项目历史交易的 `gasUsed.computationCost` 实测。 |
 | 事件 | ≈0.007 MIST ×10⁶ / 条 | testnet 协议 v139：`event_emit_cost_base=52`、`event_emit_output_cost_per_byte=10`、tag/value 推导 5/2。一条 200 字节的 `ChatMessageEvent` 约 6–8 k MIST，占比 <1%。 |
-| Gas 补贴转账 | 1.0 MIST ×10⁶ / 条 | `auto_subsidize_gas` 每个 `post_message` 从 `gas_subsidy_pool` 拆出 0.001 SUI，`transfer::public_transfer` 给发送者，并额外创建一个 coin 对象、发一条事件。这笔钱从补贴池出账、回流给发送者，不是发送者额外支付，但它让每行消息都必须触碰一次 `Balance` 与 coin 创建。 |
+| Gas 补贴转账 | 1.0 MIST ×10⁶ / 条 | `auto_subsidize_gas` 每个 `post_message` 从 `gas_subsidy_pool` 拆出 0.001 SUI，`transfer::public_transfer` 给发送者，并额外创建一个 coin 对象、发一条事件。这笔钱从补贴池出账、回流给发送者，不是发送者额外支付，但它让每行消息都必须触碰一次 `Balance` 与 coin 创建。补贴池初始为 0，只随 `deposit_staking_yield` 的主动存入增加（该入口 permissionless，任何人可存），没有任何利息来源；池余额不足本次返还额时不返还。 |
 
 结论：**每行消息的成本几乎全部是“每笔交易”的固定开销 + 每行的补贴转账，而不是消息内容本身。** 把一条消息的文本从 200 字节压到 20 字节对总成本没有意义；减少交易笔数、减少逐行补贴出账才有意义。
 
-1000 条/天、逐条发送时：发送者毛支出约 1–2 SUI/天，补贴池出账 1 SUI/天并回流给发送者；事件部分不到 0.007 SUI。
+1000 条/天、逐条发送时：发送者毛支出约 1–2 SUI/天，补贴池（有余额时）出账 1 SUI/天并回流给发送者；事件部分不到 0.007 SUI。
 
 ## 2. 已经落地的三档优化
 
