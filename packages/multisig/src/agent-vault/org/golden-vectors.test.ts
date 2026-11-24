@@ -18,6 +18,8 @@ import {
   computeRosterUpdateDigest,
   computeRotatePopDigest,
   computeThresholdApprovalDigest,
+  computeTreasuryAgentDelegationDigest,
+  computeTreasuryOutflowPolicyDigest,
   computeTreasuryTransferDigest,
 } from './digest';
 import { mailboxAad } from '../../dkg/mailbox';
@@ -122,12 +124,30 @@ const cases: Case[] = [
     }))).digest(),
     expected: fixture.vectors.dkg_mailbox_v1,
   },
+  {
+    name: 'treasury_agent_v1 — SUI_ORG_TREASURY_AGENT_V1 (operator-bound delegation)',
+    actual: computeTreasuryAgentDelegationDigest({
+      chainId: CHAIN, orgId: I.orgId, epochVersion: 2n, nonce: 31n,
+      treasuryId: '0x' + 'ee'.repeat(32), vaultId: '0x' + 'ff'.repeat(32), operator: '0x' + '99'.repeat(32),
+      maxEpochOutflow: 700n, maxAgentBudget: 80n, keyGeneration: 4n,
+    }),
+    expected: fixture.vectors.treasury_agent_v1,
+  },
+  {
+    name: 'treasury_outflow_v1 — SUI_ORG_TREASURY_OUTFLOW_V1 (all-distinct fields)',
+    actual: computeTreasuryOutflowPolicyDigest({
+      chainId: CHAIN, orgId: I.orgId, epochVersion: 2n, nonce: 32n,
+      treasuryId: '0x' + 'ee'.repeat(32), vaultId: '0x' + 'ff'.repeat(32),
+      maxEpochOutflow: 700n, maxAgentBudget: 80n, keyGeneration: 4n,
+    }),
+    expected: fixture.vectors.treasury_outflow_v1,
+  },
 ];
 
 describe('golden digest vectors (digest-vectors.json)', () => {
-  it('covers all 10 digest domains', () => {
-    expect(cases.length).toBe(10);
-    expect(Object.keys(fixture.vectors).length).toBe(10);
+  it('covers all 12 digest domains', () => {
+    expect(cases.length).toBe(12);
+    expect(Object.keys(fixture.vectors).length).toBe(12);
   });
 
   for (const c of cases) {

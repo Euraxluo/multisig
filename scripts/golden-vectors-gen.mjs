@@ -82,6 +82,21 @@ vectors.dkg_mailbox_v1 = sha256(
   utf8('SUI_DKG_MAILBOX_V1:'), utf8('session-abc'), addr(M1_HEX), addr(M2_HEX),
 );
 
+// 11. SUI_ORG_TREASURY_AGENT_V1 (I3): || chain || org || epoch || nonce || treasury || vault || operator || outflow || budget || key_generation
+vectors.treasury_agent_v1 = sha256(
+  utf8('SUI_ORG_TREASURY_AGENT_V1:'), CHAIN, ORG, u64le(2n), u64le(31n),
+  addr('0x' + 'ee'.repeat(32)), addr('0x' + 'ff'.repeat(32)), addr('0x' + '99'.repeat(32)),
+  u64le(700n), u64le(80n), u64le(4n),
+);
+
+// 12. SUI_ORG_TREASURY_OUTFLOW_V1 (I3): || chain || org || epoch || nonce || treasury || vault || outflow || budget || key_generation
+//     Every field has its own value, so swapping or dropping any one of them
+//     (the two caps included) changes this vector.
+vectors.treasury_outflow_v1 = sha256(
+  utf8('SUI_ORG_TREASURY_OUTFLOW_V1:'), CHAIN, ORG, u64le(2n), u64le(32n),
+  addr('0x' + 'ee'.repeat(32)), addr('0x' + 'ff'.repeat(32)), u64le(700n), u64le(80n), u64le(4n),
+);
+
 const out = {
   _meta: {
     generator: 'scripts/golden-vectors-gen.mjs',

@@ -23,18 +23,23 @@ import {
 import {
   AGENT_VAULT_PACKAGE_ID,
   GOVERNANCE_EVENTS,
+  TREASURY_EVENTS,
 } from './constants';
 import {
   computeKeyRotationDigest,
   computeProposalDigest,
   computeRosterUpdateDigest,
   computeThresholdApprovalDigest,
+  computeTreasuryAgentDelegationDigest,
+  computeTreasuryOutflowPolicyDigest,
 } from './digest';
 import { BcsReader, bytesToHex, canonicalAddress, u64le } from './bcs';
 import {
   buildAdvanceEpochPTB,
+  buildDelegateAgentAuthorityPTB,
   buildExecuteThresholdProposalPTB,
   buildRotateGroupKeyPTB,
+  buildSetTreasuryOutflowPolicyPTB,
   buildUpdateRosterPTB,
 } from './builders';
 import { readOrganization, type OrganizationSnapshot } from './reader';
@@ -67,8 +72,23 @@ export interface CollectedThresholdSignatures {
 }
 
 /** 可插拔签名收集传输。多设备生产实现：设备密封库 + 私有传输。 */
+/**
+ * 签名人要核对的内容：动作本身、它绑定的组织状态（链、组织、epoch、nonce、密钥代）
+ * 以及由此算出的摘要。只有摘要时，签名设备无法把 32 字节还原成「给谁授权、上限多少」。
+ */
+export interface SigningIntent {
+  action: SessionAction;
+  chainId: string;
+  orgId: string;
+  epochVersion: bigint;
+  nonce: bigint;
+  keyGeneration: bigint;
+  digest: Uint8Array;
+}
+
 export interface SessionShareProvider {
-  collect(input: { digest: Uint8Array; groupPublicKey: Uint8Array }): Promise<CollectedThresholdSignatures>;
+  /** `intent` 与 `digest` 出自同一份会话状态；provider 负责在签名前把它展示给签名人。 */
+  collect(input: { digest: Uint8Array; groupPublicKey: Uint8Array; intent: SigningIntent }): Promise<CollectedThresholdSignatures>;
 }
 
 /** 单机实现（测试/彩排）：分片仅存内存，nonce 单次使用防重放。 */
@@ -80,7 +100,7 @@ export class LocalMemoryShareProvider implements SessionShareProvider {
     this.material = material.map((m) => ({ ...m }));
   }
 
-  async collect({ digest, groupPublicKey }: { digest: Uint8Array; groupPublicKey: Uint8Array }): Promise<CollectedThresholdSignatures> {
+  async collect({ digest, groupPublicKey }: { digest: Uint8Array; groupPublicKey: Uint8Array; intent: SigningIntent }): Promise<CollectedThresholdSignatures> {
     const nodes = this.material.map((m) => new ThresholdSignerNode(m.id, m.participantIndex, m.privateShare));
     const nonces = nodes.map((n) => n.generateNonceCommitment());
     const shares = nodes.map((n) => n.computeSignatureShare(digest, groupPublicKey, nonces));
@@ -104,6 +124,30 @@ export type SessionAction =
       newMembers: string[];
       newWeights: Array<number | bigint>;
       newThresholdWeight: number | bigint;
+    }
+  | {
+      /**
+       * I3：门限授权一个 operator（签发 OperatorCap 并设置流出上限；重复授权不回收旧卡）。
+       * 签名前应向签名人展示 operator 与两个上限：epoch 上限同时约束治理转账；
+       * operator 必须是能签名的地址，不能是组织、财政库或金库的对象地址。
+       */
+      kind: 'delegateAgent';
+      treasuryId: string;
+      vaultId: string;
+      operator: string;
+      maxEpochOutflow: number | bigint;
+      maxAgentBudget: number | bigint;
+    }
+  | {
+      /**
+       * I3：门限调整流出策略（无需 operator 卡）。任一上限为 0 即停机：
+       * 撤销全部已签发的卡，之后调高上限也不会让旧卡复活。
+       */
+      kind: 'setOutflowPolicy';
+      treasuryId: string;
+      vaultId: string;
+      maxEpochOutflow: number | bigint;
+      maxAgentBudget: number | bigint;
     };
 
 export interface SessionOptions {
@@ -252,6 +296,60 @@ export class ThresholdProposalSession {
         };
         break;
       }
+      case 'delegateAgent': {
+        const digest = computeTreasuryAgentDelegationDigest({
+          ...base,
+          treasuryId: action.treasuryId,
+          vaultId: action.vaultId,
+          operator: action.operator,
+          maxEpochOutflow: action.maxEpochOutflow,
+          maxAgentBudget: action.maxAgentBudget,
+          keyGeneration: snapshot.keyGeneration,
+        });
+        derived = {
+          digest,
+          expectedEvents: [TREASURY_EVENTS.agentAuthorityDelegated],
+          buildPTB: (sig) =>
+            buildDelegateAgentAuthorityPTB({
+              packageId,
+              treasuryId: action.treasuryId,
+              orgId: snapshot.id,
+              vaultId: action.vaultId,
+              operator: action.operator,
+              maxEpochOutflow: action.maxEpochOutflow,
+              maxAgentBudget: action.maxAgentBudget,
+              nonce,
+              frostSignature: sig,
+            }),
+        };
+        break;
+      }
+      case 'setOutflowPolicy': {
+        const digest = computeTreasuryOutflowPolicyDigest({
+          ...base,
+          treasuryId: action.treasuryId,
+          vaultId: action.vaultId,
+          maxEpochOutflow: action.maxEpochOutflow,
+          maxAgentBudget: action.maxAgentBudget,
+          keyGeneration: snapshot.keyGeneration,
+        });
+        derived = {
+          digest,
+          expectedEvents: [TREASURY_EVENTS.treasuryOutflowPolicyUpdated],
+          buildPTB: (sig) =>
+            buildSetTreasuryOutflowPolicyPTB({
+              packageId,
+              treasuryId: action.treasuryId,
+              orgId: snapshot.id,
+              vaultId: action.vaultId,
+              maxEpochOutflow: action.maxEpochOutflow,
+              maxAgentBudget: action.maxAgentBudget,
+              nonce,
+              frostSignature: sig,
+            }),
+        };
+        break;
+      }
     }
 
     return new ThresholdProposalSession(snapshot, action, nonce, derived, packageId, opts.client ?? null, chainId);
@@ -270,6 +368,19 @@ export class ThresholdProposalSession {
     return '0x' + bytesToHex(this.derived.digest);
   }
 
+  /** 签名人应核对的内容。`sign()` 把它的副本原样交给 provider。 */
+  get intent(): SigningIntent {
+    return {
+      action: this.action,
+      chainId: this.chainId,
+      orgId: this.signedSnapshot.id,
+      epochVersion: this.signedSnapshot.epochVersion,
+      nonce: this.nonce,
+      keyGeneration: this.signedSnapshot.keyGeneration,
+      digest: this.proposalDigest,
+    };
+  }
+
   get isSigned(): boolean {
     return this.frostSignature !== null;
   }
@@ -281,7 +392,11 @@ export class ThresholdProposalSession {
     if (this.signing) throw new Error('会话正在收集签名');
     this.signing = true;
     try {
-      const collected = await provider.collect({ digest: this.proposalDigest, groupPublicKey: Uint8Array.from(this.signedSnapshot.groupPk) });
+      const collected = await provider.collect({
+        digest: this.proposalDigest,
+        groupPublicKey: Uint8Array.from(this.signedSnapshot.groupPk),
+        intent: this.intent,
+      });
       if (this.invalidated) throw new Error('会话已失效，必须新建会话');
       const signature = ThresholdSignerNode.aggregateSignature(
         this.derived.digest,
@@ -393,6 +508,25 @@ export class ThresholdProposalSession {
           valid = r.u64() === BigInt(action.newThresholdWeight) && r.u64() === nextEpoch;
           break;
         }
+        case TREASURY_EVENTS.agentAuthorityDelegated:
+          // I3：AgentAuthorityDelegated = treasury ‖ vault ‖ operator ‖ 双上限 ‖ nonce。
+          valid = action.kind === 'delegateAgent'
+            && r.address() === canonicalAddress(action.treasuryId)
+            && r.address() === canonicalAddress(action.vaultId)
+            && r.address() === canonicalAddress(action.operator)
+            && r.u64() === BigInt(action.maxEpochOutflow)
+            && r.u64() === BigInt(action.maxAgentBudget)
+            && r.u64() === this.nonce;
+          break;
+        case TREASURY_EVENTS.treasuryOutflowPolicyUpdated:
+          // I3：TreasuryOutflowPolicyUpdated = treasury ‖ vault ‖ 双上限 ‖ nonce。
+          valid = action.kind === 'setOutflowPolicy'
+            && r.address() === canonicalAddress(action.treasuryId)
+            && r.address() === canonicalAddress(action.vaultId)
+            && r.u64() === BigInt(action.maxEpochOutflow)
+            && r.u64() === BigInt(action.maxAgentBudget)
+            && r.u64() === this.nonce;
+          break;
       }
       return valid && r.remaining === 0;
     } catch { return false; }

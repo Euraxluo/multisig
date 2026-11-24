@@ -42,6 +42,10 @@ export const DOMAINS = {
   ROSTER_UPDATE: 'SUI_ORG_ROSTER_V1:',
   POP: 'SUI_ORG_POP_V2:', // round-7：创建 PoP 绑 key_threshold；轮换 PoP 仍 V1（见 rotate 注释）
   GENESIS_WITHDRAW: 'SUI_ORG_GENESIS_WITHDRAW_V1:',
+  /** I3：组织金库 Agent 授权摘要（operator + 双上限；与 OUTFLOW 域互斥）。 */
+  TREASURY_AGENT: 'SUI_ORG_TREASURY_AGENT_V1:',
+  /** I3：组织金库流出策略摘要（任一上限为 0 = 停机并撤销全部卡；不含 operator）。 */
+  TREASURY_OUTFLOW: 'SUI_ORG_TREASURY_OUTFLOW_V1:',
 } as const;
 
 /** 组织绑定的链标识（DEFAULT_CHAIN_ID 固化 sui-testnet:；mainnet 走 create_organization_with_chain_id）。 */
@@ -157,6 +161,34 @@ export const ASYNC_PROPOSAL_ERRORS: Readonly<Record<number, string>> = {
   4017: 'E_INVALID_TITLE',
   4018: 'E_INVALID_DEADLINE',
 };
+
+/**
+ * organization_treasury 命名错误（`#[error(code = N)]`，1–14 与合约逐一对齐）。
+ * 1–9 为国库既有校验；10–14 为 I3 新增的授权入口校验（operator / 上限 /
+ * nonce / 验签）。
+ */
+export const TREASURY_ERRORS: Readonly<Record<number, { name: string; message: string }>> = {
+  1: { name: 'ENotMember', message: 'Treasury creation and transfers require a current organization member with positive weight.' },
+  2: { name: 'EWrongOrganization', message: 'Organization must match the treasury\'s stored organization.' },
+  3: { name: 'EWrongVault', message: 'SUI vault must match the treasury\'s stored vault.' },
+  4: { name: 'EWrongTreasuryBinding', message: 'Transfer binding must name this treasury.' },
+  5: { name: 'EWrongProposalBinding', message: 'Proposal must match the transfer binding\'s stored proposal.' },
+  6: { name: 'EInvalidRecipient', message: 'Transfer recipient must not be the zero address.' },
+  7: { name: 'EZeroAmount', message: 'Transfer amount must be positive in MIST.' },
+  8: { name: 'EInvalidTitle', message: 'Transfer title must contain between 1 and 256 bytes.' },
+  9: { name: 'EInvalidDeadline', message: 'Transfer deadline must be in the future and no more than 365 days away in milliseconds.' },
+  10: { name: 'EInvalidOperator', message: 'Delegated operator must be a signer address: not zero, and not the address of the organization, the treasury, or the vault.' },
+  11: { name: 'EZeroOutflowCap', message: 'Delegation requires a positive per-epoch outflow cap.' },
+  12: { name: 'EZeroAgentBudget', message: 'Delegation requires a positive per-agent budget cap.' },
+  13: { name: 'EInvalidNonce', message: 'Authorization nonce must strictly exceed the organization\'s last nonce.' },
+  14: { name: 'EInvalidSignature', message: 'Threshold signature must verify against the organization group key over the authorization digest.' },
+};
+
+/** I3 国库授权事件名（organization_treasury 模块；匹配时同样固定完整类型来源包）。 */
+export const TREASURY_EVENTS = {
+  agentAuthorityDelegated: 'organization_treasury::AgentAuthorityDelegated',
+  treasuryOutflowPolicyUpdated: 'organization_treasury::TreasuryOutflowPolicyUpdated',
+} as const;
 
 /** dkg_committee 数字错误码（3013 死桩已删除，不在表内；3017–3019 与 3020–3026 均与合约逐一对齐）。 */
 export const DKG_ERRORS: Readonly<Record<number, string>> = {
@@ -336,5 +368,8 @@ export function explainAbort(substatus: string): string | null {
   }
   if (module === 'vault' && VAULT_ERRORS[code]) return `vault ${VAULT_ERRORS[code]} (${code})`;
   if (module === 'asynchronous_proposal' && ASYNC_PROPOSAL_ERRORS[code]) return `asynchronous_proposal ${ASYNC_PROPOSAL_ERRORS[code]} (${code})`;
+  if (module === 'organization_treasury' && TREASURY_ERRORS[code]) {
+    return `organization_treasury ${TREASURY_ERRORS[code].name} (${code}): ${TREASURY_ERRORS[code].message}`;
+  }
   return `${module} error ${code} (未注册)`;
 }

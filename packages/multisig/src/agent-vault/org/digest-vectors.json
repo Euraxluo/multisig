@@ -37,6 +37,8 @@
     "roster_update_v1": "2dca429a7c1bdf4ab472cfabbb6cecd65cfaf5bc2c5651d5c6a4d6d178aeafbd",
     "genesis_withdraw_v1": "efe9e29e2ca2b574860623d5e01c662baaaf7d71b407b67a5c12802151abfc56",
     "dkg_attest_v1": "b8914ccec3776b41fe3c3f7aabbe878e6e9720900dc72ab4fc94e9eca7024a4f",
-    "dkg_mailbox_v1": "b07df5188ebc98eb76d910f505c59cd68806111b7b8092ae76b97d268546b89c"
+    "dkg_mailbox_v1": "b07df5188ebc98eb76d910f505c59cd68806111b7b8092ae76b97d268546b89c",
+    "treasury_agent_v1": "1a3418563eefbcc97b5c13a520c90b06fc31e667fc539d4ecd9d99ae44f2bd0b",
+    "treasury_outflow_v1": "4384a2c17b89d60cd654983f5364b53f48bbdd681e45522a574d9f3fe2318297"
   }
 }

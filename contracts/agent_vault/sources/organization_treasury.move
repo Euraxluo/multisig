@@ -6,9 +6,28 @@
 /// not an exclusive organization registry.
 ///
 /// The MasterCap is intentionally wrapped inline and is not independently
-/// addressable. No callable seam releases or borrows it, so legacy vault and
-/// proposal bytecode cannot obtain the authority needed to withdraw, issue an
-/// operator, or purge this vault. Deposits and balances remain canonical in vault.
+/// addressable; no seam releases it. It is borrowed at exactly four controlled
+/// points: executing an approved transfer, delegating agent authority (setting
+/// the vault's outflow caps and issuing an OperatorCap), adjusting that outflow
+/// policy, and revoking every issued card. The last three each require the
+/// organization's threshold signature over a domain-separated digest carrying a
+/// strictly monotonic nonce, so legacy vault and proposal bytecode still cannot
+/// reach the sealed authority.
+///
+/// Delegating again issues a fresh OperatorCap and leaves earlier caps live.
+/// There is no per-operator revocation: governance retires cards wholesale by
+/// setting the outflow policy with either cap at zero. That stop raises the
+/// vault version, so every OperatorCap and AgentCap issued so far is permanently
+/// invalid; raising the caps afterwards revives nothing, and agent spending
+/// resumes only through a new delegation. While both caps are positive, a card
+/// spends at most the smaller of its own limit and the current per-agent cap
+/// each epoch, so lowering that cap binds cards already issued.
+///
+/// While the epoch cap is positive the vault-wide ceiling applies to every
+/// outflow, governance transfers included (see vault::withdraw). An approved
+/// transfer larger than the epoch's remaining outflow aborts and stays pending
+/// until a later epoch or until governance stops the agents with a zero epoch
+/// cap. Deposits and balances remain canonical in vault.
 /// Exits use the same organization approval path and may pay any stored proposal
 /// recipient; executing a payout needs no DKG transaction signature.
 ///
@@ -22,7 +41,8 @@
 /// No init is needed, including when this additive module arrives by upgrade.
 module agent_vault::organization_treasury;
 
-use sui::{clock::Clock, event, sui::SUI};
+use sui::{bcs, clock::Clock, ed25519, event, sui::SUI};
+use std::hash;
 use agent_vault::{
     asynchronous_proposal::{Self, Proposal},
     cryptographic_org::{Self, Organization},
@@ -33,6 +53,18 @@ use agent_vault::{
 
 const MAX_TITLE_BYTES: u64 = 256;
 const MAX_DURATION_MS: u64 = 31_536_000_000;
+
+// === Digest domains ===
+
+/// Agent delegation digest (V1). Distinct from SUI_ORG_TREASURY_OUTFLOW_V1 and
+/// from the proposal transfer domain: a threshold signature authorizes exactly
+/// one action kind. Both bind org/epoch/nonce/treasury/vault/key_generation, so
+/// a signature cannot migrate to another organization, treasury, or vault.
+const DOMAIN_TREASURY_AGENT_V1: vector<u8> = b"SUI_ORG_TREASURY_AGENT_V1:";
+
+/// Outflow-policy digest (V1). Shares the binding set of the agent domain and
+/// differs only in the domain prefix and the absent operator field.
+const DOMAIN_TREASURY_OUTFLOW_V1: vector<u8> = b"SUI_ORG_TREASURY_OUTFLOW_V1:";
 
 // === Errors ===
 
@@ -62,6 +94,21 @@ const EInvalidTitle: vector<u8> = b"Transfer title must contain between 1 and 25
 
 #[error(code = 9)]
 const EInvalidDeadline: vector<u8> = b"Transfer deadline must be in the future and no more than 365 days away in milliseconds.";
+
+#[error(code = 10)]
+const EInvalidOperator: vector<u8> = b"Delegated operator must be a signer address: not zero, and not the address of the organization, the treasury, or the vault.";
+
+#[error(code = 11)]
+const EZeroOutflowCap: vector<u8> = b"Delegation requires a positive per-epoch outflow cap.";
+
+#[error(code = 12)]
+const EZeroAgentBudget: vector<u8> = b"Delegation requires a positive per-agent budget cap.";
+
+#[error(code = 13)]
+const EInvalidNonce: vector<u8> = b"Authorization nonce must strictly exceed the organization's last nonce.";
+
+#[error(code = 14)]
+const EInvalidSignature: vector<u8> = b"Threshold signature must verify against the organization group key over the authorization digest.";
 
 // === Public Types ===
 
@@ -95,6 +142,29 @@ public struct TransferCreated has copy, drop {
     binding_id: ID,
     treasury_id: ID,
     proposal_id: ID,
+}
+
+/// Threshold-authorized agent delegation: caps were set on the sealed vault and
+/// an OperatorCap was freshly issued to `operator`. Re-delegation does not
+/// revoke earlier caps; zeroing the policy is the governance stop path.
+public struct AgentAuthorityDelegated has copy, drop {
+    treasury_id: ID,
+    vault_id: ID,
+    operator: address,
+    max_epoch_outflow: u64,
+    max_agent_budget: u64,
+    nonce: u64,
+}
+
+/// Threshold-authorized outflow-policy change on the sealed vault. A zero epoch
+/// cap is the stop: it also retires every issued card, and the vault's
+/// AgentCapsRevokedEvent carries the new version.
+public struct TreasuryOutflowPolicyUpdated has copy, drop {
+    treasury_id: ID,
+    vault_id: ID,
+    max_epoch_outflow: u64,
+    max_agent_budget: u64,
+    nonce: u64,
 }
 
 // === Public Functions ===
@@ -194,6 +264,207 @@ public fun execute(
     );
 }
 
+/// Delegate agent authority over the sealed vault with one threshold signature.
+/// Identity guards precede parameter, replay, and signature checks; the vault is
+/// then the sole mutable input of the borrowed-cap calls. Anyone may relay the
+/// authorization, exactly as with transfer execution: consent comes solely from
+/// the FROST signature over the domain-separated digest.
+///
+/// Repeated delegation issues an additional OperatorCap and does not invalidate
+/// earlier ones. Governance retires every card at once through
+/// `set_agent_outflow_policy` with either cap at zero; per-operator management is
+/// out of scope for this module. The positive epoch cap this sets also bounds
+/// approved governance transfers for as long as it is in force.
+///
+/// The operator has to be an address that can sign. The organization, treasury,
+/// and vault object addresses are rejected here because no key controls them;
+/// other object or package addresses cannot be told apart on-chain and leave the
+/// issued card unusable.
+public fun delegate_agent_authority(
+    self: &OrganizationTreasury,
+    org: &mut Organization,
+    vault: &mut AgentVault<SUI>,
+    operator: address,
+    max_epoch_outflow: u64,
+    max_agent_budget: u64,
+    nonce: u64,
+    frost_signature: vector<u8>,
+    ctx: &mut TxContext,
+) {
+    assert!(self.org_id == object::id(org), EWrongOrganization);
+    assert!(self.vault_id == object::id(vault), EWrongVault);
+    assert!(
+        operator != @0x0
+            && operator != sui::object::id_to_address(&self.org_id)
+            && operator != sui::object::uid_to_address(&self.id)
+            && operator != sui::object::id_to_address(&self.vault_id),
+        EInvalidOperator,
+    );
+    assert!(max_epoch_outflow > 0, EZeroOutflowCap);
+    assert!(max_agent_budget > 0, EZeroAgentBudget);
+    assert!(nonce > cryptographic_org::last_nonce(org), EInvalidNonce);
+
+    let digest = compute_agent_delegation_digest(
+        &cryptographic_org::chain_id(org),
+        &cryptographic_org::org_id(org),
+        cryptographic_org::epoch_version(org),
+        nonce,
+        &self.id.to_inner(),
+        &self.vault_id,
+        &operator,
+        max_epoch_outflow,
+        max_agent_budget,
+        cryptographic_org::key_generation(org),
+    );
+    assert!(
+        ed25519::ed25519_verify(&frost_signature, &cryptographic_org::group_pk(org), &digest),
+        EInvalidSignature,
+    );
+
+    vault::set_outflow_policy<SUI>(&self.master_cap, vault, max_epoch_outflow, max_agent_budget);
+    vault::issue_operator_cap<SUI>(&self.master_cap, vault, operator, ctx);
+    cryptographic_org::set_last_nonce(org, nonce);
+
+    event::emit(AgentAuthorityDelegated {
+        treasury_id: self.id.to_inner(),
+        vault_id: self.vault_id,
+        operator,
+        max_epoch_outflow,
+        max_agent_budget,
+        nonce,
+    });
+}
+
+/// Adjust the sealed vault's outflow policy with one threshold signature.
+///
+/// - A zero in either cap is the governance stop. No agent can spend under it,
+///   so every OperatorCap and AgentCap issued so far is retired outright: the
+///   vault version is raised and the agent registry cleared. Raising the caps
+///   later revives nothing; spending resumes only through a new
+///   `delegate_agent_authority`.
+/// - With both caps positive, existing cards stay and only the ceilings move.
+///   Each card spends at most the smaller of its own limit and the new
+///   `max_agent_budget` per epoch, so a lowered cap binds cards already issued.
+///   No new card or new budget may exceed `max_agent_budget`, and total outflow
+///   per epoch, governance transfers included, stays under `max_epoch_outflow`.
+public fun set_agent_outflow_policy(
+    self: &OrganizationTreasury,
+    org: &mut Organization,
+    vault: &mut AgentVault<SUI>,
+    max_epoch_outflow: u64,
+    max_agent_budget: u64,
+    nonce: u64,
+    frost_signature: vector<u8>,
+) {
+    assert!(self.org_id == object::id(org), EWrongOrganization);
+    assert!(self.vault_id == object::id(vault), EWrongVault);
+    assert!(nonce > cryptographic_org::last_nonce(org), EInvalidNonce);
+
+    let digest = compute_outflow_policy_digest(
+        &cryptographic_org::chain_id(org),
+        &cryptographic_org::org_id(org),
+        cryptographic_org::epoch_version(org),
+        nonce,
+        &self.id.to_inner(),
+        &self.vault_id,
+        max_epoch_outflow,
+        max_agent_budget,
+        cryptographic_org::key_generation(org),
+    );
+    assert!(
+        ed25519::ed25519_verify(&frost_signature, &cryptographic_org::group_pk(org), &digest),
+        EInvalidSignature,
+    );
+
+    vault::set_outflow_policy<SUI>(&self.master_cap, vault, max_epoch_outflow, max_agent_budget);
+    // Either cap at zero is the stop. No agent can spend under it, so the cards
+    // are retired outright instead of left dormant for a later raise.
+    if (max_epoch_outflow == 0 || max_agent_budget == 0) {
+        vault::revoke_agent_caps<SUI>(&self.master_cap, vault);
+    };
+    cryptographic_org::set_last_nonce(org, nonce);
+
+    event::emit(TreasuryOutflowPolicyUpdated {
+        treasury_id: self.id.to_inner(),
+        vault_id: self.vault_id,
+        max_epoch_outflow,
+        max_agent_budget,
+        nonce,
+    });
+}
+
+// === Digests ===
+
+/// Agent delegation digest (V1):
+/// H(DOMAIN_TREASURY_AGENT_V1 || chain_id || bcs(org_id) || bcs(epoch) ||
+///   bcs(nonce) || bcs(treasury_id) || bcs(vault_id) || bcs(operator) ||
+///   bcs(max_epoch_outflow) || bcs(max_agent_budget) || bcs(key_generation))
+/// The layout follows asynchronous_proposal's V3 transfer digest convention
+/// (domain prefix, raw chain_id bytes, then BCS of each bound field). Both the
+/// treasury and its vault are committed, so a signature cannot migrate across
+/// same-organization treasuries; key_generation binding closes the resharing
+/// window exactly as in the Round-9 transfer fix.
+///
+/// Public, like `cryptographic_org::compute_*_digest`: it takes no object and
+/// changes nothing. Tests pin it to the SDK's golden vector so the two
+/// implementations cannot drift apart field by field.
+public fun compute_agent_delegation_digest(
+    chain_id: &vector<u8>,
+    org_id: &ID,
+    epoch: u64,
+    nonce: u64,
+    treasury_id: &ID,
+    vault_id: &ID,
+    operator: &address,
+    max_epoch_outflow: u64,
+    max_agent_budget: u64,
+    key_generation: u64,
+): vector<u8> {
+    let mut data = DOMAIN_TREASURY_AGENT_V1;
+    vector::append(&mut data, *chain_id);
+    vector::append(&mut data, bcs::to_bytes(org_id));
+    vector::append(&mut data, bcs::to_bytes(&epoch));
+    vector::append(&mut data, bcs::to_bytes(&nonce));
+    vector::append(&mut data, bcs::to_bytes(treasury_id));
+    vector::append(&mut data, bcs::to_bytes(vault_id));
+    vector::append(&mut data, bcs::to_bytes(operator));
+    vector::append(&mut data, bcs::to_bytes(&max_epoch_outflow));
+    vector::append(&mut data, bcs::to_bytes(&max_agent_budget));
+    vector::append(&mut data, bcs::to_bytes(&key_generation));
+    hash::sha2_256(data)
+}
+
+/// Outflow-policy digest (V1):
+/// H(DOMAIN_TREASURY_OUTFLOW_V1 || chain_id || bcs(org_id) || bcs(epoch) ||
+///   bcs(nonce) || bcs(treasury_id) || bcs(vault_id) ||
+///   bcs(max_epoch_outflow) || bcs(max_agent_budget) || bcs(key_generation))
+/// Same binding set as the agent domain minus the operator field; the distinct
+/// prefix keeps one signature from authorizing both action kinds.
+/// Public for the same reason as `compute_agent_delegation_digest`.
+public fun compute_outflow_policy_digest(
+    chain_id: &vector<u8>,
+    org_id: &ID,
+    epoch: u64,
+    nonce: u64,
+    treasury_id: &ID,
+    vault_id: &ID,
+    max_epoch_outflow: u64,
+    max_agent_budget: u64,
+    key_generation: u64,
+): vector<u8> {
+    let mut data = DOMAIN_TREASURY_OUTFLOW_V1;
+    vector::append(&mut data, *chain_id);
+    vector::append(&mut data, bcs::to_bytes(org_id));
+    vector::append(&mut data, bcs::to_bytes(&epoch));
+    vector::append(&mut data, bcs::to_bytes(&nonce));
+    vector::append(&mut data, bcs::to_bytes(treasury_id));
+    vector::append(&mut data, bcs::to_bytes(vault_id));
+    vector::append(&mut data, bcs::to_bytes(&max_epoch_outflow));
+    vector::append(&mut data, bcs::to_bytes(&max_agent_budget));
+    vector::append(&mut data, bcs::to_bytes(&key_generation));
+    hash::sha2_256(data)
+}
+
 // === Test-Only Functions ===
 
 #[test_only]
@@ -209,6 +480,19 @@ public fun treasury_created_fields(event: &TreasuryCreated): (ID, ID, ID) {
 #[test_only]
 public fun transfer_created_fields(event: &TransferCreated): (ID, ID, ID) {
     (event.binding_id, event.treasury_id, event.proposal_id)
+}
+
+#[test_only]
+public fun agent_delegated_fields(event: &AgentAuthorityDelegated): (ID, ID, address, u64, u64, u64) {
+    (
+        event.treasury_id, event.vault_id, event.operator,
+        event.max_epoch_outflow, event.max_agent_budget, event.nonce,
+    )
+}
+
+#[test_only]
+public fun outflow_policy_updated_fields(event: &TreasuryOutflowPolicyUpdated): (ID, ID, u64, u64, u64) {
+    (event.treasury_id, event.vault_id, event.max_epoch_outflow, event.max_agent_budget, event.nonce)
 }
 
 #[test_only]

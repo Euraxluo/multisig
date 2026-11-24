@@ -69,7 +69,9 @@ module agent_vault::vault {
     }
 
     /// 权限 2：OperatorCap (副卡用户/运维经理)
-    /// - 具备 key 能力 (无 store，无法随意在市场上转让或滥用)。
+    /// - 具备 key 能力、无 store：不能被包装进其它对象或当作动态字段。
+    ///   持有者仍可在自己的签名下用 TransferObjects 把它转给任意地址，
+    ///   所以 operator 身份是可转交的，并不绑定在某个人身上。
     /// - 仅能签发 AgentCap、调整额度、启停 Agent，绝对无法提现！
     public struct OperatorCap has key {
         id: UID,
@@ -126,6 +128,10 @@ module agent_vault::vault {
         max_agent_budget: u64,
     }
 
+    public struct AgentCapsRevokedEvent has copy, drop {
+        vault_id: ID,
+        new_version: u64,
+    }
 
     public struct EmergencyPurgeEvent has copy, drop {
         vault_id: ID,
@@ -261,7 +267,9 @@ module agent_vault::vault {
 
     /// Master 设置金库级流出策略（deny-by-default：默认全 0，任何 Agent
     /// 在策略设置前都无法孵化或花费）。max_epoch_outflow 限制单个 epoch
-    /// 内金库总支出的硬上限；max_agent_budget 限制单张 Agent 卡的日额度。
+    /// 内金库总支出的硬上限；max_agent_budget 限制单张 Agent 卡的日额度，
+    /// 对已发的卡同样成立——下调后已发卡在花费时按新上限判定（见
+    /// spend_x402_budget），无需逐卡改额度。
     public fun set_outflow_policy<T>(
         master: &MasterCap,
         vault: &mut AgentVault<T>,
@@ -275,6 +283,25 @@ module agent_vault::vault {
             vault_id: master.vault_id,
             max_epoch_outflow,
             max_agent_budget,
+        });
+    }
+
+    /// Master 撤销全部副卡：版本号递增，所有已签发的 OperatorCap 与 AgentCap
+    /// 永久失效，Agent 登记表清空。与 emergency_unilateral_purge 的区别是
+    /// 资金原地不动、金库不进入 paused、已发生的 epoch 支出记录保留。
+    /// 不改流出上限：上限归零靠 set_outflow_policy，两者各管一件事。
+    public fun revoke_agent_caps<T>(
+        master: &MasterCap,
+        vault: &mut AgentVault<T>,
+    ) {
+        assert!(master.vault_id == object::uid_to_inner(&vault.id), E_UNAUTHORIZED_OPERATOR);
+        vault.vault_version = vault.vault_version + 1;
+        vault.agents = vec_map::empty();
+        vault.total_subagents = 0;
+
+        event::emit(AgentCapsRevokedEvent {
+            vault_id: master.vault_id,
+            new_version: vault.vault_version,
         });
     }
 
@@ -416,8 +443,15 @@ module agent_vault::vault {
             record.last_spent_epoch = current_epoch;
         };
 
-        // 校验 3: 超出每日额度立刻 abort！直接中断 PTB，阻断死循环爆仓
-        assert!(record.spent_in_current_epoch + amount <= record.daily_budget_limit, E_EXCEEDED_DAILY_QUOTA);
+        // 校验 3: 超出每日额度立刻 abort！直接中断 PTB，阻断死循环爆仓。
+        // 有效额度取卡面额度与金库当前 max_agent_budget 的较小值：下调后的
+        // 上限对已发卡立即生效，卡面额度高于新上限的部分花不出去。
+        let effective_limit = if (record.daily_budget_limit < vault.max_agent_budget) {
+            record.daily_budget_limit
+        } else {
+            vault.max_agent_budget
+        };
+        assert!(record.spent_in_current_epoch + amount <= effective_limit, E_EXCEEDED_DAILY_QUOTA);
         assert!(vault.balance.value() >= amount, E_INSUFFICIENT_VAULT_BALANCE);
 
         // 校验 4: 金库级 epoch 累计流出与硬上限（与 per-agent 记录同一套

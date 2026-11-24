@@ -5,7 +5,7 @@
  */
 import { Transaction } from '@mysten/sui/transactions';
 import { AGENT_VAULT_PACKAGE_ID, LIMITS, SUI_CLOCK_OBJECT_ID } from './constants';
-import { u64le } from './bcs';
+import { canonicalAddress, u64le } from './bcs';
 
 function checkedU64(value: number | bigint): bigint {
   u64le(value);
@@ -243,6 +243,108 @@ export function buildClaimBondPTB(
   tx.moveCall({
     target: `${pkg(input)}::dkg_committee::claim_bond`,
     arguments: [tx.object(input.sessionId)],
+  });
+  return tx;
+}
+
+/**
+ * I3 组织金库 Agent 授权（delegate_agent_authority）：门限签名对
+ * computeTreasuryAgentDelegationDigest 验签后，密封的 MasterCap 被受控借出，
+ * 设置流出上限并向 operator 签发 OperatorCap。链上校验（E10/E11/E12）在
+ * 链下镜像先拒：operator 必须是能签名的地址（非零，且不是组织、财政库、
+ * 金库这三个对象地址）、双上限为正；nonce 须为 last_nonce+1 起。其它对象
+ * 或包地址链上无法识别，签给它们的卡无人可用，需在签名前人工核对。
+ * operator 只接受 64 位十六进制的完整写法，与摘要函数一致：这里若替调用方
+ * 补零，签名人心里的地址与链上收到的地址就可能不同，而链上只会报 E14。
+ * 重复授权不回收旧卡；要收回全部 operator / agent 卡，用
+ * buildSetTreasuryOutflowPolicyPTB 把任一上限设为 0（见其注释）。
+ * 授权设下的 epoch 上限对治理转账同样生效：已批准的转账超过本 epoch
+ * 剩余额度时以 vault E_EXCEEDS_EPOCH_OUTFLOW 中止。
+ */
+export function buildDelegateAgentAuthorityPTB(
+  input: GovernanceTarget & {
+    treasuryId: string;
+    orgId: string;
+    vaultId: string;
+    operator: string;
+    maxEpochOutflow: number | bigint;
+    maxAgentBudget: number | bigint;
+    nonce: number | bigint;
+    frostSignature: Uint8Array;
+  },
+): Transaction {
+  if (input.frostSignature.length !== 64) {
+    throw new Error(`frostSignature 必须 64 字节，实际 ${input.frostSignature.length}`);
+  }
+  const operator = canonicalAddress(input.operator);
+  if (/^0+$/.test(operator.slice(2))) {
+    throw new Error('operator 不能是零地址（链上 E10）');
+  }
+  if ([input.treasuryId, input.orgId, input.vaultId].some((id) => canonicalAddress(id) === operator)) {
+    throw new Error('operator 不能是组织、财政库或金库的对象地址：这些地址无法签名（链上 E10）');
+  }
+  if (input.operator.replace(/^0x/i, '').length !== 64) {
+    throw new Error(`operator 必须写成 64 位十六进制的完整地址（与摘要逐字节一致）: ${input.operator}`);
+  }
+  const maxEpochOutflow = checkedU64(input.maxEpochOutflow);
+  const maxAgentBudget = checkedU64(input.maxAgentBudget);
+  if (maxEpochOutflow <= 0n) throw new Error('maxEpochOutflow 必须为正（链上 E11）');
+  if (maxAgentBudget <= 0n) throw new Error('maxAgentBudget 必须为正（链上 E12）');
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pkg(input)}::organization_treasury::delegate_agent_authority`,
+    arguments: [
+      tx.object(input.treasuryId),
+      tx.object(input.orgId),
+      tx.object(input.vaultId),
+      tx.pure.address(input.operator),
+      tx.pure.u64(maxEpochOutflow),
+      tx.pure.u64(maxAgentBudget),
+      tx.pure.u64(checkedU64(input.nonce)),
+      tx.pure.vector('u8', Array.from(input.frostSignature)),
+    ],
+  });
+  return tx;
+}
+
+/**
+ * I3 组织金库流出策略（set_agent_outflow_policy）：门限签名对
+ * computeTreasuryOutflowPolicyDigest 验签后调整密封金库的流出上限。
+ * 与授权入口不同，两个上限都可以为 0：
+ * - 任一上限为 0：治理层停机。除变更上限外还撤销全部已签发的
+ *   OperatorCap / AgentCap（金库版本号递增、Agent 登记表清空），之后调高
+ *   上限也不会让旧卡复活，恢复 Agent 花费只能重新走授权入口。epoch 上限
+ *   归零同时解除对治理转账的额度约束。
+ * - 两个上限都为正：只移动上限，已签发的卡继续有效，但每张卡每个 epoch
+ *   最多花「卡面额度」与「当前 maxAgentBudget」中的较小值，调低
+ *   maxAgentBudget 对已发卡立即生效。
+ */
+export function buildSetTreasuryOutflowPolicyPTB(
+  input: GovernanceTarget & {
+    treasuryId: string;
+    orgId: string;
+    vaultId: string;
+    maxEpochOutflow: number | bigint;
+    maxAgentBudget: number | bigint;
+    nonce: number | bigint;
+    frostSignature: Uint8Array;
+  },
+): Transaction {
+  if (input.frostSignature.length !== 64) {
+    throw new Error(`frostSignature 必须 64 字节，实际 ${input.frostSignature.length}`);
+  }
+  const tx = new Transaction();
+  tx.moveCall({
+    target: `${pkg(input)}::organization_treasury::set_agent_outflow_policy`,
+    arguments: [
+      tx.object(input.treasuryId),
+      tx.object(input.orgId),
+      tx.object(input.vaultId),
+      tx.pure.u64(checkedU64(input.maxEpochOutflow)),
+      tx.pure.u64(checkedU64(input.maxAgentBudget)),
+      tx.pure.u64(checkedU64(input.nonce)),
+      tx.pure.vector('u8', Array.from(input.frostSignature)),
+    ],
   });
   return tx;
 }

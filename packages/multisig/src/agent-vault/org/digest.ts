@@ -251,6 +251,83 @@ export function computeGenesisWithdrawDigest(input: {
   );
 }
 
+/**
+ * I3 组织金库 Agent 授权摘要——与 organization_treasury.move 的
+ * compute_agent_delegation_digest 逐字节一致：
+ * H("SUI_ORG_TREASURY_AGENT_V1:" ‖ chain ‖ bcs(org_id) ‖ bcs(epoch) ‖ bcs(nonce) ‖
+ *   bcs(treasury_id) ‖ bcs(vault_id) ‖ bcs(operator) ‖
+ *   bcs(max_epoch_outflow) ‖ bcs(max_agent_budget) ‖ bcs(key_generation))。
+ * 布局沿用 transfer V3 约定（域前缀 + 原始 chain 字节 + 各字段 BCS）：
+ * treasury/vault 双绑定使签名不可挪到同组织的另一金库；key_generation 绑定
+ * 使轮换后旧分片签出的摘要失效；域前缀与 OUTFLOW 不同，同一签名不能跨动作。
+ */
+export function computeTreasuryAgentDelegationDigest(input: {
+  chainId: Uint8Array | string;
+  orgId: string;
+  epochVersion: number | bigint;
+  nonce: number | bigint;
+  treasuryId: string;
+  vaultId: string;
+  operator: string;
+  maxEpochOutflow: number | bigint;
+  maxAgentBudget: number | bigint;
+  /** 组织当前密钥生成代（org.key_generation，创建为 1，rotate +1）。 */
+  keyGeneration: number | bigint;
+}): Uint8Array {
+  return sha256(
+    concat(
+      utf8('SUI_ORG_TREASURY_AGENT_V1:'),
+      chainBytes(input.chainId),
+      requireAddress(input.orgId, 'orgId'),
+      u64le(input.epochVersion),
+      u64le(input.nonce),
+      requireAddress(input.treasuryId, 'treasuryId'),
+      requireAddress(input.vaultId, 'vaultId'),
+      requireAddress(input.operator, 'operator'),
+      u64le(input.maxEpochOutflow),
+      u64le(input.maxAgentBudget),
+      u64le(input.keyGeneration),
+    ),
+  );
+}
+
+/**
+ * I3 组织金库流出策略摘要——与 organization_treasury.move 的
+ * compute_outflow_policy_digest 逐字节一致：
+ * H("SUI_ORG_TREASURY_OUTFLOW_V1:" ‖ chain ‖ bcs(org_id) ‖ bcs(epoch) ‖ bcs(nonce) ‖
+ *   bcs(treasury_id) ‖ bcs(vault_id) ‖
+ *   bcs(max_epoch_outflow) ‖ bcs(max_agent_budget) ‖ bcs(key_generation))。
+ * 与 AGENT 域绑定集相同但无 operator 字段且前缀不同；任一上限为 0
+ * 即治理层停机（撤销全部已签发的卡），摘要本身不区分停机与普通调整。
+ */
+export function computeTreasuryOutflowPolicyDigest(input: {
+  chainId: Uint8Array | string;
+  orgId: string;
+  epochVersion: number | bigint;
+  nonce: number | bigint;
+  treasuryId: string;
+  vaultId: string;
+  maxEpochOutflow: number | bigint;
+  maxAgentBudget: number | bigint;
+  /** 组织当前密钥生成代（org.key_generation，创建为 1，rotate +1）。 */
+  keyGeneration: number | bigint;
+}): Uint8Array {
+  return sha256(
+    concat(
+      utf8('SUI_ORG_TREASURY_OUTFLOW_V1:'),
+      chainBytes(input.chainId),
+      requireAddress(input.orgId, 'orgId'),
+      u64le(input.epochVersion),
+      u64le(input.nonce),
+      requireAddress(input.treasuryId, 'treasuryId'),
+      requireAddress(input.vaultId, 'vaultId'),
+      u64le(input.maxEpochOutflow),
+      u64le(input.maxAgentBudget),
+      u64le(input.keyGeneration),
+    ),
+  );
+}
+
 /** 默认调用目标包（便于 builder 缺省）。 */
 export const DEFAULT_TARGET_PACKAGE = AGENT_VAULT_PACKAGE_ID;
 
