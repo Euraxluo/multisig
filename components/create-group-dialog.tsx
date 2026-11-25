@@ -82,7 +82,7 @@ export function CreateGroupDialog({ open, onOpenChange }: CreateGroupDialogProps
     void load()
     window.addEventListener("sui-account-switched", load); window.addEventListener("storage", load)
     return () => { generation++; window.removeEventListener("sui-account-switched", load); window.removeEventListener("storage", load) }
-  }, [open])
+  }, [open, t])
 
   // Reset state when dialog opens/closes
   useEffect(() => {

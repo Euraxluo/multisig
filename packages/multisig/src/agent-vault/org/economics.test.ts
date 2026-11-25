@@ -36,9 +36,9 @@ const txt = (s: string) => Buffer.from(s, 'utf8');
 const CHAIN = 'sui-testnet:';
 const ORGID = '0x' + 'aa'.repeat(32);
 const ORG = A(ORGID);
-const SESSION = A('0x' + 'cc'.repeat(32));
+const _SESSION = A('0x' + 'cc'.repeat(32));
 const RECIPIENT = A('0x' + 'bb'.repeat(32));
-const SIG = Buffer.alloc(64, 0x77);
+const _SIG = Buffer.alloc(64, 0x77);
 
 describe('computeGenesisWithdrawDigest', () => {
   it('equals hand-computed H(SUI_ORG_GENESIS_WITHDRAW_V1: || chain || org || epoch || nonce || amount || recipient)', () => {

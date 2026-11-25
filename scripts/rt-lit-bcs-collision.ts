@@ -18,7 +18,7 @@ const addr = (h: string) => ("0x" + h.padStart(64, "0")) as string;
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, detail = "") => {
   console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${detail ? " — " + detail : ""}`);
-  ok ? pass++ : fail++;
+  if (ok) pass++; else fail++;
 };
 
 console.log("=== Q1: vector<u8> vs vector<address> 的 BCS 流是否可同流 ===");
@@ -33,8 +33,8 @@ console.log("=== Q1: vector<u8> vs vector<address> 的 BCS 流是否可同流 ==
   for (let k2 = 0; k2 <= 40 && !collision; k2++) {
     for (let k1 = 0; k1 <= 40; k1++) {
       const d = new Uint8Array(Math.max(k1, 32 * k2)).fill(7);
-      const s1 = [k1, ...d.slice(0, k1)];           // vector<u8>: uleb(k1)+k1 字节
-      const s2 = [k2, ...d.slice(0, 32 * k2)];      // vector<address>: uleb(k2)+32k2 字节
+      const _s1 = [k1, ...d.slice(0, k1)];           // vector<u8>: uleb(k1)+k1 字节
+      const _s2 = [k2, ...d.slice(0, 32 * k2)];      // vector<address>: uleb(k2)+32k2 字节
       if (k1 === k2 && k1 === 32 * k2 && k1 > 0) collision = true; // 同长同流即碰撞
     }
   }
@@ -88,7 +88,7 @@ console.log("=== Q2b: compute_create_pop_digest 同型拼接（PoP 侧） ===");
   const chainB = CHAIN + hex(GP.slice(0, 8));
   const gpB = [...GP.slice(8), ...bcsVectorAddress(M1).slice(0, 8)];
   const suffix = [...bcsVectorAddress(M1).slice(8), ...bcsVectorU64(W1), ...u64le(tw), ...u64le(kt)];
-  const uleb = (b: number) => (b < 128 ? [b] : [ (b & 0x7f) | 0x80, b >>> 7 ]);
+  const _uleb = (b: number) => (b < 128 ? [b] : [ (b & 0x7f) | 0x80, b >>> 7 ]);
   const n2 = suffix[0]; // 若把 suffix 当 vector<address>：首字节即元素数
   const parses = n2 > 0 && n2 < 128 && suffix.length === 1 + 32 * n2;
   const dB = parses

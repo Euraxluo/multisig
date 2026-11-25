@@ -14,9 +14,9 @@
  */
 
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { mod, lagrangeCoefficient, bytesToScalar, CURVE_ORDER } from "../packages/multisig/src/dkg/math";
+import { CURVE_ORDER } from "../packages/multisig/src/dkg/math";
 
-const G = ed25519.Point.BASE;
+const _G = ed25519.Point.BASE;
 const L = CURVE_ORDER;
 // 0.725·log2(L) ≈ 0.725 × 252 ≈ 182.7 → ~190 会话阈值（论文设 ℓ=190 安全余量内不成立）
 const log2L = Math.log2(Number(L >> 200n)) + 200 * Math.log2(2); // ≈251.7

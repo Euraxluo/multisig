@@ -10,6 +10,19 @@ import { Transaction } from "@mysten/sui/transactions"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 
+// Wire shapes this probe reads off the gRPC responses (see redteam-attack.ts).
+// The _-prefixed locals below (_funder, _kp) are loaded on purpose: the
+// keystore read stands in for a fail-fast check that the key exists.
+interface WireEvent { eventType?: string; bcs?: Uint8Array | Record<number, number> }
+interface WireTx {
+  digest: string | { digest: string }
+  status?: { success?: boolean; error?: { message?: string } | null }
+  events?: WireEvent[]
+  objectTypes?: Record<string, string>
+}
+type WireExecResult = { Transaction?: WireTx; FailedTransaction?: WireTx }
+interface WireObjectContent { $kind?: string; Bcs?: Uint8Array; [key: string]: unknown }
+
 const PKG = "0xef671151bb0da2198d1addcbeabc03e8e24513ebe0bb357ff217c7ea613cfb0f"
 const SUI = "0x2::sui::SUI"
 const FUNDER = "0x8ac06d3d4328aff5bef88990741c1f620a96d5fc579bf2e459467763bd605788"
@@ -30,9 +43,9 @@ async function attempt(signer: Ed25519Keypair, tx: Transaction, label: string, e
   total++
   try {
     tx.setSender(signer.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await signer.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true } })
+    const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true } })
     const t = res.Transaction ?? res.FailedTransaction
     const ok = t?.status?.success === true
     if (ok) { console.log(`[${label}] ❌ EXECUTED — FIX FAILED, digest=${typeof t.digest === "string" ? t.digest : t.digest?.digest}`); return }
@@ -41,9 +54,9 @@ async function attempt(signer: Ed25519Keypair, tx: Transaction, label: string, e
     const good = codeHit || expectCode === undefined
     if (good) { pass++; console.log(`[${label}] ✅ BLOCKED (${expectCode ?? "generic"}): ${err.slice(0, 110)}`) }
     else console.log(`[${label}] ⚠️ aborted with OTHER code: ${err.slice(0, 160)}`)
-  } catch (e: any) {
+  } catch (e) {
     // executeTransaction may throw for aborts depending on shape
-    const msg = e?.message ?? String(e)
+    const msg = (e as { message?: string })?.message ?? String(e)
     if (expectCode !== undefined && (msg.includes(String(expectCode)) || /abort/i.test(msg))) { pass++; console.log(`[${label}] ✅ BLOCKED (throw, ${expectCode}): ${msg.slice(0, 110)}`) }
     else console.log(`[${label}] ⚠️ threw: ${msg.slice(0, 160)}`)
   }
@@ -51,7 +64,7 @@ async function attempt(signer: Ed25519Keypair, tx: Transaction, label: string, e
 
 async function main() {
   const operator = keypairFor(OPERATOR)
-  const funder = keypairFor(FUNDER)
+  const _funder = keypairFor(FUNDER)
   const attacker = keypairFor(ATTACKER)
   const clock = "0x0000000000000000000000000000000000000000000000000000000000000006"
 
@@ -82,24 +95,24 @@ async function main() {
     // no policy set — default denies everything
     tx.setSender(OPERATOR)
     try {
-      const bytes = await tx.build({ client } as any)
+      const bytes = await tx.build({ client })
       const sig = await vaultPayer.signTransaction(bytes)
-      const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+      const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
       const t = res.Transaction
       if (t?.status?.success) {
-        const ev = (t.events ?? []).find((e: any) => (e.eventType ?? "").includes("VaultCreated"))
+        const ev = (t.events ?? []).find((e) => (e.eventType ?? "").includes("VaultCreated"))
         const b = ev?.bcs instanceof Uint8Array ? ev.bcs : Uint8Array.from(Object.values(ev?.bcs ?? {}) as number[])
         vaultId = "0x" + Buffer.from(b.slice(0, 32)).toString("hex")
         // MasterCap = the created object typed vault::MasterCap in this tx
         const dstr: string = typeof t.digest === "string" ? t.digest : t.digest?.digest
-        const full: any = await client.getTransaction({ digest: dstr, include: { objectTypes: true } })
+        const full: WireExecResult = await client.getTransaction({ digest: dstr, include: { objectTypes: true } })
         const ot = full?.Transaction?.objectTypes ?? {}
         for (const [oid, ty] of Object.entries(ot) as [string, string][]) {
           if (String(ty).endsWith("vault::MasterCap")) masterCapId = oid
         }
         console.log("vault created:", vaultId, "masterCap:", masterCapId)
       } else console.log("vault create failed:", t?.status?.error?.message?.slice(0, 120))
-    } catch (e: any) { console.log("vault create threw:", e.message.slice(0, 120)) }
+    } catch (e) { console.log("vault create threw:", (e as Error).message.slice(0, 120)) }
     if (!vaultId) return
   }
   // operator needs OperatorCap: master issues it — but funder holds MasterCap? transfer above sent it to funder. For spawn attack we need op path; simulate the rogue-operator scenario ONLY if operator has cap. Instead: rogue-operator step = funder (as master) issues opcap to OPERATOR first.
@@ -108,16 +121,16 @@ async function main() {
     tx.moveCall({ target: `${PKG}::vault::issue_operator_cap`, typeArguments: [SUI], arguments: [tx.object(masterCapId), tx.object(vaultId), tx.pure.address(OPERATOR)] })
     tx.setSender(OPERATOR)
     try {
-      const bytes = await tx.build({ client } as any)
+      const bytes = await tx.build({ client })
       const sig = await operator.signTransaction(bytes)
-      const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
-      const d2: string = typeof res.Transaction?.digest === "string" ? res.Transaction.digest : res.Transaction?.digest?.digest
-      const full2: any = await client.getTransaction({ digest: d2, include: { objectTypes: true } })
+      const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+      const d2: string = typeof res.Transaction?.digest === "string" ? res.Transaction.digest : res.Transaction?.digest?.digest as string
+      const full2: WireExecResult = await client.getTransaction({ digest: d2, include: { objectTypes: true } })
       for (const [oid, ty] of Object.entries(full2?.Transaction?.objectTypes ?? {}) as [string, string][]) {
         if (String(ty).endsWith("vault::OperatorCap")) opCapId = oid
       }
       console.log("opcap issued:", opCapId, "→ operator can now act")
-    } catch (e: any) { console.log("opcap issue threw:", e.message.slice(0, 100)) }
+    } catch (e) { console.log("opcap issue threw:", (e as Error).message.slice(0, 100)) }
   }
   if (opCapId) {
     // 1a: spawn without any policy → 2012
@@ -126,27 +139,27 @@ async function main() {
     await attempt(operator, tx, "spawn w/o policy", 2012)
 
     // set a STRICT policy as Master would (max_epoch_outflow=0.05 SUI, max_agent_budget=0.01 SUI), then:
-    const funder = keypairFor(FUNDER)
+    const _funder = keypairFor(FUNDER)
     const pol = new Transaction()
     pol.moveCall({ target: `${PKG}::vault::set_outflow_policy`, typeArguments: [SUI], arguments: [pol.object(masterCapId), pol.object(vaultId), pol.pure.u64(50_000_000n), pol.pure.u64(10_000_000n)] })
     pol.setSender(OPERATOR)
     try {
-      const bytes = await pol.build({ client } as any)
+      const bytes = await pol.build({ client })
       const sig = await operator.signTransaction(bytes)
       await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
       console.log("policy set: outflow≤0.05, agentBudget≤0.01 SUI/epoch")
-    } catch (e: any) { console.log("policy set threw:", e.message.slice(0, 100)) }
+    } catch (e) { console.log("policy set threw:", (e as Error).message.slice(0, 100)) }
     // fund the vault a bit (operator pays — funder is out of gas)
     const fund = new Transaction()
     const [c] = fund.splitCoins(fund.gas, [60_000_000n])
     fund.moveCall({ target: `${PKG}::vault::deposit`, typeArguments: [SUI], arguments: [fund.object(vaultId), c] })
     fund.setSender(OPERATOR)
     try {
-      const bytes = await fund.build({ client } as any)
+      const bytes = await fund.build({ client })
       const sig = await operator.signTransaction(bytes)
       await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
       console.log("vault funded 0.06 SUI")
-    } catch (e: any) { console.log("fund threw:", e.message.slice(0, 100)) }
+    } catch (e) { console.log("fund threw:", (e as Error).message.slice(0, 100)) }
 
     // 1b: spawn above agent-budget cap → 2012
     const tx2 = new Transaction()
@@ -159,20 +172,20 @@ async function main() {
     let agentCap = ""
     try {
       tx3.setSender(OPERATOR)
-      const bytes = await tx3.build({ client } as any)
+      const bytes = await tx3.build({ client })
       const sig = await operator.signTransaction(bytes)
-      const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
-      const ev = (res.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").includes("AgentCardSpawned"))
+      const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+      const ev = (res.Transaction?.events ?? []).find((e) => (e.eventType ?? "").includes("AgentCardSpawned"))
       const b = ev?.bcs instanceof Uint8Array ? ev.bcs : Uint8Array.from(Object.values(ev?.bcs ?? {}) as number[])
       agentCap = "0x" + Buffer.from(b.slice(32, 64)).toString("hex") // cap transferred to ATTACKER; find via owned later
       console.log("agent spawned at cap (10 MIST)")
-    } catch (e: any) { console.log("legal spawn threw:", e.message.slice(0, 100)) }
+    } catch (e) { console.log("legal spawn threw:", (e as Error).message.slice(0, 100)) }
     // find attacker AgentCap
-    const owned: any = await client.listOwnedObjects({ owner: ATTACKER, limit: 50 })
+    const owned = await client.listOwnedObjects({ owner: ATTACKER, limit: 50 })
     for (const o of owned.objects ?? []) {
       if ((o.type ?? "").endsWith("vault::AgentCap")) {
-        const { object }: any = await client.getObject({ objectId: o.objectId, include: { content: true } })
-        const c = object?.content
+        const { object }: { object: { content?: unknown } } = await client.getObject({ objectId: o.objectId, include: { content: true } })
+        const c = object?.content as WireObjectContent | undefined
         const b = c?.$kind === "Bcs" && c.Bcs instanceof Uint8Array ? c.Bcs : (c && Object.keys(c).every((k: string) => /^\d+$/.test(k)) ? Uint8Array.from(Object.values(c) as number[]) : undefined)
         if (b && Buffer.from(b.slice(32, 64)).toString("hex") === vaultId.slice(2)) agentCap = o.objectId
       }
@@ -183,11 +196,11 @@ async function main() {
       s1.moveCall({ target: `${PKG}::vault::spend_x402_budget`, typeArguments: [SUI], arguments: [s1.object(agentCap), s1.object(vaultId), s1.pure.u64(10_000_000n), s1.pure.address(ATTACKER)] })
       try {
         s1.setSender(ATTACKER)
-        const bytes = await s1.build({ client } as any)
+        const bytes = await s1.build({ client })
         const sig = await attacker.signTransaction(bytes)
-        const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
+        const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
         console.log("[spend within policy] executed OK:", res.Transaction?.status?.success === true)
-      } catch (e: any) { console.log("spend1 threw:", e.message.slice(0, 120)) }
+      } catch (e) { console.log("spend1 threw:", (e as Error).message.slice(0, 120)) }
       // 1d: zero-recipient spend → 2014
       const s0 = new Transaction()
       s0.moveCall({ target: `${PKG}::vault::spend_x402_budget`, typeArguments: [SUI], arguments: [s0.object(agentCap), s0.object(vaultId), s0.pure.u64(1_000_000n), s0.pure.address("0x0000000000000000000000000000000000000000000000000000000000000000")] })
@@ -200,11 +213,11 @@ async function main() {
     const { ed25519 } = await import("@noble/curves/ed25519.js")
     const { sha256 } = await import("@noble/hashes/sha2.js")
     const seed = new Uint8Array(32); crypto.getRandomValues(seed)
-    const kp = ed25519.keygen ? ed25519.keygen() : null
+    const _kp = ed25519.keygen ? ed25519.keygen() : null
     const sk = seed
     const pk = ed25519.getPublicKey(sk)
     const le = (v: bigint): Uint8Array => { const o = new Uint8Array(8); let x = v; for (let i = 0; i < 8; i++) { o[i] = Number(x & 0xffn); x >>= 8n } return o }
-    const vi = (items: Uint8Array[]): Uint8Array => { const n = Uint8Array.of(items.length); const parts = items.map(i => i); const total = 1 + items.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(total); o[0] = items.length; let p = 1; for (const x of items) { o.set(x, p); p += x.length } return o }
+    const vi = (items: Uint8Array[]): Uint8Array => { const total = 1 + items.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(total); o[0] = items.length; let p = 1; for (const x of items) { o.set(x, p); p += x.length } return o }
     const addrB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
     const popDigest = sha256(Buffer.concat([Buffer.from("SUI_ORG_POP_V1:"), Buffer.from("sui-testnet:"), Buffer.from(pk), vi([addrB(OPERATOR)]), vi([le(2n)]), le(2n)]))
     const popSig = ed25519.sign(popDigest, sk)
@@ -214,15 +227,15 @@ async function main() {
     let orgId = ""
     try {
       otx.setSender(OPERATOR)
-      const bytes = await otx.build({ client } as any)
+      const bytes = await otx.build({ client })
       const sig = await orgPayer.signTransaction(bytes)
-      const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+      const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
       const ok = res.Transaction?.status?.success === true
-      const ev = (res.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").includes("OrganizationCreated"))
+      const ev = (res.Transaction?.events ?? []).find((e) => (e.eventType ?? "").includes("OrganizationCreated"))
       const b = ev?.bcs instanceof Uint8Array ? ev.bcs : Uint8Array.from(Object.values(ev?.bcs ?? {}) as number[])
       orgId = "0x" + Buffer.from(b.slice(0, 32)).toString("hex")
       console.log("org with REAL PoP created:", orgId, ok ? "(PoP gate passes honest keys ✓)" : "(unexpected failure)")
-    } catch (e: any) { console.log("org create threw:", e.message.slice(0, 140)) }
+    } catch (e) { console.log("org create threw:", (e as Error).message.slice(0, 140)) }
 
     if (orgId) {
       // treasury + funding + proposal + 2 votes (weights 1+1 >= 2) + execute with EMPTY sig → 2701
@@ -233,15 +246,15 @@ async function main() {
       t1.setSender(OPERATOR)
       let treasuryId = "", tvVaultId = ""
       try {
-        const bytes = await t1.build({ client } as any)
+        const bytes = await t1.build({ client })
         const sig = await opKp.signTransaction(bytes)
-        const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
-        const ev = (res.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").includes("TreasuryCreated"))
+        const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+        const ev = (res.Transaction?.events ?? []).find((e) => (e.eventType ?? "").includes("TreasuryCreated"))
         const b = ev?.bcs instanceof Uint8Array ? ev.bcs : Uint8Array.from(Object.values(ev?.bcs ?? {}) as number[])
         treasuryId = "0x" + Buffer.from(b.slice(0, 32)).toString("hex")
         tvVaultId = "0x" + Buffer.from(b.slice(64, 96)).toString("hex")
         console.log("treasury:", treasuryId, "vault:", tvVaultId)
-      } catch (e: any) { console.log("treasury threw:", e.message.slice(0, 120)) }
+      } catch (e) { console.log("treasury threw:", (e as Error).message.slice(0, 120)) }
       if (treasuryId) {
         // fund vault
         const f2 = new Transaction()
@@ -249,10 +262,10 @@ async function main() {
         f2.moveCall({ target: `${PKG}::vault::deposit`, typeArguments: [SUI], arguments: [f2.object(tvVaultId), c] })
         f2.setSender(OPERATOR)
         try {
-          const bytes = await f2.build({ client } as any)
+          const bytes = await f2.build({ client })
           const sig = await opKp.signTransaction(bytes)
           await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
-        } catch (e: any) { console.log("fund2:", e.message.slice(0, 90)) }
+        } catch (e) { console.log("fund2:", (e as Error).message.slice(0, 90)) }
         // create transfer proposal (funder is member)
         const deadline = BigInt(Date.now() + 3_600_000)
         const p1 = new Transaction()
@@ -261,16 +274,16 @@ async function main() {
         let proposalId = ""
         let bindingIdEarly = ""
         try {
-          const bytes = await p1.build({ client } as any)
+          const bytes = await p1.build({ client })
           const sig = await opKp.signTransaction(bytes)
-          const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
-          const dp: string = typeof res.Transaction?.digest === "string" ? res.Transaction.digest : res.Transaction?.digest?.digest
-          const fullp: any = await client.getTransaction({ digest: dp, include: { objectTypes: true } })
+          const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+          const dp: string = typeof res.Transaction?.digest === "string" ? res.Transaction.digest : res.Transaction?.digest?.digest as string
+          const fullp: WireExecResult = await client.getTransaction({ digest: dp, include: { objectTypes: true } })
           for (const [oid, ty] of Object.entries(fullp?.Transaction?.objectTypes ?? {}) as [string, string][]) {
             if (String(ty).endsWith("asynchronous_proposal::Proposal")) proposalId = oid
             if (String(ty).endsWith("organization_treasury::TransferBinding")) bindingIdEarly = oid
           }
-        } catch (e: any) { console.log("proposal threw:", e.message.slice(0, 160)) }
+        } catch (e) { console.log("proposal threw:", (e as Error).message.slice(0, 160)) }
         console.log("proposalId:", proposalId, "bindingIdEarly:", bindingIdEarly)
         if (proposalId) {
           // votes from both members
@@ -280,13 +293,13 @@ async function main() {
             const kp2 = keypairFor(who)
             v.setSender(who)
             try {
-              const bytes = await v.build({ client } as any)
+              const bytes = await v.build({ client })
               const sig = await kp2.signTransaction(bytes)
               await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
-            } catch (e: any) { console.log("vote threw:", e.message.slice(0, 100)) }
+            } catch (e) { console.log("vote threw:", (e as Error).message.slice(0, 100)) }
           }
           // binding id: TransferBinding created in the proposal's tx
-          let bindingId = bindingIdEarly
+          const bindingId = bindingIdEarly
           // execute with EMPTY frost signature → expect 2701
           const x = new Transaction()
           x.moveCall({ target: `${PKG}::organization_treasury::execute`, arguments: [x.object(treasuryId), x.object(bindingId), x.object(orgId), x.object(proposalId), x.object(tvVaultId), x.pure.u64(1n), x.pure.vector("u8", []), x.object(clock)] })

@@ -24,7 +24,7 @@ import { GennaroResharingParticipant, type DealerHonestyProof } from "../lib/cry
 import { mod, randomScalar } from "../lib/crypto/math"
 import type { Point } from "../lib/crypto/vss"
 import {
-  aggregateNonce, aggregateSignature, createNonceCommitment, createSignatureShare,
+  aggregateSignature, createNonceCommitment, createSignatureShare,
 } from "../lib/frost-exchange"
 
 const NETWORK = "testnet" as const

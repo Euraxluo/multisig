@@ -21,7 +21,7 @@ export default function ZkLoginCallbackPage() {
     }).catch((cause: unknown) => {
       setError(cause instanceof Error ? cause.message : t("misc.auth.failed"))
     })
-  }, [])
+  }, [t])
 
   return (
     <main className="min-h-screen flex items-center justify-center p-6 bg-background text-foreground">

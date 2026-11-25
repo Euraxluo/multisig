@@ -1,5 +1,5 @@
 import { SUI_TYPE_ARG, isValidSuiAddress, normalizeStructTag, normalizeSuiAddress, parseStructTag } from '@mysten/sui/utils';
-import { Transaction, type TransactionArgument, type TransactionObjectArgument } from '@mysten/sui/transactions';
+import { Transaction, type TransactionObjectArgument } from '@mysten/sui/transactions';
 
 export const FINANCE_MAX_U64 = (1n << 64n) - 1n;
 export const FINANCE_ZERO_ADDRESS = normalizeSuiAddress('0x0');

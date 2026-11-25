@@ -16,6 +16,16 @@ import { Transaction } from "@mysten/sui/transactions"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 
+// Wire shapes this probe reads off the gRPC responses (see redteam-attack.ts).
+// The _-prefixed locals in main() are loaded on purpose: the A/E steps that
+// would sign with them run in the post-deploy second script (see header), and
+// this stage should still fail fast if the keystore lacks the red-team keys.
+interface WireTx {
+  digest: string | { digest: string }
+  status?: { success?: boolean; error?: { message?: string } | null }
+}
+type WireExecResult = { Transaction?: WireTx; FailedTransaction?: WireTx }
+
 const PKG = process.argv[2]
 if (!PKG) { console.error("usage: tsx scripts/redteam-reattack.ts <NEW_PKG_ID>"); process.exit(1) }
 const SUI = "0x2::sui::SUI"
@@ -32,8 +42,8 @@ function keypairFor(address: string): Ed25519Keypair {
   }
   throw new Error(`no keypair for ${address}`)
 }
-function expectAbort(e: any, code: number, label: string): boolean {
-  const msg: string = e?.message ?? String(e)
+function expectAbort(e: unknown, code: number, label: string): boolean {
+  const msg: string = (e as { message?: string })?.message ?? String(e)
   const ok = msg.includes(String(code)) && /abort|MoveAbort|INVALID|failure/i.test(msg)
   console.log(`[${label}] ${ok ? "BLOCKED" : "UNEXPECTED"} — ${msg.slice(0, 200)}`)
   return ok
@@ -41,23 +51,23 @@ function expectAbort(e: any, code: number, label: string): boolean {
 async function tryExec(signer: Ed25519Keypair, tx: Transaction, label: string, expectCode?: number): Promise<boolean> {
   try {
     tx.setSender(signer.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await signer.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true } })
+    const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true } })
     const t = res.Transaction ?? res.FailedTransaction
     if (t?.status?.success) { console.log(`[${label}] EXECUTED — FIX FAILED. digest=${typeof t.digest === "string" ? t.digest : t.digest?.digest}`); return false }
     const err = t?.status?.error?.message ?? "no error message"
     if (expectCode !== undefined) return expectAbort({ message: err }, expectCode, label)
     console.log(`[${label}] failed as expected: ${err.slice(0, 160)}`)
     return true
-  } catch (e: any) { return expectCode !== undefined ? expectAbort(e, expectCode, label) : (console.log(`[${label}] rejected: ${e.message.slice(0, 160)}`), true) }
+  } catch (e) { return expectCode !== undefined ? expectAbort(e, expectCode, label) : (console.log(`[${label}] rejected: ${(e as Error).message.slice(0, 160)}`), true) }
 }
 
 async function main() {
   const funder = keypairFor(FUNDER)
-  const operator = keypairFor(OPERATOR)
-  const attacker = keypairFor(ATTACKER)
-  const clock = "0x0000000000000000000000000000000000000000000000000000000000000006"
+  const _operator = keypairFor(OPERATOR)
+  const _attacker = keypairFor(ATTACKER)
+  const _clock = "0x0000000000000000000000000000000000000000000000000000000000000006"
   let pass = 0, total = 0
 
   console.log("=== A1: spawn before any policy (deny-by-default) → expect 2012 ===")

@@ -33,7 +33,7 @@ export default function Payments({ onShowProfile }: { onShowProfile?: () => void
       .catch(error => { if (!cancelled) setBalanceError(error instanceof Error ? error.message : t("payments.payErrBalanceRead")) })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [address])
+  }, [address, t])
 
   return <div className="space-y-4">
     <Card className="overflow-hidden border-none bg-gradient-to-br from-primary/10 via-primary/5 to-purple-500/10 shadow-sm">

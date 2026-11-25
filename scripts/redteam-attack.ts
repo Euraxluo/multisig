@@ -19,14 +19,23 @@ import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
 import { fromBase64 } from "@mysten/sui/utils"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Transaction } from "@mysten/sui/transactions"
-import { execFileSync } from "node:child_process"
 import { homedir } from "node:os"
 import { readFileSync } from "node:fs"
+
+// Wire shapes this probe reads off the gRPC responses. The SDK's own result
+// types describe the parsed view; the script reads the rawer envelope (digest
+// as string-or-{digest}, optional status), so the boundary gets local types
+// instead of `any`.
+interface WireTx {
+  digest: string | { digest: string }
+  status?: { success?: boolean; error?: { message?: string } | null }
+}
+type WireExecResult = { Transaction?: WireTx; FailedTransaction?: WireTx }
+interface WireObjectContent { $kind?: string; Bcs?: Uint8Array; [key: string]: unknown }
 
 const PKG = "0x9768002f42c82c5931d7fa24bd44bbc96c7391d31ca7b629f5589cedd116db61"
 const VAULT = "0x01af381bce3180e8180cd570c472c06dc72c28729e28dd0bb8f708b1a01952ca"
 const OP_CAP = "0x0beabe8a08b89f4bc3e42e4424f2ae09a97e28262b27e76c7d564c8e019adf52"
-const MASTER_CAP = "0x196e6616aac7df6118c738eb9dad4138ff6949a9412ef157c7538d6ab4574231"
 const OPERATOR_ADDR = "0x2b9953911b07f6b7d2c92e17ed6cb2325cc26f9eb1eaeb58497ee7b5523ea859"
 const ATTACKER = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e" // keystore alias virus-v1-third (red-team recipient)
 const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
@@ -42,29 +51,29 @@ function keypairFor(address: string): Ed25519Keypair {
 }
 
 function u64le(b: Uint8Array, off: number): bigint { let v = 0n; for (let i = 7; i >= 0; i--) v = (v << 8n) | BigInt(b[off + i]); return v }
-function bytesOf(o: any): Uint8Array | undefined {
-  const c = o?.content
+function bytesOf(o: { content?: unknown } | undefined): Uint8Array | undefined {
+  const c = o?.content as WireObjectContent | undefined
   if (c?.$kind === "Bcs" && c.Bcs instanceof Uint8Array) return c.Bcs
   if (c && typeof c === "object" && Object.keys(c).length && Object.keys(c).every(k => /^\d+$/.test(k))) return Uint8Array.from(Object.values(c) as number[])
   return undefined
 }
 async function vaultState() {
-  const { object }: any = await client.getObject({ objectId: VAULT, include: { content: true } })
+  const { object }: { object: { content?: unknown } } = await client.getObject({ objectId: VAULT, include: { content: true } })
   const b = bytesOf(object)!
   return { balance: u64le(b, 32), version: u64le(b, 40), paused: b[56] === 1, agents: b[57] }
 }
 async function signerBalance(addr: string) {
-  const { balance }: any = await client.getBalance({ owner: addr, coinType: "0x2::sui::SUI" })
+  const { balance } = await client.getBalance({ owner: addr, coinType: "0x2::sui::SUI" })
   return BigInt(balance.balance)
 }
 async function exec(signer: Ed25519Keypair, tx: Transaction, label: string) {
   tx.setSender(signer.toSuiAddress())
-  const bytes = await tx.build({ client } as any)
+  const bytes = await tx.build({ client })
   const sig = await signer.signTransaction(bytes)
-  const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+  const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
   const t = res.Transaction ?? res.FailedTransaction
   const ok = t?.status?.success === true
-  console.log(`[${label}] ${ok ? "EXECUTED" : "FAILED"} digest=${t?.digest?.digest ?? t?.digest} ${ok ? "" : t?.status?.error?.message ?? ""}`)
+  console.log(`[${label}] ${ok ? "EXECUTED" : "FAILED"} digest=${(t?.digest as { digest?: string } | undefined)?.digest ?? t?.digest} ${ok ? "" : t?.status?.error?.message ?? ""}`)
   return { ok, tx: t }
 }
 
@@ -91,11 +100,11 @@ async function main() {
   // ---- STEP 2: the attacker (holding its AgentCap? No—) … the spend only needs the AgentCap.
   // spawn transferred the AgentCap to the ATTACKER address, and we hold the attacker key.
   // Find our new AgentCap
-  const owned: any = await client.listOwnedObjects({ owner: ATTACKER, limit: 50 })
+  const owned = await client.listOwnedObjects({ owner: ATTACKER, limit: 50 })
   let agentCap: string | undefined
   for (const o of owned.objects ?? []) {
     if ((o.type ?? "").endsWith("vault::AgentCap")) {
-      const { object }: any = await client.getObject({ objectId: o.objectId, include: { content: true } })
+      const { object }: { object: { content?: unknown } } = await client.getObject({ objectId: o.objectId, include: { content: true } })
       const b = bytesOf(object)
       if (b && Buffer.from(b.slice(32, 64)).toString("hex") === VAULT.slice(2)) agentCap = o.objectId
     }

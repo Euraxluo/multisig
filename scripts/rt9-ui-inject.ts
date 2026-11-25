@@ -23,18 +23,23 @@ const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const A2 = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
 const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
 function keypairFor(a: string) { const ks = JSON.parse(readFileSync(`${homedir()}/.sui/sui_config/sui.keystore`, "utf8")) as string[]; for (const e of ks) { const kp = Ed25519Keypair.fromSecretKey(fromBase64(e).slice(1)); if (kp.toSuiAddress() === a) return kp } throw new Error("nokey") }
-const le = (v: bigint) => { const o = new Uint8Array(8); let x = v; for (let i = 0; i < 8; i++) { o[i] = Number(x & 0xffn); x >>= 8n } return o }
-const vi = (xs: Uint8Array[]) => { const t = 1 + xs.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(t); o[0] = xs.length; let p = 1; for (const x of xs) { o.set(x, p); p += x.length } return o }
 const aB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
 const cat = (...xs: Uint8Array[]) => { const l = xs.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(l); let p = 0; for (const x of xs) { o.set(x, p); p += x.length } return o }
-async function run(kp: any, tx: any) {
-  try { tx.setSender(kp.toSuiAddress()); const bytes = await tx.build({ client } as any); const sig = await kp.signTransaction(bytes); const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] }); const t = res.Transaction ?? res.FailedTransaction; return t?.status?.success ? { ok: true, digest: typeof t.digest === "string" ? t.digest : (t.digest?.digest as string | undefined) } : { ok: false, err: t?.status?.error?.message?.slice(0, 110) } } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 110) } }
+
+/** Minimal shape of the tx envelope actually probed by this script: the SDK type has
+ *  digest: string, but this harness also defends against a legacy { digest: { digest } } wrap. */
+interface TxEnvelope { status?: { success?: boolean; error?: { message?: string } | null }; digest?: string | { digest?: string } }
+interface TxResult { Transaction?: TxEnvelope; FailedTransaction?: TxEnvelope }
+interface RunOutcome { ok: boolean; digest?: string; err?: string }
+
+async function run(kp: Ed25519Keypair, tx: Transaction): Promise<RunOutcome> {
+  try { tx.setSender(kp.toSuiAddress()); const bytes = await tx.build({ client }); const sig = await kp.signTransaction(bytes); const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] }); const t = res.Transaction ?? res.FailedTransaction; return t?.status?.success ? { ok: true, digest: typeof t.digest === "string" ? t.digest : (t.digest?.digest as string | undefined) } : { ok: false, err: t?.status?.error?.message?.slice(0, 110) } } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 110) } }
 }
-async function sim(kp: any, tx: any) {
-  try { tx.setSender(kp.toSuiAddress()); const bytes = await tx.build({ client } as any); const res: any = await client.simulateTransaction({ transaction: bytes, checksEnabled: false }); const t = res.Transaction ?? res.FailedTransaction; return t?.status?.success ? { ok: true, digest: typeof t.digest === "string" ? t.digest : (t.digest?.digest as string | undefined) } : { ok: false, err: t?.status?.error?.message?.slice(0, 110) } } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 110) } }
+async function sim(kp: Ed25519Keypair, tx: Transaction): Promise<RunOutcome> {
+  try { tx.setSender(kp.toSuiAddress()); const bytes = await tx.build({ client }); const res: TxResult = await client.simulateTransaction({ transaction: bytes, checksEnabled: false }); const t = res.Transaction ?? res.FailedTransaction; return t?.status?.success ? { ok: true, digest: typeof t.digest === "string" ? t.digest : (t.digest?.digest as string | undefined) } : { ok: false, err: t?.status?.error?.message?.slice(0, 110) } } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 110) } }
 }
-async function eventsOf(d: string): Promise<any[]> {
-  for (let i = 0; i < 8; i++) { try { const f: any = await client.getTransaction({ digest: d, include: { events: true } }); return f?.Transaction?.events ?? [] } catch { await new Promise(r => setTimeout(r, 600)) } }
+async function eventsOf(d: string): Promise<Array<{ eventType?: string; bcs: Uint8Array | Record<string, number> }>> {
+  for (let i = 0; i < 8; i++) { try { const f = await client.getTransaction({ digest: d, include: { events: true } }); return f?.Transaction?.events ?? [] } catch { await new Promise(r => setTimeout(r, 600)) } }
   return []
 }
 async function main() {
@@ -122,7 +127,7 @@ async function main() {
     console.log(`[X2 chat 注入 <img onerror>] 链上 ${r.ok ? "ACCEPT（存储成功）→ React 文本插值层转义=唯一防线" : "REJECT: " + r.err?.slice(0, 60)}`)
   }
   // ===== X4: safeAvatar 单元验证（离线）=====
-  const { safeAvatar } = await import("../components/identity-avatar").catch(() => ({ safeAvatar: null as any }))
+  const { safeAvatar } = await import("../components/identity-avatar").catch(() => ({ safeAvatar: null as ((url: string) => string | undefined) | null }))
   if (typeof safeAvatar === "function") {
     for (const u of ["javascript:alert(1)", "data:image/svg+xml;base64,PHN2Zy8+", "https://ok.com/a.png"]) {
       console.log(`[X4 safeAvatar("${u.slice(0, 28)}…")] → ${safeAvatar(u) === undefined ? "REJECT ✅" : "❌ ACCEPT: " + String(safeAvatar(u)).slice(0, 40)}`)

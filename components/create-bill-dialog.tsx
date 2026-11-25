@@ -78,7 +78,7 @@ export function CreateBillDialog({ open, onOpenChange }: CreateBillDialogProps) 
     void load()
     window.addEventListener("sui-account-switched", load); window.addEventListener("storage", load)
     return () => { generation++; window.removeEventListener("sui-account-switched", load); window.removeEventListener("storage", load) }
-  }, [open])
+  }, [open, t])
 
   const [title, setTitle] = useState("")
   const [description, setDescription] = useState("")

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Dialog,
   DialogContent,
@@ -50,9 +50,12 @@ export function CreateAgentDialog({ open, onOpenChange, vaults, account, onCreat
   const [notice, setNotice] = useState("")
   const generation = useRef(0)
 
-  const operators = vaults.flatMap(vault => vault.operatorCaps
+  // Memoized on `vaults`, which the effect below already depends on: a list
+  // rebuilt on every render would make that effect clear error/notice/busy
+  // while the dialog is open.
+  const operators = useMemo(() => vaults.flatMap(vault => vault.operatorCaps
     .filter(cap => cap.vaultVersion === vault.vaultVersion)
-    .map(cap => ({ ...cap, vault })))
+    .map(cap => ({ ...cap, vault }))), [vaults])
   const selectedVault = vaults.find(vault => vault.vaultId === vaultId) ?? operators[0]?.vault
   const operator = operators.find(cap => cap.vault.vaultId === selectedVault?.vaultId)
 
@@ -61,8 +64,7 @@ export function CreateAgentDialog({ open, onOpenChange, vaults, account, onCreat
     generation.current++
     setError(""); setNotice(""); setBusy(false)
     setVaultId(current => operators.some(cap => cap.vault.vaultId === current) ? current : operators[0]?.vault.vaultId ?? "")
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, vaults])
+  }, [open, vaults, operators])
 
   const reset = () => { setName(""); setPurpose(""); setDailyBudget("5"); setAgentInput(""); setServiceInput(""); setError(""); setNotice("") }
   const close = () => { if (busy) return; reset(); onOpenChange(false) }

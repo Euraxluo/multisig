@@ -1,4 +1,3 @@
-import { ed25519 } from '@noble/curves/ed25519.js';
 import { mod } from './math';
 import {
   Point,

@@ -78,7 +78,7 @@ export function VoteDetailsDialog({ open, onOpenChange, voteId }: VoteDetailsDia
       .finally(() => { if (run === generation.current) setLoading(false) })
     const invalidate = () => { generation.current++ }
     return () => { invalidate() }
-  }, [open, voteId, revision])
+  }, [open, voteId, revision, t])
 
   useEffect(() => {
     if (!open) return

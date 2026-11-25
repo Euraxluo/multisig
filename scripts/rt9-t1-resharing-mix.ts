@@ -25,7 +25,7 @@ import {
   type DealerHonestyContext,
 } from "../lib/crypto/resharing"
 import type { Point } from "../lib/crypto/vss"
-import { mod, lagrangeCoefficient, modInverse, randomScalar, scalarToBytes32 } from "../lib/crypto/math"
+import { mod, lagrangeCoefficient, modInverse, randomScalar } from "../lib/crypto/math"
 import { ThresholdSignerNode, type NonceCommitment, type SignatureShare } from "../packages/multisig/src/dkg/threshold_signer"
 
 const ORG_ID = "0xrt9org"
@@ -125,7 +125,7 @@ async function main() {
   // c1: 用错误 context (epoch=999) 生成的证明 → 正确 context 校验必须失败
   const wrongCtxProof = packages[1].honestyProof! // m2 在 CONTEXT(epoch=1) 下的证明
   const forgedCtx: DealerHonestyContext = { ...CONTEXT, epoch: 999 }
-  const proofUnderWrongCtx = verifyDealerHonestyProof(wrongCtxProof, oldActive, forgedCtx)
+  const _proofUnderWrongCtx = verifyDealerHonestyProof(wrongCtxProof, oldActive, forgedCtx)
   // 反向：攻击者在 epoch=999 下伪造的证明拿到 epoch=1 的会话用
   const k2 = randomScalar()
   const c0Fake = ed25519.Point.BASE.multiply(mod(lambda2 * oldShares.get(2n)!))
@@ -152,7 +152,7 @@ async function main() {
   const fakeRejectedWithExpected = !verifyDealerHonestyProof(fakeProof, oldActive, CONTEXT, realY2)
 
   // c3: join 缺口 — 恶意 dealer 的假多项式子份额通过 VSS 校验且 finalize 不对照 proof 常数
-  const fakeDealer = new GennaroResharingParticipant({
+  const _fakeDealer = new GennaroResharingParticipant({
     id: "m2", index: 2n, isOldActiveMember: true, isNewMember: false, currentShare: zStar, newThreshold: 2,
   })
   // 直接借用 generateResharePackage 的形状：以 z* 为常数的多项式（模拟恶意 dealer 代码）
@@ -204,7 +204,7 @@ async function main() {
 
   // c4 (join gap): 诚实的 m2 证明（expectedY 可验）+ 恶意多项式承诺（常数 z*）——
   // SDK 不比对 proof.constantCommitment 与 commitments[0]，expectedY 也救不了
-  const honestPoly = [mod(lambda2 * oldShares.get(2n)!), randomScalar()] // 常数 = λ·s（与证明一致）
+  const _honestPoly = [mod(lambda2 * oldShares.get(2n)!), randomScalar()] // 常数 = λ·s（与证明一致）
   const fakePolyConst = randomScalar()
   const poisonPoly = [fakePolyConst, randomScalar()] // 常数 ≠ λ·s（毒化）
   const poisonCommitments: Point[] = poisonPoly.map(c => ed25519.Point.BASE.multiply(c))

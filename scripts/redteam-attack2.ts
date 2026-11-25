@@ -50,20 +50,12 @@ async function main() {
   console.log("SDK stack sig verifies under plain ed25519.verify:", sdkValid)
 
   // noble FROST with same shares/key: does noble accept the SDK transcript?
-  const { ed25519_FROST } = await import("@noble/curves/ed25519.js")
-  const ident = (i: bigint) => i.toString(16).padStart(64, "0")
+  await import("@noble/curves/ed25519.js")
   try {
-    const pub = {
-      identifier: ident(0n),
-      groupPk,
-      secretShareViews: new Map(),
-      shareCommitments: [],
-      threshold: 2,
-    } as any
     // noble needs its own key package shape; instead check its aggregate contract directly:
     // if SDK nonces were hiding-only single commitments, noble's aggregate expects (hiding,binding) pairs → structurally incompatible.
     console.log("noble FROST commitment model: hiding+binding PAIRS; SDK: single nonce point → transcripts are structurally incompatible.")
-  } catch (e: any) { console.log("noble interop check:", e.message.slice(0, 80)) }
+  } catch (e) { console.log("noble interop check:", (e as Error).message.slice(0, 80)) }
 
   // ---------- ATTACK B: R-set disagreement / no transcript binding ----------
   console.log("\n--- Attack B: malicious aggregator presents different nonce sets (no binding factor) ---")
@@ -71,7 +63,7 @@ async function main() {
   const key2 = splitKey(2, 3)
   const signers = key2.indices.map((idx, i) => ({ node: new ThresholdSignerNode(`m${i + 1}`, idx, evaluatePolynomial(key2.poly, idx)), idx }))
   const realMsg = sha256(new TextEncoder().encode("SUI_ORG_PROPOSAL_V1: benign"))
-  const evilMsg = sha256(new TextEncoder().encode("SUI_ORG_PROPOSAL_V1: drain treasury"))
+  const _evilMsg = sha256(new TextEncoder().encode("SUI_ORG_PROPOSAL_V1: drain treasury"))
 
   // aggregator asks signer1 to sign benign msg with nonce set S1, signer2 to sign benign with set S2 — both honest.
   // then aggregator reuses signer2's share… but c depends on message: cannot flip message without share cooperation.

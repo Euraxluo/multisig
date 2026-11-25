@@ -12,6 +12,11 @@ import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { sha256 } from "@noble/hashes/sha2.js"
+import type { SuiClientTypes } from "@mysten/sui/client"
+
+interface TxStatus { success?: boolean; error?: { message?: string } | null }
+interface TxRecord { status?: TxStatus; digest?: string | { digest?: string } }
+interface TxResult { Transaction?: TxRecord; FailedTransaction?: TxRecord }
 
 const PKG = "0xb778d11962aaaee62518f487fdac208b26dff9dd53b614324c0a287bb326548f"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
@@ -30,13 +35,13 @@ const cat = (...xs: Uint8Array[]) => { const l = xs.reduce((a, x) => a + x.lengt
 async function run(signer: Ed25519Keypair, tx: Transaction): Promise<{ ok: boolean; err?: string; digest?: string }> {
   try {
     tx.setSender(signer.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await signer.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
+    const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
     const t = res.Transaction ?? res.FailedTransaction
     if (t?.status?.success) return { ok: true, digest: typeof t.digest === "string" ? t.digest : t.digest?.digest }
     return { ok: false, err: t?.status?.error?.message?.slice(0, 140) }
-  } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 140) } }
+  } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 140) } }
 }
 let pass = 0, total = 0
 const check = (label: string, r: { ok: boolean; err?: string }, want: "blocked", code: string) => {
@@ -45,14 +50,14 @@ const check = (label: string, r: { ok: boolean; err?: string }, want: "blocked",
   if (good) pass++
   console.log(`[${label}] ${good ? "✅" : "❌"} ${r.ok ? "EXECUTED" : r.err}`)
 }
-async function eventsOf(digest: string): Promise<any[]> {
+async function eventsOf(digest: string): Promise<SuiClientTypes.Event[]> {
   for (let i = 0; i < 8; i++) {
-    try { const full: any = await client.getTransaction({ digest, include: { events: true } }); return full?.Transaction?.events ?? [] } catch { await new Promise(r => setTimeout(r, 600)) }
+    try { const full = await client.getTransaction<{ events: true }>({ digest, include: { events: true } }); return full?.Transaction?.events ?? [] } catch { await new Promise(r => setTimeout(r, 600)) }
   }
   return []
 }
 async function main() {
-  const a1 = keypairFor(A1), a2 = keypairFor(A2)
+  const a1 = keypairFor(A1), _a2 = keypairFor(A2)
   const sk = new Uint8Array(32); crypto.getRandomValues(sk)
   const pk = ed25519.getPublicKey(sk)
 

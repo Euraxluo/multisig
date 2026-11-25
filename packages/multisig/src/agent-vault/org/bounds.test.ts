@@ -7,7 +7,6 @@
  *   （I9 补齐的调额与解暂停审计事件），类型名与字段布局与合约逐一对齐。
  * - 载荷界：CHAT_LIMITS 的 preview/blob 上界即合约单条入口新启用的一组断言。
  */
-import { bcs } from '@mysten/sui/bcs';
 import { describe, expect, it } from './vitest-shim';
 import { CHAT_ERRORS, ORG_ERRORS, SCALLOP_ERRORS, VAULT_ERRORS, VAULT_EVENTS, explainAbort } from './constants';
 import { CHAT_LIMITS } from '../chat/constants';

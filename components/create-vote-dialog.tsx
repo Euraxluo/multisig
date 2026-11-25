@@ -66,6 +66,10 @@ const initialVoteOption = { id: "option-1", text: "" }
 
 export function CreateVoteDialog({ open, onOpenChange, draftId, initialVoteId, initialGroupId }: CreateVoteDialogProps) {
   const { t } = useI18n()
+  // Latest-ref for hooks that must not re-run on locale change: the draft-resume
+  // effect reverts in-progress edits to the saved draft and resets the wizard step.
+  const tRef = useRef(t)
+  tRef.current = t
   const [step, setStep] = useState(1)
   const [groups, setGroups] = useState<VoterGroup[]>([])
   const [recentContacts] = useState<Array<{ id: string; name: string; address: string; type: "wallet" | "email" }>>([])
@@ -127,12 +131,12 @@ export function CreateVoteDialog({ open, onOpenChange, draftId, initialVoteId, i
     if (groupStart) {
       try {
         const scope = resolveGroupPollScope(initialGroupId, undefined, getUserGroups())
-        if (!scope.groupId) throw new Error(t("voting.errGroupScope"))
+        if (!scope.groupId) throw new Error(tRef.current("voting.errGroupScope"))
         void groupPollReader.readOrganization(scope.orgId).then(org => {
           if (run !== initialRosterGeneration.current) return
           setVoters(Object.entries(org.members).map(([address, weight]) => ({ id: address, name: address, address, weight, type: "wallet" as const })))
-        }).catch(error => { if (run === initialRosterGeneration.current) setSaveError(error instanceof Error ? error.message : t("voting.errRosterRead")) })
-      } catch (error) { setSaveError(error instanceof Error ? error.message : t("voting.errRosterReadShort")) }
+        }).catch(error => { if (run === initialRosterGeneration.current) setSaveError(error instanceof Error ? error.message : tRef.current("voting.errRosterRead")) })
+      } catch (error) { setSaveError(error instanceof Error ? error.message : tRef.current("voting.errRosterReadShort")) }
     }
     const invalidate = () => { initialRosterGeneration.current++ }
     return () => { invalidate() }

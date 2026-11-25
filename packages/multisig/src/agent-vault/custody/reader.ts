@@ -9,7 +9,7 @@ import type { SuiGrpcClient } from '@mysten/sui/grpc';
 import { normalizeStructTag } from '@mysten/sui/utils';
 import { canonicalAddress } from '../org/bcs';
 import { AGENT_VAULT_PACKAGE_ID } from '../org/constants';
-import { ASSET_CUSTODY_MODULE, assetCustodyType, custodyProposalType } from './constants';
+import { assetCustodyType, custodyProposalType } from './constants';
 import { AssetCustodyBcs, CustodyProposalBcs } from './schemas';
 
 export type CustodyReadClient = Pick<SuiGrpcClient, 'getObject'>;

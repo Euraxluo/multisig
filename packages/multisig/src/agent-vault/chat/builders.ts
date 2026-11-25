@@ -9,7 +9,7 @@
  * 客户端校验镜像合约常量：bps 合计须为 10000 或 0；批量 1..32 条且逐条
  * 校验 preview/blob 界，整批先验后发（合约语义：坏行不能推进序号前缀）。
  */
-import { Transaction, type TransactionArgument } from '@mysten/sui/transactions';
+import { Transaction } from '@mysten/sui/transactions';
 import { AGENT_VAULT_PACKAGE_ID, SUI_CLOCK_OBJECT_ID } from '../org/constants';
 import { FINANCE_SUI_TYPE, financeAddress, financeCoin, financeReturnChange, financeU64, type FinanceCoinSource, type FinanceTransactionOptions } from '../finance/validation';
 import { CHAT_LIMITS, CHAT_MODULE } from './constants';

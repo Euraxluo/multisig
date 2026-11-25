@@ -83,6 +83,10 @@ const ROSTER_PARSE_BAD = (label: string) => t("groups.parseBad", { label })
 
 export function GroupRosterDialog({ open, onOpenChange, orgId, groupId }: GroupRosterDialogProps) {
   const { t } = useI18n()
+  // Latest-ref for hooks that must not re-run on locale change: the roster-load
+  // effect wipes the editable draft, threshold and add-member inputs.
+  const tRef = useRef(t)
+  tRef.current = t
   const [live, setLive] = useState<LiveOrganization | null>(null)
   const [draft, setDraft] = useState<DraftMember[]>([])
   const [threshold, setThreshold] = useState("")
@@ -156,7 +160,7 @@ export function GroupRosterDialog({ open, onOpenChange, orgId, groupId }: GroupR
       if (!cancelled) setRecoveryError(cause instanceof Error ? cause.message : t("groups.readSessionsFailed"))
     })
     return () => { cancelled = true }
-  }, [open, orgId, activeAddress, activeAccountKey, request, round1, round2])
+  }, [open, orgId, activeAddress, activeAccountKey, request, round1, round2, t])
 
   const localNames = useMemo(() => {
     const group = getUserGroups().find((value: unknown) => (value as { id?: string })?.id === groupId) as { members?: Array<{ address?: string; name?: string }> } | undefined
@@ -187,13 +191,13 @@ export function GroupRosterDialog({ open, onOpenChange, orgId, groupId }: GroupR
         setDraft(organization.members.map(member => ({ ...member, name: localNames.get(member.address) ?? "", isNew: false })))
         setThreshold(organization.thresholdWeight.toString())
       } catch (cause) {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : t("groups.readOrgFailed"))
+        if (!cancelled) setError(cause instanceof Error ? cause.message : tRef.current("groups.readOrgFailed"))
       } finally { if (!cancelled) setLoading(false) }
       try {
         await ensureRosterUpdateFunction()
         if (!cancelled) setDeployment("available")
       } catch (cause) {
-        if (!cancelled) { setDeployment("missing"); setDeploymentError(cause instanceof Error ? cause.message : t("groups.rosterFnMissing")) }
+        if (!cancelled) { setDeployment("missing"); setDeploymentError(cause instanceof Error ? cause.message : tRef.current("groups.rosterFnMissing")) }
       }
     })()
     return () => { cancelled = true }
@@ -211,7 +215,7 @@ export function GroupRosterDialog({ open, onOpenChange, orgId, groupId }: GroupR
       if (!cancelled) { setLocalKey(null); setKeyError(cause instanceof Error ? cause.message : t("groups.readDeviceKeyFailed")) }
     })
     return () => { cancelled = true }
-  }, [open, live, activeAddress, activeAccountKey])
+  }, [open, live, activeAddress, activeAccountKey, t])
 
   useEffect(() => {
     if (!open || !request) { setMeIdentity(null); setPeerIdentities([]); return }
@@ -233,7 +237,7 @@ export function GroupRosterDialog({ open, onOpenChange, orgId, groupId }: GroupR
       if (!cancelled) setTransportStatus(t("groups.transportVerifyFailed", { reason: cause instanceof Error ? cause.message : t("groups.unknownError") }))
     })
     return () => { cancelled = true }
-  }, [open, request, activeAddress, activeAccountKey])
+  }, [open, request, activeAddress, activeAccountKey, t])
 
   const plan = useMemo<RosterPlan | null>(() => {
     if (!live) return null

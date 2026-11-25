@@ -13,9 +13,13 @@ import { Transaction } from "@mysten/sui/transactions"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 
+interface TxStatus { success?: boolean; error?: { message?: string } | null }
+interface TxRecord { status?: TxStatus; digest?: string | { digest?: string } }
+interface TxResult { Transaction?: TxRecord; FailedTransaction?: TxRecord }
+
 const PKG = "0x217be9d89ec16810b5ebb8404683768b31ec64bf0c92fa9aacfa79bf364f8655"
-const SUI = "0x2::sui::SUI"
-const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
+const _SUI = "0x2::sui::SUI"
+const _CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347" // admin
 const A2 = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e" // attacker
 const DAO_ORG = "0xDA0"
@@ -28,13 +32,13 @@ function keypairFor(address: string): Ed25519Keypair {
 async function run(signer: Ed25519Keypair, tx: Transaction): Promise<{ ok: boolean; err?: string; digest?: string }> {
   try {
     tx.setSender(signer.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await signer.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
+    const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
     const t = res.Transaction ?? res.FailedTransaction
     if (t?.status?.success) return { ok: true, digest: typeof t.digest === "string" ? t.digest : t.digest?.digest }
     return { ok: false, err: t?.status?.error?.message?.slice(0, 140) }
-  } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 140) } }
+  } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 140) } }
 }
 let pass = 0, total = 0
 const check = (label: string, r: { ok: boolean; err?: string }, expect: "blocked" | "exec") => {
@@ -48,13 +52,13 @@ async function main() {
   // 两个频道
   const mkChannel = async (name: string) => {
     const tx = new Transaction()
-    const [c] = tx.moveCall({ target: `${PKG}::onchain_chat::create_channel`, arguments: [tx.pure.address(DAO_ORG), tx.pure.vector("u8", [...new TextEncoder().encode(name)]), tx.pure.vector("address", [])] })
+    const [_c] = tx.moveCall({ target: `${PKG}::onchain_chat::create_channel`, arguments: [tx.pure.address(DAO_ORG), tx.pure.vector("u8", [...new TextEncoder().encode(name)]), tx.pure.vector("address", [])] })
     // create_channel shares internally; get id via events
     const r = await run(a1, tx)
     if (!r.ok) throw new Error("channel: " + r.err)
     for (let i = 0; i < 8; i++) {
       try {
-        const full: any = await client.getTransaction({ digest: r.digest!, include: { events: true } })
+        const full = await client.getTransaction<{ events: true }>({ digest: r.digest!, include: { events: true } })
         for (const e of full?.Transaction?.events ?? []) {
           const et = e.eventType ?? ""
           if (et.includes("ChannelCreated")) {
@@ -79,7 +83,7 @@ async function main() {
     if (!r.ok) throw new Error("adapter: " + r.err)
     for (let i = 0; i < 8 && !adapter; i++) {
       try {
-        const full: any = await client.getTransaction({ digest: r.digest!, include: { events: true } })
+        const full = await client.getTransaction<{ events: true }>({ digest: r.digest!, include: { events: true } })
         for (const e of full?.Transaction?.events ?? []) if ((e.eventType ?? "").includes("ScallopAdapterCreated")) {
           const b = e.bcs instanceof Uint8Array ? e.bcs : Uint8Array.from(Object.values(e.bcs) as number[])
           adapter = "0x" + Buffer.from(b.slice(0, 32)).toString("hex")

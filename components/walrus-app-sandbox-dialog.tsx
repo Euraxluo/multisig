@@ -113,7 +113,7 @@ export function WalrusAppSandboxDialog({ open, onOpenChange, groupId, orgId, rea
     })()
     const invalidate = () => { generation.current++; selectionGeneration.current++ }
     return () => { invalidate() }
-  }, [open, groupId, orgId, readOnly, initialPollId, revision, context])
+  }, [open, groupId, orgId, readOnly, initialPollId, revision, context, t])
 
   const readPoll = async () => {
     if (!scope || reading) return

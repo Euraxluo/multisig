@@ -26,12 +26,11 @@
  * 攻击者能【多轮提交】- 我方 E_ALREADY_SUBMITTED 已封死。
  */
 import { ed25519 } from "@noble/curves/ed25519.js";
-import { mod, bytesToScalar } from "../packages/multisig/src/dkg/math";
-import { sha256 } from "@noble/hashes/sha2.js";
+import { mod } from "../packages/multisig/src/dkg/math";
 
 const G = ed25519.Point.BASE;
 let pass = 0, fail = 0;
-const check = (name: string, ok: boolean, detail = "") => { console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${detail ? " — " + detail : ""}`); ok ? pass++ : fail++; };
+const check = (name: string, ok: boolean, detail = "") => { console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${detail ? " — " + detail : ""}`); if (ok) pass++; else fail++; };
 
 console.log("=== 场景复现：2-of-3，诚实成员先提交，攻击者最后提交 ===");
 // 诚实成员 2 人：各贡献随机 a0
@@ -39,7 +38,7 @@ const honest = [mod(123456789012345678901234567890n), mod(9876543210987654321098
 const Ypartial = honest.map(h => G.multiply(h)).reduce((a, p) => a.add(p));
 
 // 攻击者观察 Ypartial 后搜 a_0' 使 Y 具有前缀性质（示例：Y 前 8 bit = 0x00）
-const targetPrefixBits = 8;
+const _targetPrefixBits = 8;
 let found: bigint | null = null;
 let tries = 0;
 for (let k = 0; k < 2 ** 20 && found === null; k++) {

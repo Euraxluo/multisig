@@ -172,7 +172,7 @@ test('5. join gap: honest proof + poisoned polynomial is now hard-rejected', () 
   // 恶意 dealer m2：身份诚实（证明用真实分片构造，Y_2 与 λ_2·s_2 自洽），
   // 但投递的 resharing 多项式常数是随机 z* ≠ λ_2·s_2。假多项式的承诺向量与
   // 子份额完全自洽（VSS 通过），证明也与"真实"多项式自洽——旧代码在此静默放行。
-  const lambda2 = lagrangeCoefficient(2n, oldIndices, 0n);
+  const _lambda2 = lagrangeCoefficient(2n, oldIndices, 0n);
   const honestDealer = new GennaroResharingParticipant({
     id: 'm2', index: 2n, isOldActiveMember: true, isNewMember: true,
     currentShare: dealerShares.get(2n)!, newThreshold: 2,

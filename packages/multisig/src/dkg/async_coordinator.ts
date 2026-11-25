@@ -1,4 +1,3 @@
-import { ed25519 } from '@noble/curves/ed25519.js';
 import { mod } from './math';
 import { Point, verifyShareCommitment } from './vss';
 import { DKGParticipant, Round1Output, DKGFinalResult } from './ceremony';
@@ -9,7 +8,6 @@ import {
   generateIdentityKeypair,
   encryptMailboxShare,
   decryptMailboxShare,
-  hexToBytes,
   bytesToHex,
 } from './mailbox';
 

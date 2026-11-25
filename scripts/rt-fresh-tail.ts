@@ -6,7 +6,6 @@ import { Transaction } from "@mysten/sui/transactions"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { ed25519 } from "@noble/curves/ed25519.js"
-import { sha256 } from "@noble/hashes/sha2.js"
 
 const PKG = "0x827268c43588a928fc24ce48dee65ab2f89af54d0481e8060a83b54c1ea325e5"
 const SUI = "0x2::sui::SUI"
@@ -14,7 +13,7 @@ const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const ATTACKER = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const ZERO = "0x0000000000000000000000000000000000000000000000000000000000000000"
-const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" } as any)
+const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
 
 function keypairFor(address: string): Ed25519Keypair {
   const ks = JSON.parse(readFileSync(`${homedir()}/.sui/sui_config/sui.keystore`, "utf8")) as string[]
@@ -32,14 +31,20 @@ const bcsOf = (ev: unknown): Uint8Array => {
 }
 const hex = (u: Uint8Array, s = 0, e = 32) => "0x" + Buffer.from(u.slice(s, e)).toString("hex")
 
+/** Minimal shape of the tx envelope actually probed by this script: the SDK type has
+ *  digest: string, but this harness also defends against a legacy { digest: { digest } } wrap. */
+interface TxEvent { eventType?: string; bcs?: Uint8Array | Record<string, number> }
+interface TxEnvelope { status?: { success?: boolean; error?: { message?: string } | null }; digest?: string | { digest?: string }; events?: TxEvent[] }
+interface TxResult { Transaction?: TxEnvelope; FailedTransaction?: TxEnvelope }
+
 async function exec(signer: Ed25519Keypair, tx: Transaction, label: string) {
   tx.setSender(signer.toSuiAddress())
-  const bytes = await tx.build({ client } as any)
+  const bytes = await tx.build({ client })
   const sig = await signer.signTransaction(bytes)
-  const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true, objectTypes: true } })
+  const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true, objectTypes: true } })
   const t = res.Transaction ?? res.FailedTransaction
   const ok = t?.status?.success === true
-  const digest: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
+  const digest: string | undefined = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
   console.log(`[${label}] ${ok ? "EXECUTED" : "ABORTED"} digest=${digest}${ok ? "" : " :: " + (t?.status?.error?.message ?? "").slice(0, 150)}`)
   return { ok, t, digest }
 }
@@ -59,14 +64,11 @@ async function expectAbort(signer: Ed25519Keypair, tx: Transaction, label: strin
 }
 
 // IDs from the consolidated run output
-const ORG = "" // filled below from tx Ddiw5iqizcsP2sHD16XhBkqgG5SxrYwsJ98qpQXB7srq
-const PROPOSAL2 = "" // from tx 4fcpzPhQi9y7auspAch5ztF6Q71ZQy2QPTxJxCUc5hqV
-const CAP2 = "" // from tx 5gsaC3hmLmfYM285Y4JE2oH28UGi5itRsZLMYq6asL4J
 
 async function main() {
   const a1 = keypairFor(A1)
   const att = keypairFor(ATTACKER)
-  const deadline = BigInt(Date.now() + 7_200_000)
+  const _deadline = BigInt(Date.now() + 7_200_000)
 
   // top up A1
   const tf = new Transaction()
@@ -76,7 +78,7 @@ async function main() {
 
   // discover org id + proposal P2 + cap C2 from prior digests
   async function objFromTx(digest: string, suffix: string): Promise<string> {
-    const full: any = await client.getTransaction({ digest, include: { objectTypes: true } })
+    const full = await client.getTransaction({ digest, include: { objectTypes: true } })
     for (const [oid, ty] of Object.entries(full?.Transaction?.objectTypes ?? {}) as [string, string][]) if (String(ty).endsWith(suffix)) return oid
     return ""
   }
@@ -89,10 +91,10 @@ async function main() {
   // === re-verify the single-use take abort (get the true error) ===
   console.log("\n=== re-check: re-take after executed borrow proposal (expect 4) ===")
   {
-    const full: any = await client.getTransaction({ digest: "EyRg9RwhEaHRmGmYDK1z1Du5Ksex5JcJnGkag7wgvEP7", include: { events: true } })
-    const capProposalId = hex(bcsOf((full.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("CustodyProposalCreated"))))
-    const full2: any = await client.getTransaction({ digest: "2nesJGCjCWKxiaTbrAgBbPBYGhD1v9sC39kT4cnwgaUg", include: { events: true } })
-    const custodyId = hex(bcsOf((full2.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("AssetCustodyCreated"))))
+    const full = await client.getTransaction({ digest: "EyRg9RwhEaHRmGmYDK1z1Du5Ksex5JcJnGkag7wgvEP7", include: { events: true } })
+    const capProposalId = hex(bcsOf((full.Transaction?.events ?? []).find((e) => (e.eventType ?? "").endsWith("CustodyProposalCreated"))))
+    const full2 = await client.getTransaction({ digest: "2nesJGCjCWKxiaTbrAgBbPBYGhD1v9sC39kT4cnwgaUg", include: { events: true } })
+    const custodyId = hex(bcsOf((full2.Transaction?.events ?? []).find((e) => (e.eventType ?? "").endsWith("AssetCustodyCreated"))))
     const t = new Transaction()
     const [capVal, receipt] = t.moveCall({ target: `${PKG}::asset_custody::take_asset`, typeArguments: [`${PKG}::vault::MasterCap`], arguments: [t.object(custodyId), t.object(capProposalId), t.object(org), t.object(CLOCK)] })
     t.moveCall({ target: `${PKG}::asset_custody::return_asset`, typeArguments: [`${PKG}::vault::MasterCap`], arguments: [t.object(custodyId), capVal, receipt] })
@@ -123,7 +125,7 @@ async function main() {
     })
     const r1 = await exec(att, t1, "channel")
     if (!r1.ok) return
-    const channelId = hex(bcsOf((r1.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("ChannelCreatedWithStakeEvent"))))
+    const channelId = hex(bcsOf((r1.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("ChannelCreatedWithStakeEvent"))))
     const t2 = new Transaction()
     const [pay] = t2.splitCoins(t2.gas, [1_100_000n])
     const [receipt] = t2.moveCall({ target: `${PKG}::onchain_chat::join_channel_with_stake_and_fee`, arguments: [t2.object(channelId), pay] })
@@ -131,7 +133,7 @@ async function main() {
     const r2 = await exec(a1, t2, "A1 joins")
     if (!r2.ok) return
     let receiptId = ""
-    const full: any = await client.getTransaction({ digest: r2.digest, include: { objectTypes: true } })
+    const full = await client.getTransaction({ digest: r2.digest!, include: { objectTypes: true } })
     for (const [oid, ty] of Object.entries(full?.Transaction?.objectTypes ?? {}) as [string, string][]) if (String(ty).endsWith("MemberStakeReceipt")) receiptId = oid
     console.log("channel:", channelId, "receipt:", receiptId)
 
@@ -174,8 +176,8 @@ async function main() {
     await expectAbort(att, p2, "creator not participant", 3001)
   }
 
-  const { balance }: any = await client.getBalance({ owner: ATTACKER, coinType: SUI })
-  const { balance: b2 }: any = await client.getBalance({ owner: A1, coinType: SUI })
+  const { balance } = await client.getBalance({ owner: ATTACKER, coinType: SUI })
+  const { balance: b2 } = await client.getBalance({ owner: A1, coinType: SUI })
   console.log("\nATTACKER:", (Number(balance.balance) / 1e9).toFixed(5), "SUI · A1:", (Number(b2.balance) / 1e9).toFixed(5), "SUI")
   console.log("ORG=" + org)
 }

@@ -18,7 +18,7 @@ const G = ed25519.Point.BASE;
 let pass = 0, fail = 0;
 const check = (name: string, ok: boolean, detail = "") => {
   console.log(`  [${ok ? "PASS" : "FAIL"}] ${name}${detail ? " — " + detail : ""}`);
-  ok ? pass++ : fail++;
+  if (ok) pass++; else fail++;
 };
 
 // ---- 组钥：t=2, n=3（索引 1,2,3）。多项式 degree = t-1 = 1（t=2 → 一次式；degree=2 需 3 个签名者）----
@@ -52,7 +52,7 @@ console.log("=== 构造 1：会话 B 承诺集 + B 份额 → 会话 A 新消息
   // 会话 A：攻击者重放 C_B，消息换成 m_A；ρ_j^A = H(C_B, m_A, Y, j) 全部改变
   const mA = msgOf("session-A");
   const aggregateR_A = computeAggregateNonce(cB, mA, Y); // 承诺同、消息不同 → R̄ 不同
-  const c_A = bytesToScalar(sha512(new Uint8Array([...aggregateR_A.toBytes(), ...Y, ...mA])));
+  const _c_A = bytesToScalar(sha512(new Uint8Array([...aggregateR_A.toBytes(), ...Y, ...mA])));
   const zReplay = mod(zB[0].shareZ + zB[1].shareZ); // 只有 B 的份额可用
   const sigA = new Uint8Array(64);
   sigA.set(aggregateR_A.toBytes(), 0);
@@ -85,8 +85,8 @@ console.log("=== 构造 2：跨会话份额拼接（B 的 z_1 + A 的 z_2 配 A 
       { participantId: "H1", participantIndex: 1n, shareZ: mod(z1B.shareZ) },
       z2A,
     ]);
-  } catch (e: any) {
-    threw = /self-verification|corruption/.test(e.message ?? "");
+  } catch (e) {
+    threw = /self-verification|corruption/.test((e as Error).message ?? "");
   }
   check("B 份额 + A 承诺集拼接 → 聚合自校验拒绝", threw, "z1^B 绑定 B 的 nonce 秘密，配 A 的 R̄/c 必然失衡");
 }

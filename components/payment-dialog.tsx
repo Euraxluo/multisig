@@ -89,7 +89,7 @@ export function PaymentDialog({ open, onOpenChange, bill, amount: initialAmount,
         .catch(error => { if (!cancelled) setErrorMessage(error instanceof Error ? error.message : t("payments.errAssetReadFailed")) })
     }
     return () => { cancelled = true }
-  }, [open, activeAccount])
+  }, [open, activeAccount, t])
 
   useEffect(() => {
     generation.current++

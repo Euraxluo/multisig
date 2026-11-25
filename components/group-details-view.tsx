@@ -131,6 +131,11 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
   const open = true;
   const onOpenChange = (val: boolean) => { if (!val && onClose) onClose(); };
   const { t } = useI18n()
+  // Latest-ref for hooks that must not re-run on locale change: the group-files
+  // effect drops a pending Walrus-blob re-confirmation, and the org-restore
+  // effect closes open dialogs (QR/DKG/roster/create-tx).
+  const tRef = useRef(t)
+  tRef.current = t
   const [activeTab, setActiveTab] = useState("chat")
   const [shareQrOpen, setShareQrOpen] = useState(false)
   const [chainLoading, setChainLoading] = useState(false)
@@ -229,7 +234,7 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
     setGroupFiles([]); setChainFiles([]); setPendingFile(null); setFileError(""); setFileReceipt("")
     const loadFiles = () => {
       try { setGroupFiles(getGroupWalrusFiles(groupId)) }
-      catch (error) { setFileError(error instanceof Error ? error.message : t("groups.readGroupFilesFailed")) }
+      catch (error) { setFileError(error instanceof Error ? error.message : tRef.current("groups.readGroupFilesFailed")) }
     }
     loadFiles()
     window.addEventListener("walrus-files-updated", loadFiles)
@@ -259,11 +264,11 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
       setChainLoading(true)
       try {
         const { object } = await proposalClient.getObject({ objectId: organizationId, include: { content: true }, signal: AbortSignal.timeout(20_000) })
-        if (normalizeStructTag(object.type) !== `${PROPOSAL_TYPE_ORIGIN}::cryptographic_org::Organization`) throw new Error(t("groups.notProtocolOrg"))
+        if (normalizeStructTag(object.type) !== `${PROPOSAL_TYPE_ORIGIN}::cryptographic_org::Organization`) throw new Error(tRef.current("groups.notProtocolOrg"))
         const fields = OrganizationContent.parse(object.content)
-        if (normalizeSuiAddress(object.objectId) !== normalizeSuiAddress(organizationId) || fields.id !== normalizeSuiAddress(organizationId) || object.owner.$kind !== "Shared") throw new Error(t("groups.orgIdOwnerMismatch"))
+        if (normalizeSuiAddress(object.objectId) !== normalizeSuiAddress(organizationId) || fields.id !== normalizeSuiAddress(organizationId) || object.owner.$kind !== "Shared") throw new Error(tRef.current("groups.orgIdOwnerMismatch"))
         const members = await readWeightTable(fields.members_weight.id)
-        if (BigInt(Object.keys(members).length) !== BigInt(fields.members_weight.size)) throw new Error(t("groups.orgRosterIncomplete"))
+        if (BigInt(Object.keys(members).length) !== BigInt(fields.members_weight.size)) throw new Error(tRef.current("groups.orgRosterIncomplete"))
         if (!current()) return
         const pk = toHex(Uint8Array.from(fields.group_pk))
         const epoch = weightNumber(fields.epoch_version)
@@ -273,7 +278,7 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
         setChainError("")
         if (found) setRealGroupData({ ...found, chainMembers: members, chainThreshold: weightNumber(fields.threshold_weight), sourceStatus: "chain-confirmed" })
       } catch (error) {
-        if (!cancelled) setChainError(error instanceof Error ? error.message : t("groups.orgReadFailedShort"))
+        if (!cancelled) setChainError(error instanceof Error ? error.message : tRef.current("groups.orgReadFailedShort"))
       } finally { if (!cancelled) setChainLoading(false) }
     }
     setLoadedGroupId(groupId)
@@ -454,7 +459,7 @@ export function GroupDetailsView({ groupId, readOnly = false, isDialog = false, 
     }
     void loadChat()
     return () => { cancelled = true }
-  }, [orgObjectId, loadedGroupId, groupId, chatRefresh, open])
+  }, [orgObjectId, loadedGroupId, groupId, chatRefresh, open, t])
 
   useEffect(() => {
     const onSwitch = () => {

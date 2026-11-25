@@ -13,6 +13,17 @@ import { homedir } from "node:os"
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { sha256 } from "@noble/hashes/sha2.js"
 
+// Wire shapes this probe reads off the gRPC responses (see redteam-attack.ts).
+// bcs is non-optional: the events these scans target always carry BCS on the
+// gRPC transport, and a missing field should fail exactly as it does at runtime.
+interface WireEvent { eventType?: string; bcs: Uint8Array | Record<number, number> }
+interface WireTx {
+  digest: string | { digest: string }
+  status?: { success?: boolean; error?: { message?: string } | null }
+  events?: WireEvent[]
+}
+type WireExecResult = { Transaction?: WireTx; FailedTransaction?: WireTx }
+
 const PKG = process.argv[2] ?? "0x827268c43588a928fc24ce48dee65ab2f89af54d0481e8060a83b54c1ea325e5"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
@@ -28,16 +39,16 @@ const attestDigest = (sid: Uint8Array, pk: Uint8Array) => sha256(cat(Buffer.from
 async function run(signer: Ed25519Keypair, tx: Transaction): Promise<{ ok: boolean; digest?: string; err?: string }> {
   try {
     tx.setSender(signer.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await signer.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+    const res: WireExecResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
     const t = res.Transaction ?? res.FailedTransaction
     if (t?.status?.success) return { ok: true, digest: typeof t.digest === "string" ? t.digest : t.digest?.digest }
     return { ok: false, err: t?.status?.error?.message?.slice(0, 140) }
-  } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 140) } }
+  } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 140) } }
 }
-async function eventsOf(digest: string): Promise<any[]> {
-  const full: any = await client.getTransaction({ digest, include: { events: true } })
+async function eventsOf(digest: string): Promise<WireEvent[]> {
+  const full: WireExecResult = await client.getTransaction({ digest, include: { events: true } })
   return full?.Transaction?.events ?? []
 }
 async function main() {

@@ -44,6 +44,10 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
   const [accountKey, setAccountKey] = useState("")
   const reloadVersion = useRef(0)
   const actionGuard = useRef(createSubmissionGuard())
+  // Latest-ref for `t` inside reload/scope: a language switch must not collapse
+  // the listed payments or drop a manually looked-up row (I12 hook review).
+  const tRef = useRef(t)
+  tRef.current = t
 
   useEffect(() => {
     const syncAccount = () => {
@@ -58,7 +62,7 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
   const scope = useCallback(() => {
     if (!groupId) return ZERO_SCOPE
     const group = getUserGroups().find(group => group.id === groupId)
-    if (!group?.orgObjectId) throw new Error(t("payments.recErrNoOrg"))
+    if (!group?.orgObjectId) throw new Error(tRef.current("payments.recErrNoOrg"))
     return normalizeSuiAddress(group.orgObjectId)
   }, [groupId])
 
@@ -90,7 +94,7 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
       setConnected(!!active)
       if (!active) {
         setPayments([])
-        setNotice(t("payments.recNoticeConnect"))
+        setNotice(tRef.current("payments.recNoticeConnect"))
         return
       }
       const account = getTransactionAccount()
@@ -102,9 +106,9 @@ export function RecurringPayments({ groupId }: RecurringPaymentsProps) {
       const display = await Promise.all(result.payments.map(decorate))
       if (!current()) return
       setPayments(display)
-      setNotice(result.truncated ? t("payments.recNoticeTruncated") : null)
+      setNotice(result.truncated ? tRef.current("payments.recNoticeTruncated") : null)
       if (result.errors.length) setError(result.errors.join("；"))
-    } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : t("payments.recErrReadFailed")) }
+    } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : tRef.current("payments.recErrReadFailed")) }
     finally { if (version === reloadVersion.current) setLoading(false) }
   }, [groupId, scope])
 

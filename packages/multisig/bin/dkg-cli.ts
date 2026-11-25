@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { DKGParticipant, ThresholdSignerNode } from '../src/dkg';
+import { DKGParticipant, ThresholdSignerNode, type SingleShotVssPackage } from '../src/dkg';
 // 演示专用内部模块：ResharingNode 不在 SDK 公开导出里（明文插值路径，
 // 无 dealer 诚实性证明），仅此演示可引用。
 import { ResharingNode } from '../src/dkg/resharing';
@@ -367,7 +367,7 @@ async function runFullyAsyncDemo() {
     publicKey: p.identityKeypair.publicKey,
   }));
 
-  const chainPackages: any[] = [];
+  const chainPackages: SingleShotVssPackage[] = [];
 
   // 时间步 1: 东京时间 09:00 (Alice 独自操作)
   console.log(`\n${CYAN}[时间步 1 - 东京时间 09:00] Alice 独自打开手机 App${RESET}`);
@@ -412,7 +412,7 @@ async function runFullyAsyncDemo() {
   console.log(`  1. 东京 10:00: Alice 异步发起国库提案: "支付 500 SUI 安全审计费"`);
   
   const aliceFinal = await participants[0].consumeMailboxAndFinalize(chainPackages);
-  const bobFinal = await participants[1].consumeMailboxAndFinalize(chainPackages);
+  const _bobFinal = await participants[1].consumeMailboxAndFinalize(chainPackages);
 
   console.log(`  2. 伦敦 14:00: Bob 独自上线，提交赞成票与部分签名份额 z_Bob`);
   console.log(`  3. 纽约 20:00: Charlie 独自上线，提交赞成票与部分签名份额 z_Charlie`);

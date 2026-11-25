@@ -72,7 +72,7 @@ export function TransactionDetailsDialog({ open, onOpenChange, transactionId, gr
       window.removeEventListener("sui-proposals-updated", loadProposal)
       window.removeEventListener("sui-account-switched", accountChanged)
     }
-  }, [open, transactionId])
+  }, [open, transactionId, t])
 
   if (!proposal) {
     return null

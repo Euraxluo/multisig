@@ -157,12 +157,12 @@ async function main() {
   {
     const sealed = poison
     let mode = ""
-    let shareOk: boolean | null = null
+    let _shareOk: boolean | null = null
     try {
       const share = await openShare(sealed, victim.privateKey, { sessionId: sid, sender: A2, recipient: A1, epoch: 1 })
       const value = bytesToScalar(share)
       const vssOk = verifyShareCommitment(value, 1n, attCommitments)
-      shareOk = vssOk
+      _shareOk = vssOk
       mode = `openShare 成功(AEAD 通过)，解出标量 0x${value.toString(16).slice(0, 12)}…，VSS 对照 A2 链上承诺 = ${vssOk}`
     } catch (e) { mode = "openShare 抛错: " + (e as Error).message.slice(0, 80) }
     console.log(`[S1] 受害者解密: ${mode}`)

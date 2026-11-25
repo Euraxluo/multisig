@@ -30,7 +30,7 @@ const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const ATTACKER = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const CHAIN = Buffer.from("sui-testnet:")
-const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" } as any)
+const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
 
 function keypairFor(address: string): Ed25519Keypair {
   const ks = JSON.parse(readFileSync(`${homedir()}/.sui/sui_config/sui.keystore`, "utf8")) as string[]
@@ -41,23 +41,31 @@ function keypairFor(address: string): Ed25519Keypair {
   throw new Error(`no keypair for ${address}`)
 }
 const le = (v: bigint): Uint8Array => { const o = new Uint8Array(8); let x = v; for (let i = 0; i < 8; i++) { o[i] = Number(x & 0xffn); x >>= 8n } return o }
-const vecB = (items: Uint8Array[]): Uint8Array => { const total = 1 + items.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(total); o[0] = items.length; let p = 1; for (const x of items) { o.set(x, p); p += x.length } return o }
+const _vecB = (items: Uint8Array[]): Uint8Array => { const total = 1 + items.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(total); o[0] = items.length; let p = 1; for (const x of items) { o.set(x, p); p += x.length } return o }
 const addrB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
 const idB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
-const evType = (e: any) => String(e?.eventType ?? e?.type ?? "")
-const evField = (e: any, f: string) => e?.json?.[f] ?? e?.parsedJson?.[f]
+// Read-field views of the gRPC response consumed below (the `events.events` /
+// `digest.digest` fallbacks cover the legacy JSON-RPC result shapes the
+// harness defensively reads).
+type TxEvent = { eventType?: string; type?: string; json?: Record<string, unknown> | null; parsedJson?: Record<string, unknown> }
+interface TxStatus { success?: boolean; error?: { message?: string } | null }
+interface ObjectChangeView { type?: string; objectType?: string; created?: unknown; objectId?: string; object?: { objectType?: string; objectId?: string } }
+interface TxEffectsView { objectChanges?: ObjectChangeView[]; _ObjectChange?: ObjectChangeView[]; changedObjects?: ObjectChangeView[] }
+interface TxView { digest: string | { digest?: string }; status: TxStatus; events?: TxEvent[] | { events?: TxEvent[]; data?: TxEvent[] }; effects?: TxEffectsView }
+const evType = (e: TxEvent) => String(e?.eventType ?? e?.type ?? "")
+const evField = (e: TxEvent, f: string) => e?.json?.[f] as string ?? e?.parsedJson?.[f]
 
 async function exec(signer: Ed25519Keypair, tx: Transaction, label: string) {
   tx.setSender(signer.toSuiAddress())
-  const bytes = await tx.build({ client } as any)
+  const bytes = await tx.build({ client })
   const sig = await signer.signTransaction(bytes)
-  const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+  const res: { Transaction?: TxView; FailedTransaction?: TxView } = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
   const t0 = res.Transaction ?? res.FailedTransaction
   const rawEvs = t0?.events
   const evs = Array.isArray(rawEvs) ? rawEvs : (rawEvs?.events ?? rawEvs?.data ?? [])
   const t = { ...t0, events: evs }
   const ok = t?.status?.success === true
-  const digest: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
+  const digest: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest as string
   console.log(`[${label}] ${ok ? "EXECUTED" : "ABORTED"} digest=${digest}${ok ? "" : " :: " + (t?.status?.error?.message ?? "").slice(0, 180)}`)
   return { ok, t, digest }
 }
@@ -65,7 +73,7 @@ async function exec(signer: Ed25519Keypair, tx: Transaction, label: string) {
 const st = JSON.parse(readFileSync("/tmp/t01-state.json", "utf8"))
 const sk = new Uint8Array(Buffer.from(st.sk, "hex"))
 const a1 = keypairFor(A1)
-const att = keypairFor(ATTACKER)
+const _att = keypairFor(ATTACKER)
 const orgId: string = st.orgId
 const AMOUNT = 20_000_000n // 0.02 SUI
 
@@ -76,7 +84,7 @@ async function vaultBalance(id: string): Promise<string> {
     // AgentVault<SUI> content: { id, balance, vault_version, ... } — balance shows as object with value? try fields
     const c = o.content?.fields ?? o.content
     return JSON.stringify(c?.balance ?? c?.["balance"] ?? "?")
-  } catch (e) { return "err" }
+  } catch { return "err" }
 }
 
 async function main() {
@@ -85,14 +93,14 @@ async function main() {
   let vault2 = st.vault2 ?? "", cap2 = st.cap2 ?? ""
   if (!vault2) {
     const tx = new Transaction()
-    const [cap] = tx.moveCall({ target: `${PKG}::vault::initialize_vault`, typeArguments: [SUI], arguments: [] }) as any[]
+    const [cap] = tx.moveCall({ target: `${PKG}::vault::initialize_vault`, typeArguments: [SUI], arguments: [] })
     tx.transferObjects([cap], A1)
     tx.setGasBudget(40_000_000)
     const r = await exec(a1, tx, "init vault2")
     if (!r.ok) throw new Error("vault2 init failed")
     for (const oc of r.t.effects?.objectChanges ?? (r.t.effects?._ObjectChange ?? r.t.effects?.changedObjects ?? [])) {
-      const j: any = oc
-      const t = String(j.type ?? j.objectType ?? "")
+      const j = oc
+      const _t = String(j.type ?? j.objectType ?? "")
       if (String(j.type) === "created" || j.created) {
         const ot = String(j.objectType ?? j.object?.objectType ?? "")
         if (ot.endsWith("vault::AgentVault")) vault2 = String(j.objectId ?? j.object?.objectId)
@@ -107,7 +115,7 @@ async function main() {
   // fund vault2 0.05 SUI
   {
     const tx = new Transaction()
-    const [c] = tx.splitCoins(tx.gas, [tx.pure.u64(50_000_000n)]) as any[]
+    const [c] = tx.splitCoins(tx.gas, [tx.pure.u64(50_000_000n)])
     tx.moveCall({ target: `${PKG}::vault::deposit`, typeArguments: [SUI], arguments: [tx.object(vault2), c] })
     tx.setGasBudget(30_000_000)
     await exec(a1, tx, "fund vault2 0.05 SUI")
@@ -115,7 +123,7 @@ async function main() {
   console.log("vault2 balance before:", await vaultBalance(vault2))
 
   // 2) proposal via treasury (member A1), recipient ATTACKER, amount 0.02
-  let proposalId = st.x5p ?? "", bindingId = ""
+  let proposalId = st.x5p ?? "", _bindingId = ""
   if (proposalId) console.log("reuse proposal", proposalId)
   if (!proposalId) {
     const deadline = BigInt(Date.now() + 3_600_000)
@@ -131,7 +139,7 @@ async function main() {
     tx.setGasBudget(25_000_000)
     const r = await exec(a1, tx, "create_transfer x5")
     if (!r.ok) throw new Error("create failed")
-    for (const e of r.t.events) if (evType(e).endsWith("TransferCreated")) { bindingId = evField(e, "binding_id"); proposalId = evField(e, "proposal_id") }
+    for (const e of r.t.events) if (evType(e).endsWith("TransferCreated")) { _bindingId = evField(e, "binding_id"); proposalId = evField(e, "proposal_id") }
     console.log("proposal:", proposalId)
     const st2 = JSON.parse(readFileSync("/tmp/t01-state.json", "utf8")); st2.x5p = proposalId
     writeFileSync("/tmp/t01-state.json", JSON.stringify(st2, null, 1))

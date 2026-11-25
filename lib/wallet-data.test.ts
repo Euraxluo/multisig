@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { afterEach, mock, test } from "node:test"
 import { normalizeStructTag } from "@mysten/sui/utils"
+import type { SuiClientTypes } from "@mysten/sui/client"
 import { proposalClient, PROPOSAL_TYPE_ORIGIN } from "./proposal-chain"
 import { activityFromEvents, formatCoinBalance, readWalletActivity, readWalletAssets } from "./wallet-data"
 
@@ -65,7 +66,7 @@ test("personal approvals classify only matching protocol events and retain failu
 })
 
 test("activity queries are scoped to the current sender and preserve pagination", async () => {
-  mock.method(proposalClient, "listTransactions", async (options: any) => {
+  mock.method(proposalClient, "listTransactions", async (options: SuiClientTypes.ListTransactionsOptions) => {
     assert.deepEqual(options.filter, { sender: address })
     assert.equal(options.before, "older")
     assert.equal(options.order, "descending")

@@ -63,6 +63,10 @@ export default function Profile({ onShowGroups }: { onShowGroups?: () => void })
   const allGroups = useMemo(() => mergeDiscoveredGroups(groups, discovery.data), [groups, discovery.data])
   const activityRun = useRef(0)
   const loadingMore = useRef(false)
+  // Latest-ref for `t` inside the assets/activity effect: a language switch must
+  // not wipe the listed pages and reset the Load-more cursor (I12 hook review).
+  const tRef = useRef(t)
+  tRef.current = t
 
   useEffect(() => {
     const sync = () => {
@@ -98,7 +102,7 @@ export default function Profile({ onShowGroups }: { onShowGroups?: () => void })
       .then(value => { if (!cancelled) setSuinsName(value ?? "") })
       .catch(error => { if (!cancelled) setSuinsError(error instanceof Error ? error.message : t("profile.suinsLookupFailed")) })
     return () => { cancelled = true }
-  }, [address, profile])
+  }, [address, profile, t])
 
   useEffect(() => {
     setShareOpen(false); setNotice(""); setIdentity(null)
@@ -122,11 +126,11 @@ export default function Profile({ onShowGroups }: { onShowGroups?: () => void })
       const snapshot = await fetchTokenPrices(value)
       if (!cancelled) setPrices(snapshot)
     })
-      .catch(error => { if (!cancelled) setAssetError(error instanceof Error ? error.message : t("profile.assetsReadFailed")) })
+      .catch(error => { if (!cancelled) setAssetError(error instanceof Error ? error.message : tRef.current("profile.assetsReadFailed")) })
       .finally(() => { if (!cancelled) setAssetsLoading(false) })
     void readWalletActivity(address).then(value => {
       if (!cancelled && run === activityRun.current) { setActivities(value.activities); setCursor(value.cursor); setHasMore(value.hasNextPage) }
-    }).catch(error => { if (!cancelled) setActivityError(error instanceof Error ? error.message : t("profile.activityReadFailed")) })
+    }).catch(error => { if (!cancelled) setActivityError(error instanceof Error ? error.message : tRef.current("profile.activityReadFailed")) })
       .finally(() => { if (!cancelled && run === activityRun.current) setActivityLoading(false) })
     const invalidate = () => { activityRun.current++ }
     return () => { cancelled = true; invalidate() }

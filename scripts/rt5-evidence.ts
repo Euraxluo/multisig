@@ -14,11 +14,6 @@ function hex2(e: unknown): Uint8Array {
   return b instanceof Uint8Array ? b : Uint8Array.from(Object.values(asRecord(b)) as number[])
 }
 
-function hex(b: unknown): string {
-  const u = b instanceof Uint8Array ? b : Uint8Array.from(Object.values(asRecord(b)) as number[])
-  return "0x" + Buffer.from(u).toString("hex")
-}
-
 async function dump(digest: string): Promise<void> {
   for (let i = 0; i < 10; i++) {
     try {
@@ -31,7 +26,7 @@ async function dump(digest: string): Promise<void> {
         if (ty.includes("agent_vault")) console.log("event:", ty.split("::").slice(1).join("::"), "bcs:", Buffer.from(hex2(e)).toString("hex"))
       }
       const effects = fld(t, "effects")
-      const gas = effects == null ? undefined : fld(effects, "gasEffects" as never) ?? fld(effects, "gas")
+      const _gas = effects == null ? undefined : fld(effects, "gasEffects" as never) ?? fld(effects, "gas")
       const bc = fld(t, "balanceChanges")
       if (Array.isArray(bc)) for (const c of bc) {
         const owner = fld(c, "owner")

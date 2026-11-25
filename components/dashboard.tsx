@@ -93,7 +93,7 @@ export default function Dashboard() {
       window.removeEventListener("sui-account-switched", loadAssets)
       window.removeEventListener("storage", loadAssets)
     }
-  }, [])
+  }, [t])
 
   // 群组列表 = 本机备注 + 链上发现；本机记录永不因发现结果被隐藏。
 

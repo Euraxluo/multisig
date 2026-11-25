@@ -70,8 +70,12 @@ module agent_vault::dkg_committee {
     /// 以为替换成功，而链上仍保留首写密文；现在显式拒绝。
     const E_MAILBOX_ALREADY_DEPOSITED: u64 = 3019;
     /// 保证金金额低于下限 MIN_BOND_MIST（为将来可配置化预留的校验槽位）。
+    /// 目前押金固定为 MIN_BOND_MIST（见 BondConfigSlot），上下界通过
+    /// bond_bounds() 只读暴露给链下；一旦配置化，这两个码位即被启用。
+    #[allow(unused_const)]
     const E_BOND_BELOW_MIN: u64 = 3020;
     /// 保证金金额高于上限 MAX_BOND_MIST（为将来可配置化预留的校验槽位）。
+    #[allow(unused_const)]
     const E_BOND_ABOVE_MAX: u64 = 3021;
     /// 缴款低于应缴额（创建费不足或提交保证金不足）。
     const E_BOND_INSUFFICIENT_PAYMENT: u64 = 3022;

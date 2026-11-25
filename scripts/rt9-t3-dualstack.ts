@@ -7,9 +7,7 @@
  * (c) HKDF salt/info 逐字节对照（lib/dkg-mailbox.ts vs packages/multisig/src/dkg/mailbox.ts）。
  */
 import { x25519 } from "@noble/curves/ed25519.js"
-import { hkdf } from "@noble/hashes/hkdf.js"
-import { sha256 } from "@noble/hashes/sha2.js"
-import { sealShare, openShare, isSealableKey, P256_PUBLIC_KEY_BYTES } from "../lib/dkg-mailbox"
+import { sealShare, openShare, isSealableKey } from "../lib/dkg-mailbox"
 import {
   generateIdentityKeypair, encryptMailboxShare, decryptMailboxShare, mailboxAad, MAILBOX_AAD_VERSION,
 } from "../packages/multisig/src/dkg/mailbox"
@@ -39,7 +37,7 @@ async function main() {
   console.log(`[c] AAD 版本: A5 = MAILBOX_AAD_V${MAILBOX_AAD_VERSION}; A6 = SHARE_ENVELOPE_V${p256Aad}; 两者互不可解密（跨栈解密行为 = 必然失败，但失败点在 GCM 层之前就分叉）`)
 
   // ══ (a) P-256 全流程本地仿真 ══
-  const alice = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
+  const _alice = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
   const bob = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, true, ["deriveBits"])
   const bobPub = new Uint8Array(await crypto.subtle.exportKey("raw", bob.publicKey))
   const share = crypto.getRandomValues(new Uint8Array(32))
@@ -57,15 +55,15 @@ async function main() {
 
   // P-256 ECDH 手工对称性（与 noble X25519 对照）
   const eph = await crypto.subtle.generateKey({ name: "ECDH", namedCurve: "P-256" }, false, ["deriveBits"])
-  const s1 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: bob.publicKey }, eph.privateKey, 256))
-  const s2 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: (await crypto.subtle.exportKey("raw", eph.publicKey)) && bob.publicKey } as never, eph.privateKey, 256))
+  const _s1 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: bob.publicKey }, eph.privateKey, 256))
+  const _s2 = new Uint8Array(await crypto.subtle.deriveBits({ name: "ECDH", public: (await crypto.subtle.exportKey("raw", eph.publicKey)) && bob.publicKey } as never, eph.privateKey, 256))
   console.log(`[a] WebCrypto P-256 deriveBits 输出 32B 大端 x 坐标（无 cofactor 校验暴露层，空密钥由实现拒绝）`)
 
   // X25519 低阶点行为（A5 的 assertNonZeroSharedSecret 防 P-256 栈不存在的这类问题）
   const lowOrder = new Uint8Array(32) // 全零 X25519 公钥 → 全零共享秘密
   const recv = generateIdentityKeypair("0x" + "33".repeat(32))
-  let zeroRejected = false
-  try { x25519.getSharedSecret(recv.secretKey, lowOrder); x25519.getSharedSecret(recv.secretKey, lowOrder).every(b => b === 0) && (zeroRejected = false) } catch { zeroRejected = true }
+  let _zeroRejected = false
+  try { x25519.getSharedSecret(recv.secretKey, lowOrder); if (x25519.getSharedSecret(recv.secretKey, lowOrder).every(b => b === 0)) _zeroRejected = false } catch { _zeroRejected = true }
   console.log(`[a] noble X25519 全零公钥 → 共享秘密全零(不抛错)；A5 assertNonZeroSharedSecret 显式拦截 = 设计内; P-256 栈无此面（P-256 无 8 阶点编码进 65B raw 的实用构造，无效点由 WebCrypto importKey 抛错拒绝）`)
 
   // ══ (b) 信封交叉解析 ══

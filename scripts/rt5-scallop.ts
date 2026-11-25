@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 
 const PKG = "0xce550b77f97866cb922834e4185585c61396ba953bacd27ee92f352b93cf9fc5"
-const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
+const _CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const A2 = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
 
@@ -78,7 +78,7 @@ async function simulate(signer: Ed25519Keypair, tx: Transaction, label: string):
   tx.setSender(signer.toSuiAddress())
   try {
     const bytes = await tx.build({ client: buildClient })
-    const res = asRecord(await (grpc as any).simulateTransaction({ transaction: bytes }))
+    const res = asRecord(await (grpc as unknown as { simulateTransaction: (input: { transaction: Uint8Array }) => Promise<unknown> }).simulateTransaction({ transaction: bytes }))
     const effects = recordField(res, 'effects')
     const statusObj = effects == null ? recordField(res, 'status') : recordField(effects, 'status')
     const simOk = statusObj == null
@@ -149,10 +149,8 @@ async function main() {
   const a1 = keypairFor(A1)
   const a2 = keypairFor(A2)
   const REUSE = process.env.RT5_REUSE === "1"
-  let c1 = "0x78def48258f52c4c21929ceb1d5fbdede34a3bbe10a1b8456add0018ecb911a8"
-  let c2 = "0x521a6abd3ec049156b454b61375a85be27e6c66fc97b322717aa173388dd9de3"
-  let adA = "0x9947926aad22c62db4dbb6eeffb181f8d97e1476a1cb915d59125d6ef4dc698b"
-  let adB = "0x29b4a7bd2ebbbe007ca87b87fd0a378d2cc75813b6bc132fe811266719787f46"
+  const c2 = "0x521a6abd3ec049156b454b61375a85be27e6c66fc97b322717aa173388dd9de3"
+  const adA = "0x9947926aad22c62db4dbb6eeffb181f8d97e1476a1cb915d59125d6ef4dc698b"
   if (REUSE) {
     // skip setup, use ids above
   } else {

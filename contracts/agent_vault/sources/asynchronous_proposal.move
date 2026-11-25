@@ -52,12 +52,17 @@ module agent_vault::asynchronous_proposal {
 
     /// The vault passed to execute_transfer_proposal does not match the vault
     /// recorded in the executed transfer proposal (proposal.vault_id binding).
+    /// Reserved: the execute path re-derives the vault from MasterCap and the
+    /// digest binds vault_id, so no call site aborts with this code today.
+    /// The code slot is kept so the u64 numbering of the surrounding table
+    /// stays stable (the SDK maps abort codes from its own independent table
+    /// and does not read this constant) and so a future explicit re-binding
+    /// check has its position ready.
+    #[allow(unused_const)]
     const E_VAULT_MISMATCH: u64 = 4019;
-    /// Domain separator for treasury transfer execution signatures.
-    const DOMAIN_TREASURY_TRANSFER: vector<u8> = b"SUI_ORG_TREASURY_TRANSFER_V1:";
     /// Transfer 摘要域（V3，Issue #23 / Round-10 T01）：amount 后追加
-    /// bcs(vault_id)，签名绑定放款金库。V1/V2 域保留（不删）用于历史
-    /// 摘要辨认，新签名一律走 V3。
+    /// bcs(vault_id)，签名绑定放款金库。V1/V2 是历史域（V1 常量已作为
+    /// 死代码删除，golden-vectors.test.ts 守卫其不得复活）；新签名一律走 V3。
     const DOMAIN_TREASURY_TRANSFER_V3: vector<u8> = b"SUI_ORG_TREASURY_TRANSFER_V3:";
 
     /// Rolling budget window for `SubagentCoSignCap.daily_budget_limit`.

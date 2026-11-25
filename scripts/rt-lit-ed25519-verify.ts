@@ -9,7 +9,7 @@
  * 每例回答：链上 ed25519_verify 接受 or 拒绝（E_ARRAY = 拒绝 | 通过 = 接受）。
  */
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519"
-import { fromBase64, toBase64 } from "@mysten/sui/utils"
+import { fromBase64 } from "@mysten/sui/utils"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { Transaction } from "@mysten/sui/transactions"
 import { readFileSync } from "node:fs"
@@ -45,9 +45,9 @@ function popDigest(groupPk: Uint8Array, members: string[]): Uint8Array {
 }
 
 /** dev-inspect 一个 create_organization_with_chain_id 的 PoP 验签调用，返回是否通过验签。 */
-async function probe(sig: Uint8Array, groupPk: Uint8Array, label: string): Promise<{ onchainAccept: boolean; note: string }> {
+async function probe(sig: Uint8Array, groupPk: Uint8Array, _label: string): Promise<{ onchainAccept: boolean; note: string }> {
   const members = [A1]
-  const digest = popDigest(groupPk, members)
+  const _digest = popDigest(groupPk, members)
   const tx = new Transaction()
   tx.moveCall({
     target: `${PKG}::cryptographic_org::create_organization_with_chain_id`,

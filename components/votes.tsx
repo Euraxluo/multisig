@@ -45,7 +45,7 @@ export default function Votes() {
     const events = ["sui-proposals-updated", "sui-votes-updated", "sui-vote-records-updated", "sui-account-switched", "storage"]
     events.forEach(event => window.addEventListener(event, load))
     return () => { generation++; window.clearInterval(timer); events.forEach(event => window.removeEventListener(event, load)) }
-  }, [])
+  }, [t])
 
   const partitions = {
     active: votes.filter(vote => vote.status === "active" || vote.status === "approved"),

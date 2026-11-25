@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { bcs } from "@mysten/sui/bcs"
-import { ObjectError } from "@mysten/sui/client"
+import { ObjectError, type SuiClientTypes } from "@mysten/sui/client"
 import {
   DkgSessionContent, DKG_STATUS, readCommitment, readConfirmation, readMailboxShare,
   readSession, SessionTypeError, type SessionClient,
@@ -33,7 +33,7 @@ function sessionBytes(overrides: Record<string, unknown> = {}) {
   }).toBytes()
 }
 
-function client(session: Uint8Array, dynamicField?: (args: any) => Promise<unknown>): SessionClient {
+function client(session: Uint8Array, dynamicField?: (args: SuiClientTypes.GetDynamicFieldOptions) => Promise<unknown>): SessionClient {
   return {
     getObject: async () => ({ object: { objectId: SESSION, type: `${PACKAGE}::dkg_committee::DkgSession`, content: session } }),
     getDynamicField: dynamicField ?? (async () => { throw new Error("not configured") }),

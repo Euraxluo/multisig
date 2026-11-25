@@ -70,8 +70,7 @@ export default function Home() {
       stopOnlineIndexer()
       window.removeEventListener("popstate", onPopState)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [setActiveTab])
 
   if (!mounted) return null
 

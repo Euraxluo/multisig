@@ -173,10 +173,10 @@ describe("Google zkLogin server session", () => {
     bindTransactionSender(transaction, address)
     assert.equal(transaction.getData().sender, address)
     assert.throws(() => bindTransactionSender(transaction, `0x${"b".repeat(64)}`), /不匹配/)
-    assert.throws(() => successfulTransaction({ $kind: "FailedTransaction", FailedTransaction: { status: { success: false, error: { message: "MoveAbort" } } } } as any, address), /MoveAbort/)
+    assert.throws(() => successfulTransaction({ $kind: "FailedTransaction", FailedTransaction: { status: { success: false, error: { message: "MoveAbort" } } } } as Parameters<typeof successfulTransaction>[0], address), /MoveAbort/)
     const result = { $kind: "Transaction", Transaction: { digest: "test-digest", status: { success: true }, transaction: { sender: address }, effects: { status: { success: true }, changedObjects: [{ idOperation: "Created", objectId: "0x123" }] } } }
-    assert.deepEqual(successfulTransaction(result as any, address), { digest: "test-digest", createdObjects: ["0x123"] })
-    assert.throws(() => successfulTransaction(result as any, `0x${"b".repeat(64)}`), /不匹配/)
+    assert.deepEqual(successfulTransaction(result as Parameters<typeof successfulTransaction>[0], address), { digest: "test-digest", createdObjects: ["0x123"] })
+    assert.throws(() => successfulTransaction(result as Parameters<typeof successfulTransaction>[0], `0x${"b".repeat(64)}`), /不匹配/)
   })
 
   it("a pasted ID Token only completes the flow this tab started, and never invents a session", async () => {

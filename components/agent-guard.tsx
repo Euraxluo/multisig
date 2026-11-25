@@ -65,11 +65,14 @@ export default function AgentGuard() {
   // Keep the open dialog bound to a fresh chain read after every reload.
   const allCaps = useMemo(() => vault.vaults.flatMap(row => row.caps), [vault.vaults])
   useEffect(() => {
-    if (selectedCap) setSelectedCap(allCaps.find(cap => cap.capId === selectedCap.capId) ?? null)
-    if (adjustCap) setAdjustCap(allCaps.find(cap => cap.capId === adjustCap.capId) ?? null)
-    if (exportCap) setExportCap(allCaps.find(cap => cap.capId === exportCap.capId) ?? null)
-    if (spendCap) setSpendCap(allCaps.find(cap => cap.capId === spendCap.capId) ?? null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Functional updates read the selection that is current when React applies
+    // the update, so the effect depends on the reload result alone and does not
+    // run again when the user picks a different cap.
+    const rebind = (current: AgentCapView | null) => (current && allCaps.find(cap => cap.capId === current.capId)) || null
+    setSelectedCap(rebind)
+    setAdjustCap(rebind)
+    setExportCap(rebind)
+    setSpendCap(rebind)
   }, [allCaps])
 
   const totalBalance = vault.vaults.reduce((sum, row) => sum + row.balanceUnits, 0n)

@@ -36,7 +36,7 @@ const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const ATTACKER = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const CHAIN = Buffer.from("sui-testnet:")
-const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" } as any)
+const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
 
 function keypairFor(address: string): Ed25519Keypair {
   const ks = JSON.parse(readFileSync(`${homedir()}/.sui/sui_config/sui.keystore`, "utf8")) as string[]
@@ -51,18 +51,25 @@ const vecB = (items: Uint8Array[]): Uint8Array => { const total = 1 + items.redu
 const addrB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
 const idB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
 
-interface ExecResult { ok: boolean; t: Record<string, any>; digest: string }
+// Read-field views of the gRPC responses consumed below (the `events.events` /
+// `digest.digest` fallbacks cover the legacy JSON-RPC result shapes the harness
+// defensively reads).
+interface TxEvent { eventType?: string; type?: string; json?: Record<string, unknown> | null; parsedJson?: Record<string, unknown> }
+interface TxStatus { success?: boolean; error?: { message?: string } | null }
+interface TxView { digest: string | { digest?: string }; status: TxStatus; events?: TxEvent[] | { events?: TxEvent[]; data?: TxEvent[] } }
+interface ExecTxn { digest?: string | { digest?: string }; events: TxEvent[]; status?: TxStatus }
+interface ExecResult { ok: boolean; t: ExecTxn; digest: string }
 async function exec(signer: Ed25519Keypair, tx: Transaction, label: string): Promise<ExecResult> {
   tx.setSender(signer.toSuiAddress())
-  const bytes = await tx.build({ client } as any)
+  const bytes = await tx.build({ client })
   const sig = await signer.signTransaction(bytes)
-  const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+  const res: { Transaction?: TxView; FailedTransaction?: TxView } = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
   const t0 = res.Transaction ?? res.FailedTransaction
   const rawEvs = t0?.events
   const evs = Array.isArray(rawEvs) ? rawEvs : (rawEvs?.events ?? rawEvs?.data ?? [])
   const t = { ...t0, events: evs }
   const ok = t?.status?.success === true
-  const digest: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
+  const digest: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest as string
   console.log(`[${label}] ${ok ? "EXECUTED" : "ABORTED"} digest=${digest}${ok ? "" : " :: " + (t?.status?.error?.message ?? "").slice(0, 160)}`)
   return { ok, t, digest }
 }
@@ -79,15 +86,16 @@ async function expectAbort(signer: Ed25519Keypair, tx: Transaction, label: strin
     return hit
   }
 }
-async function gasCoin(owner: string, minMist = 200_000_000n): Promise<string> {
-  const r: any = await client.listCoins({ owner, coinType: SUI, limit: 20 })
-  const coins = (r.coins ?? r.data ?? []) as any[]
+interface CoinView { balance: string; coinObjectId?: string }
+async function _gasCoin(owner: string, minMist = 200_000_000n): Promise<string> {
+  const r: { objects?: CoinView[]; coins?: CoinView[]; data?: CoinView[] } = await client.listCoins({ owner, coinType: SUI, limit: 20 })
+  const coins = (r.coins ?? r.data ?? [])
   const c = coins.sort((a, b) => Number(BigInt(b.balance) - BigInt(a.balance))).find((x) => BigInt(x.balance) >= minMist)
   if (!c) throw new Error(`no gas coin >= ${minMist} for ${owner}`)
-  return c.coinObjectId
+  return c.coinObjectId!
 }
-const evType = (e: any) => String(e?.eventType ?? e?.type ?? "")
-const evField = (e: any, f: string) => e?.json?.[f] ?? e?.parsedJson?.[f]
+const evType = (e: TxEvent) => String(e?.eventType ?? e?.type ?? "")
+const evField = (e: TxEvent, f: string) => e?.json?.[f] as string ?? e?.parsedJson?.[f]
 
 let blocked = 0, ran = 0
 const mark = (label: string, ok: boolean) => { ran++; if (ok) blocked++; console.log(`  ==> ${label}: ${ok ? "BLOCKED ✓" : "NOT BLOCKED ✗"}`) }
@@ -97,7 +105,8 @@ async function main() {
   const att = keypairFor(ATTACKER)
   const fs = await import("node:fs")
   const STATE_FILE = "/tmp/t01-state.json"
-  let st: any = {}
+  interface T01State { orgId?: string; treasuryId?: string; channelId?: string; vaultId?: string; chan2?: string; sk?: string; funded?: boolean; x2done?: boolean; x4seeded?: boolean }
+  let st: T01State = {}
   try { st = JSON.parse(fs.readFileSync(STATE_FILE, "utf8")) } catch {}
   if (st.orgId && st.treasuryId && st.channelId && st.vaultId) {
     console.log("reusing state:", st)
@@ -135,7 +144,7 @@ async function main() {
   }
   if (!treasuryId) {
     const tx = new Transaction()
-    const [treasury] = tx.moveCall({ target: `${PKG}::organization_treasury::new`, arguments: [tx.object(orgId)] }) as any
+    const [treasury] = tx.moveCall({ target: `${PKG}::organization_treasury::new`, arguments: [tx.object(orgId)] })
     tx.moveCall({ target: `${PKG}::organization_treasury::share`, arguments: [treasury] })
     tx.moveCall({
       target: `${PKG}::onchain_chat::create_channel`,
@@ -163,7 +172,7 @@ async function main() {
   // Fund vault with 0.1 SUI (A1) — skip on reruns
   if (!st.funded) {
     const tx = new Transaction()
-    const [c] = tx.splitCoins(tx.gas, [tx.pure.u64(100_000_000n)]) as any[]
+    const [c] = tx.splitCoins(tx.gas, [tx.pure.u64(100_000_000n)])
     tx.moveCall({ target: `${PKG}::vault::deposit`, typeArguments: [SUI], arguments: [tx.object(vaultId), c] })
     tx.setGasBudget(30_000_000)
     await exec(a1, tx, "deposit 0.1 SUI into vault")
@@ -180,21 +189,21 @@ async function main() {
     {
       const deadline = BigInt(Date.now() + 3_600_000)
       const tx = new Transaction()
-      const [prop] = tx.moveCall({
+      const [_prop] = tx.moveCall({
         target: `${PKG}::organization_treasury::create_transfer`,
         arguments: [
           tx.object(treasuryId), tx.object(orgId),
           tx.pure.vector("u8", Buffer.from("x2-relay")), tx.pure.address(ATTACKER),
           tx.pure.u64(AMOUNT), tx.pure.u64(deadline), tx.object(CLOCK),
         ],
-      }) as any
+      })
       // create_transfer shares both the binding and the proposal internally
       tx.setGasBudget(20_000_000)
       // NOTE: create_transfer requires sender be member — ATTACKER is NOT.
       // This probe documents the gate; the member path goes through A1 next.
       try {
         await exec(att, tx, "ATTACKER create_transfer (expect ENotMember abort)")
-      } catch (e) {
+      } catch {
         console.log("  ✅ blocked at simulation: ENotMember")
       }
       mark("treasury.create_transfer by non-member", true)
@@ -279,7 +288,7 @@ async function main() {
     const [sp] = t1.moveCall({
       target: `${PKG}::scallop_yield_adapter::split_ssui_for_redemption`,
       arguments: [t1.object(adapterId), t1.pure.u64(1)],
-    }) as any[]
+    })
     t1.transferObjects([sp], A1) // consume the Coin so UnusedValueWithoutDrop doesn't mask the abort
     mark("split_ssui_for_redemption by non-admin (7001)", await expectAbort(a1, t1, "X1a", 7001))
     const t2 = new Transaction()
@@ -289,7 +298,7 @@ async function main() {
     })
     // feed requires a Coin — build via splitCoins from gas
     const t3 = new Transaction()
-    const [c] = t3.splitCoins(t3.gas, [t3.pure.u64(1_000_000n)]) as any[]
+    const [c] = t3.splitCoins(t3.gas, [t3.pure.u64(1_000_000n)])
     t3.moveCall({
       target: `${PKG}::scallop_yield_adapter::feed_harvested_yield_to_chat`,
       arguments: [t3.object(adapterId), t3.object(channelId), c],
@@ -321,7 +330,7 @@ async function main() {
     console.log("  chan2:", chan2)
     if (!st.x4seeded) {
       const t0 = new Transaction()
-      const [c] = t0.splitCoins(t0.gas, [t0.pure.u64(12_000_000n)]) as any[]
+      const [c] = t0.splitCoins(t0.gas, [t0.pure.u64(12_000_000n)])
       t0.moveCall({ target: `${PKG}::onchain_chat::deposit_staking_yield`, arguments: [t0.object(chan2), c] })
       t0.setGasBudget(20_000_000)
       const r0 = await exec(att, t0, "seed chan2 pool 0.012 SUI")
@@ -336,15 +345,16 @@ async function main() {
     for (let i = 0; i < K; i++) {
       tx.moveCall({
         target: `${PKG}::onchain_chat::post_message`,
-        arguments: [tx.object(st.chan2), tx.object(CLOCK), tx.pure.vector("u8", Buffer.from("b")), tx.pure.vector("u8", Buffer.from("x"))],
+        arguments: [tx.object(st.chan2!), tx.object(CLOCK), tx.pure.vector("u8", Buffer.from("b")), tx.pure.vector("u8", Buffer.from("x"))],
       })
     }
     tx.setGasBudget(60_000_000)
-    const getBal = async (who: string) => { const r: any = await client.getBalance({ owner: who, coinType: SUI }); const b = r.balance ?? r; return BigInt(b.addressBalance ?? b.totalBalance ?? b.balance) }
+    interface BalanceFields { addressBalance?: string; totalBalance?: string; balance?: unknown }
+    const getBal = async (who: string) => { const r: { balance?: BalanceFields } = await client.getBalance({ owner: who, coinType: SUI }); const b = r.balance ?? r as BalanceFields; return BigInt(b.addressBalance ?? b.totalBalance ?? b.balance as string) }
     const balBefore = await getBal(ATTACKER)
     const r = await exec(att, tx, `${K}x post_message single PTB by ATTACKER`)
     const balAfter = await getBal(ATTACKER)
-    const rebates = (r.t.events ?? []).filter((e: any) => evType(e).endsWith("GasSubsidizedEvent")).length
+    const rebates = (r.t.events ?? []).filter((e: TxEvent) => evType(e).endsWith("GasSubsidizedEvent")).length
     const net = balAfter - balBefore
     console.log(`  rebates paid: ${rebates}/${K}, ATTACKER net: ${(Number(net) / 1e9).toFixed(6)} SUI (gas+rebate)`)
     mark("per-call rebate drain observable (K rebates in 1 tx)", rebates === K)
@@ -356,11 +366,11 @@ async function main() {
     const tx = new Transaction()
     tx.moveCall({
       target: `${PKG}::onchain_chat::post_message`,
-      arguments: [tx.object(st.chan2), tx.object(CLOCK), tx.pure.vector("u8", Buffer.from("blob")), tx.pure.vector("u8", Buffer.from("hi"))],
+      arguments: [tx.object(st.chan2!), tx.object(CLOCK), tx.pure.vector("u8", Buffer.from("blob")), tx.pure.vector("u8", Buffer.from("hi"))],
     })
     tx.setGasBudget(10_000_000)
     const r = await exec(att, tx, "post_message empty-pool chan2")
-    const rebate = (r.t.events ?? []).some((e: any) => evType(e).endsWith("GasSubsidizedEvent"))
+    const rebate = (r.t.events ?? []).some((e: TxEvent) => evType(e).endsWith("GasSubsidizedEvent"))
     console.log("  rebate paid on empty pool:", rebate, "(expect false)")
     mark("no rebate from empty pool", !rebate)
   }

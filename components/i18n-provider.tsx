@@ -32,7 +32,7 @@ export function I18nProvider({ initialLocale, children }: { initialLocale: Local
       setLocaleState(detected)
       persistLocale(detected)
     }
-  }, [initialLocale]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [initialLocale])
 
   // Keep <html lang> and the non-React store in sync with the rendered locale.
   useEffect(() => {

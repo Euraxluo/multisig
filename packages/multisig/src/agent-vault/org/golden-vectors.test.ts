@@ -204,8 +204,12 @@ const DOMAIN_OF: Readonly<Record<string, string>> = {
 // may keep its declaration and, at most, an accessor that hands it back out.
 const DECLARED_UNUSED: Readonly<Record<string, string>> = {
   'SUI_ORG_APPROVAL_V1:': 'DOMAIN_THRESHOLD_APPROVAL',
-  'SUI_ORG_TREASURY_TRANSFER_V1:': 'DOMAIN_TREASURY_TRANSFER',
 };
+
+// Domains that used to be declared and whose declarations were deleted as dead
+// code. They must stay deleted: a new digest built under one of them would be
+// unpinned (no vector, no Move test), so this guard fails on reintroduction.
+const DELETED_DOMAINS: ReadonlyArray<string> = ['SUI_ORG_TREASURY_TRANSFER_V1:'];
 
 function sourceText(dir: string): string {
   return readdirSync(dir).filter((f) => f.endsWith('.move')).map((f) => readFileSync(join(dir, f), 'utf8')).join('\n');
@@ -233,6 +237,9 @@ describe('the Move side is pinned to the same vectors', () => {
       const mentions = sources.split('\n').filter((line) => new RegExp(`\\b${constName}\\b`).test(line));
       expect(mentions[0].trim().startsWith(`const ${constName}:`)).toBe(true);
       for (const line of mentions.slice(1)) expect(line.trim()).toBe(constName);
+    }
+    for (const domain of DELETED_DOMAINS) {
+      expect(sources.includes(`b"${domain}"`)).toBe(false);
     }
   });
 });

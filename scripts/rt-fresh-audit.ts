@@ -34,7 +34,7 @@ const ATTACKER = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const ZERO = "0x0000000000000000000000000000000000000000000000000000000000000000"
 const CHAIN = Buffer.from("sui-testnet:")
-const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" } as any)
+const client = new SuiGrpcClient({ network: "testnet", baseUrl: "https://fullnode.testnet.sui.io:443" })
 
 function keypairFor(address: string): Ed25519Keypair {
   const ks = JSON.parse(readFileSync(`${homedir()}/.sui/sui_config/sui.keystore`, "utf8")) as string[]
@@ -55,15 +55,24 @@ const le = (v: bigint): Uint8Array => { const o = new Uint8Array(8); let x = v; 
 const vecB = (items: Uint8Array[]): Uint8Array => { const total = 1 + items.reduce((a, x) => a + x.length, 0); const o = new Uint8Array(total); o[0] = items.length; let p = 1; for (const x of items) { o.set(x, p); p += x.length } return o }
 const addrB = (a: string) => Buffer.from(a.replace(/^0x/, "").padStart(64, "0"), "hex")
 
-interface ExecResult { ok: boolean; t: Record<string, any>; digest: string }
+/** Minimal shape of the tx envelope actually probed by this script: the SDK type has
+ *  digest: string, but this harness also defends against a legacy { digest: { digest } } wrap. */
+interface TxEvent { eventType?: string; bcs?: Uint8Array | Record<string, number> }
+interface TxEnvelope { status?: { success?: boolean; error?: { message?: string } | null }; digest?: string | { digest?: string }; events?: TxEvent[] }
+interface TxResult { Transaction?: TxEnvelope; FailedTransaction?: TxEnvelope }
+/** Object content arrives as raw BCS bytes in this SDK, but the harness also defends
+ *  against the legacy JSON-RPC { content: { Bcs } } wrapper shape. */
+interface ContentBcs { content?: (Uint8Array | Record<string, number>) & { Bcs?: Uint8Array | Record<string, number> } }
+
+interface ExecResult { ok: boolean; t: TxEnvelope | undefined; digest: string | undefined }
 async function exec(signer: Ed25519Keypair, tx: Transaction, label: string): Promise<ExecResult> {
   tx.setSender(signer.toSuiAddress())
-  const bytes = await tx.build({ client } as any)
+  const bytes = await tx.build({ client })
   const sig = await signer.signTransaction(bytes)
-  const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true, objectTypes: true } })
+  const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true, objectTypes: true } })
   const t = res.Transaction ?? res.FailedTransaction
   const ok = t?.status?.success === true
-  const digest: string = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
+  const digest: string | undefined = typeof t?.digest === "string" ? t.digest : t?.digest?.digest
   console.log(`[${label}] ${ok ? "EXECUTED" : "ABORTED"} digest=${digest}${ok ? "" : " :: " + (t?.status?.error?.message ?? "").slice(0, 130)}`)
   return { ok, t, digest }
 }
@@ -82,18 +91,12 @@ async function expectAbort(signer: Ed25519Keypair, tx: Transaction, label: strin
     return hit
   }
 }
-async function vaultBalanceOf(id: string): Promise<string> {
-  const { object }: any = await client.getObject({ objectId: id, include: { content: true } })
-  const raw = object?.content?.Bcs ?? object?.content
-  const bytes = raw instanceof Uint8Array ? raw : (raw && Object.values(raw).every((v: unknown) => typeof v === "number") ? Uint8Array.from(Object.values(raw) as number[]) : undefined)
-  return bytes ? String(bytes.length) : "?" // AgentVault BCS layout varies; report raw len only on demand
-}
 async function masterCapsOf(owner: string): Promise<{ capId: string; vaultId: string }[]> {
-  const owned: any = await client.listOwnedObjects({ owner, limit: 50 })
+  const owned = await client.listOwnedObjects({ owner, limit: 50 })
   const out: { capId: string; vaultId: string }[] = []
   for (const o of owned.objects ?? []) {
     if (!String(o.type ?? "").endsWith("vault::MasterCap")) continue
-    const { object }: any = await client.getObject({ objectId: o.objectId, include: { content: true } })
+    const { object }: { object?: ContentBcs } = await client.getObject({ objectId: o.objectId, include: { content: true } })
     const raw = object?.content?.Bcs ?? object?.content
     const bytes = raw instanceof Uint8Array ? raw : (raw && Object.values(raw).every((v: unknown) => typeof v === "number") ? Uint8Array.from(Object.values(raw) as number[]) : undefined)
     if (bytes && bytes.length >= 64) out.push({ capId: o.objectId, vaultId: hex(bytes, 32, 64) })
@@ -143,7 +146,7 @@ async function main() {
     })
     const r = await exec(att, tx, "create org")
     if (!r.ok) return
-    const ev = (r.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("OrganizationCreatedEvent"))
+    const ev = (r.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("OrganizationCreatedEvent"))
     const org = hex(bcsBytes(ev))
     await runAttacks(org, sk)
   }
@@ -158,11 +161,11 @@ async function main() {
       tx.transferObjects([mc], tx.pure.address(ATTACKER))
       const r = await exec(att, tx, "vault")
       if (!r.ok) return
-      const full: any = await client.getTransaction({ digest: r.digest, include: { events: true, objectTypes: true } })
-      vaultId = hex(bcsBytes((full.Transaction?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("VaultCreatedEvent"))))
+      const full = await client.getTransaction({ digest: r.digest!, include: { events: true, objectTypes: true } })
+      vaultId = hex(bcsBytes((full.Transaction?.events ?? []).find((e) => (e.eventType ?? "").endsWith("VaultCreatedEvent"))))
       for (const [oid, ty] of Object.entries(full?.Transaction?.objectTypes ?? {}) as [string, string][]) {
         if (!String(ty).endsWith("vault::MasterCap")) continue
-        const { object }: any = await client.getObject({ objectId: oid, include: { content: true } })
+        const { object }: { object?: ContentBcs } = await client.getObject({ objectId: oid, include: { content: true } })
         const raw = object?.content?.Bcs ?? object?.content
         const bytes = raw instanceof Uint8Array ? raw : (raw && Object.values(raw).every((v: unknown) => typeof v === "number") ? Uint8Array.from(Object.values(raw) as number[]) : undefined)
         if (bytes && hex(bytes, 32, 64) === vaultId) capId = oid
@@ -179,7 +182,7 @@ async function main() {
       t4.moveCall({ target: `${PKG}::asset_custody::share`, arguments: [cust] })
       const r4 = await exec(att, t4, "custody + deposit MasterCap")
       if (!r4.ok) return
-      custodyId = hex(bcsBytes((r4.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("AssetCustodyCreated"))))
+      custodyId = hex(bcsBytes((r4.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("AssetCustodyCreated"))))
 
       const t5 = new Transaction()
       t5.moveCall({
@@ -188,7 +191,7 @@ async function main() {
       })
       const r5 = await exec(att, t5, "borrow proposal (proposer=ATTACKER)")
       if (!r5.ok) return
-      capProposalId = hex(bcsBytes((r5.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("CustodyProposalCreated"))))
+      capProposalId = hex(bcsBytes((r5.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("CustodyProposalCreated"))))
 
       const v = new Transaction()
       v.moveCall({ target: `${PKG}::asset_custody::submit_vote`, arguments: [v.object(capProposalId), v.object(org), v.object(CLOCK), v.pure.u64(2n)] })
@@ -228,7 +231,7 @@ async function main() {
       t1.moveCall({ target: `${PKG}::organization_treasury::share`, arguments: [treasury] })
       const r1 = await exec(att, t1, "treasury")
       if (!r1.ok) return
-      const ev = bcsBytes((r1.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("TreasuryCreated")))
+      const ev = bcsBytes((r1.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("TreasuryCreated")))
       const treasuryId = hex(ev), tVault = hex(ev, 64, 96)
       const t2 = new Transaction()
       const [c] = t2.splitCoins(t2.gas, [1_000_000n])
@@ -241,7 +244,7 @@ async function main() {
       })
       const r3 = await exec(att, t3, "create_transfer")
       if (!r3.ok) return
-      const bev = bcsBytes((r3.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("TransferCreated")))
+      const bev = bcsBytes((r3.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("TransferCreated")))
       const bindingId = hex(bev), proposalId = hex(bev, 64, 96)
       const v = new Transaction()
       v.moveCall({ target: `${PKG}::asynchronous_proposal::submit_async_vote`, arguments: [v.object(proposalId), v.object(org), v.object(CLOCK), v.pure.u64(2n), v.pure.vector("u8", [])] })
@@ -258,7 +261,7 @@ async function main() {
       t1.moveCall({ target: `${PKG}::asynchronous_proposal::create_shared_subagent_cap`, arguments: [t1.pure.address(A1), t1.pure.u64(2n), t1.pure.u64(500_000_000n), t1.pure.u64(500_000_000n), t1.pure.u64(BigInt(Date.now() + 3_600_000))] })
       const r1 = await exec(att, t1, "cap C1 (voter_weight=2, agent=A1)")
       if (!r1.ok) return
-      const cap1 = hex(bcsBytes((r1.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("SubagentCapIssuedEvent"))))
+      const cap1 = hex(bcsBytes((r1.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("SubagentCapIssuedEvent"))))
 
       // roster: ATTACKER w2→3, threshold 2→3 (nonce 1, epoch 1→2)
       const rd = rosterDigest(org, 1n, 1n, 2n, 3n, [ATTACKER], [3n])
@@ -275,7 +278,7 @@ async function main() {
       p2.moveCall({ target: `${PKG}::asynchronous_proposal::create_transfer_proposal`, arguments: [p2.object(org), p2.pure.vector("u8", [...new TextEncoder().encode("drift")]), p2.pure.address(ATTACKER), p2.pure.u64(100_000n), p2.pure.u64(deadline), p2.object(CLOCK)] })
       const rp = await exec(att, p2, "proposal P2 (threshold 3)")
       if (!rp.ok) return
-      const proposal2 = hex(bcsBytes((rp.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("ProposalCreatedEvent"))))
+      const proposal2 = hex(bcsBytes((rp.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("ProposalCreatedEvent"))))
 
       // stale cap: voter_weight 2 ≠ live 3 → 4010 (agent A1 relays)
       const stale = new Transaction()
@@ -287,7 +290,7 @@ async function main() {
       t3.moveCall({ target: `${PKG}::asynchronous_proposal::create_shared_subagent_cap`, arguments: [t3.pure.address(A1), t3.pure.u64(3n), t3.pure.u64(500_000_000n), t3.pure.u64(500_000_000n), t3.pure.u64(BigInt(Date.now() + 3_600_000))] })
       const r3 = await exec(att, t3, "cap C2 (voter_weight=3)")
       if (!r3.ok) return
-      const cap2 = hex(bcsBytes((r3.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("SubagentCapIssuedEvent"))))
+      const cap2 = hex(bcsBytes((r3.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("SubagentCapIssuedEvent"))))
       const vote = new Transaction()
       vote.moveCall({ target: `${PKG}::asynchronous_proposal::submit_async_vote_by_subagent`, arguments: [vote.object(proposal2), vote.object(org), vote.object(cap2), vote.object(CLOCK), vote.pure.vector("u8", [])] })
       const rv = await exec(a1, vote, "C2 delegated vote (threshold reached by agent alone)")
@@ -309,7 +312,7 @@ async function main() {
       })
       const r1 = await exec(att, t1, "channel (fee 0.0003, stake 0.0008)")
       if (!r1.ok) return
-      const channelId = hex(bcsBytes((r1.t?.events ?? []).find((e: any) => (e.eventType ?? "").endsWith("ChannelCreatedWithStakeEvent"))))
+      const channelId = hex(bcsBytes((r1.t?.events ?? []).find((e) => (e.eventType ?? "").endsWith("ChannelCreatedWithStakeEvent"))))
       // fund A1 so it can join
       const tf = new Transaction()
       const [gc] = tf.splitCoins(tf.gas, [5_000_000n])
@@ -322,7 +325,7 @@ async function main() {
       const r2 = await exec(a1, t2, "A1 joins (fee+stake)")
       if (!r2.ok) return
       let receiptId = ""
-      const full: any = await client.getTransaction({ digest: r2.digest, include: { objectTypes: true } })
+      const full = await client.getTransaction({ digest: r2.digest!, include: { objectTypes: true } })
       for (const [oid, ty] of Object.entries(full?.Transaction?.objectTypes ?? {}) as [string, string][]) if (String(ty).endsWith("MemberStakeReceipt")) receiptId = oid
       console.log("channel:", channelId, "receipt:", receiptId)
 
@@ -367,7 +370,7 @@ async function main() {
     }
 
     console.log(`\n=== GATES BLOCKED: ${blocked}/${ran} ===`)
-    const { balance }: any = await client.getBalance({ owner: ATTACKER, coinType: SUI })
+    const { balance } = await client.getBalance({ owner: ATTACKER, coinType: SUI })
     console.log("ATTACKER balance:", (Number(balance.balance) / 1e9).toFixed(5), "SUI")
   }
 }

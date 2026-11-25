@@ -1,4 +1,3 @@
-/* eslint-disable */
 // Generates transfer-gate Move test fixtures for the agent_vault package.
 // Deterministic object IDs in sui::test_scenario:
 //   tx digest  = ULEB128(txn_number) zero-padded to 32 bytes (dummy_tx_hash_with_hint)
@@ -30,8 +29,7 @@ const concat = (...xs: Uint8Array[]) => {
   let o = 0; for (const x of xs) { out.set(x, o); o += x.length; }
   return out;
 };
-// BCS vector<u8> = ULEB(len) ++ bytes; vector<address>/vector<u64> = ULEB(len) ++ items
-const vecBytes = (b: Uint8Array) => concat(uleb(BigInt(b.length)), b);
+// BCS vector<address>/vector<u64> = ULEB(len) ++ items
 const vecItems = (items: Uint8Array[]) => concat(uleb(BigInt(items.length)), ...items);
 
 const txDigest = (txn: bigint) => {

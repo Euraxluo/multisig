@@ -1,5 +1,5 @@
 import { ed25519 } from '@noble/curves/ed25519.js';
-import { Point, verifyShareCommitment } from './vss';
+import { verifyShareCommitment } from './vss';
 import { mod } from './math';
 import { DKGParticipant, DKGFinalResult } from './ceremony';
 import {

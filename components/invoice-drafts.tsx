@@ -38,7 +38,7 @@ export function InvoiceDrafts() {
       window.removeEventListener("storage", load)
       window.removeEventListener("sui-account-switched", load)
     }
-  }, [])
+  }, [t])
 
   const open = (invoice?: StoredInvoice) => {
     setReopened(invoice)

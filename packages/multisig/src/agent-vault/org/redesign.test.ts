@@ -5,7 +5,6 @@
  */
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from './vitest-shim';
-import { bcs } from '@mysten/sui/bcs';
 import {
   computeCreatePopDigest,
   computeKeyRotationDigest,

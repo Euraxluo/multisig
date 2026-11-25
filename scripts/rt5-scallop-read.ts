@@ -16,7 +16,7 @@ async function go(): Promise<void> {
   const content = object.content
   const b = content instanceof Uint8Array ? content : Uint8Array.from(Object.values(asRecord(content)) as number[])
   // Layout: uid(32) channel_id(32) admin(32) principal u64 ssui u64 harvested u64 = 120 bytes
-  let p = 32 + 32 + 32
+  const p = 32 + 32 + 32
   const u64 = (off: number): bigint => { let x = 0n; for (let i = 7; i >= 0; i--) x = (x << 8n) | BigInt(b[off + i]); return x }
   console.log("type:", String(object.type))
   console.log("channel_id:", "0x" + Buffer.from(b.slice(32, 64)).toString("hex"))

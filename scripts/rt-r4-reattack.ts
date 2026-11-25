@@ -14,9 +14,14 @@ import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { sha256 } from "@noble/hashes/sha2.js"
+import type { SuiClientTypes } from "@mysten/sui/client"
+
+interface TxStatus { success?: boolean; error?: { message?: string } | null }
+interface TxRecord { status?: TxStatus; digest?: string | { digest?: string } }
+interface TxResult { Transaction?: TxRecord; FailedTransaction?: TxRecord }
 
 const PKG = "0xce550b77f97866cb922834e4185585c61396ba953bacd27ee92f352b93cf9fc5"
-const SUI = "0x2::sui::SUI"
+const _SUI = "0x2::sui::SUI"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
 const A1 = "0x2c6539e5802d1476dae4a7aada30265dd2568f198ecf2f184861ea7deb3f6347"
 const A2 = "0x843f44a42e10a6dc701b7f60a4dedc544dc7910e971ee6a493f4d9096953e04e"
@@ -34,25 +39,25 @@ const cat = (...xs: Uint8Array[]) => { const l = xs.reduce((a, x) => a + x.lengt
 async function run(signer: Ed25519Keypair, tx: Transaction): Promise<{ ok: boolean; digest?: string; err?: string }> {
   try {
     tx.setSender(signer.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await signer.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
+    const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature], include: { effects: true, events: true } })
     const t = res.Transaction ?? res.FailedTransaction
     if (t?.status?.success) return { ok: true, digest: typeof t.digest === "string" ? t.digest : t.digest?.digest }
     return { ok: false, err: t?.status?.error?.message?.slice(0, 150) }
-  } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 150) } }
+  } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 150) } }
 }
-async function fetchTx(digest: string, tries = 8): Promise<any | null> {
+async function fetchTx(digest: string, tries = 8): Promise<SuiClientTypes.Transaction<{ events: true; objectTypes: true }> | null> {
   for (let i = 0; i < tries; i++) {
     try {
-      const full: any = await client.getTransaction({ digest, include: { events: true, objectTypes: true } })
+      const full = await client.getTransaction<{ events: true; objectTypes: true }>({ digest, include: { events: true, objectTypes: true } })
       if (full?.Transaction) return full.Transaction
     } catch { /* not indexed yet */ }
     await new Promise(res => setTimeout(res, 700))
   }
   return null
 }
-async function eventsOf(digest: string): Promise<any[]> {
+async function eventsOf(digest: string): Promise<SuiClientTypes.Event[]> {
   const t = await fetchTx(digest)
   return t?.events ?? []
 }

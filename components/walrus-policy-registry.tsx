@@ -84,7 +84,7 @@ export function WalrusPolicyRegistry() {
       .catch(cause => { if (!cancelled) setDeploymentError(cause instanceof Error ? cause.message : t("walrus.deploymentCheckFailed")) })
       .finally(() => { if (!cancelled) setDeploymentLoading(false) })
     return () => { cancelled = true }
-  }, [])
+  }, [t])
 
   // The saved admin-cap pointer only prefills the form; the chain re-checks
   // ownership on every admin call, so a stale id can never authorize anything.

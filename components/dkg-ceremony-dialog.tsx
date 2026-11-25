@@ -105,6 +105,11 @@ type CeremonyStep =
 
 export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers, draftThreshold, onConvertedSuccess }: DkgCeremonyDialogProps) {
   const { t } = useI18n();
+  // Latest-ref for the mount-restore effect: re-running it on locale change
+  // would force step back to INIT and clear shares/deadline/member-signed
+  // tracking in the middle of a ceremony.
+  const tRef = useRef(t);
+  tRef.current = t;
   const [step, setStep] = useState<CeremonyStep>("INIT");
   const [progress, setProgress] = useState(0);
   const [activeLog, setActiveLog] = useState<string>(t("dkg.logWaiting"));
@@ -136,6 +141,12 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
   const [pendingDeviceKey, setPendingDeviceKey] = useState<Awaited<ReturnType<typeof readPendingDeviceKey>>>(null);
   const [deviceKeyError, setDeviceKeyError] = useState("");
 
+  // Latest-ref for `onOpenChange`: the effect below must run only when `groupId`
+  // changes (every run tears down ceremony state), while the account-switch
+  // handler has to reach the parent's current callback.
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+
   // F-01: switching accounts mid-ceremony must tear down every piece of local
   // ceremony state and close the dialog. Leaving a half-cleared shell lets the
   // next account act on the previous account's session/share context.
@@ -150,18 +161,22 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
       setStep("INIT"); setProgress(0); setActiveLog("");
       setReshareLog(""); setReshareTxDigest(""); setSuiscanReshareTxUrl("");
       setOrgChainCheck({ state: "pending" });
-      onOpenChange(false);
+      onOpenChangeRef.current(false);
     };
+    // Bumped through a closure so cleanup reads the counter's latest value at
+    // teardown: `generation` is an epoch counter (not a DOM node), and copying
+    // `.current` inside the effect — the rule's suggested fix — would compare
+    // against a stale epoch and fail to invalidate in-flight ceremony work.
+    const bumpGeneration = () => { generation.current++; };
     window.addEventListener("sui-account-switched", resetCeremony);
     const invalidate = () => { generation.current++; dealerRef.current = null; setDeviceKey(null); setDeviceKeyError(""); };
     window.addEventListener("sui-account-changed", invalidate);
     invalidate();
     return () => {
-      generation.current++;
+      bumpGeneration();
       window.removeEventListener("sui-account-switched", resetCeremony);
       window.removeEventListener("sui-account-changed", invalidate);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [groupId]);
 
   // 异步信箱状态
@@ -195,9 +210,9 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
           if (run !== generation.current) return;
           setOnChainSessionId(session.sessionId); setSessionInput(session.sessionId);
           const active = getActiveAccount();
-          if (active) void readPendingDeviceKey(session.sessionId, normAddress(active.address, t("dkg.addrInvalid"))).then(key => { if (run === generation.current) setPendingDeviceKey(key); });
+          if (active) void readPendingDeviceKey(session.sessionId, normAddress(active.address, tRef.current("dkg.addrInvalid"))).then(key => { if (run === generation.current) setPendingDeviceKey(key); });
           setDeadlineTs(Number(session.deadlineTimestampMs));
-        }).catch((error: unknown) => { if (run === generation.current) setActiveLog(describeError(error, t("dkg.restoreReadFailed"))); });
+        }).catch((error: unknown) => { if (run === generation.current) setActiveLog(describeError(error, tRef.current("dkg.restoreReadFailed"))); });
         const group = getUserGroups().find(value => value.id === groupId)
         if (!group?.orgObjectId) return
         const raw = JSON.parse(localStorage.getItem(`dao_org_${groupId}`) || "null")
@@ -216,13 +231,13 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
         setStoredShares(held?.shares ?? [])
         setStoredPkBytes(held?.groupPk ?? null)
         setStep("COMPLETE")
-        setActiveLog(t("dkg.logRestored"));
+        setActiveLog(tRef.current("dkg.logRestored"));
         const keyRun = generation.current;
         if (holder) void readDeviceKey(group.orgObjectId, holder).then(key => {
           if (keyRun !== generation.current) return;
           setDeviceKey(key);
           if (key) setOnChainSessionId(key.sessionId);
-        }).catch((error: unknown) => { if (keyRun === generation.current) setDeviceKeyError(describeError(error, t("dkg.deviceKeyReadFailed"))); });
+        }).catch((error: unknown) => { if (keyRun === generation.current) setDeviceKeyError(describeError(error, tRef.current("dkg.deviceKeyReadFailed"))); });
         // The COMPLETE panel says "deployed on chain". That is a chain fact, so
         // it is read from chain rather than inferred from a saved object id.
         const orgId = group.orgObjectId
@@ -231,7 +246,7 @@ export function DkgCeremonyDialog({ open, onOpenChange, groupId, initialMembers,
           setOrgChainCheck({ state: "verified" })
           setEpoch(Number(live.epoch))
         }).catch((error: unknown) => {
-          setOrgChainCheck({ state: "failed", error: error instanceof Error ? error.message : t("dkg.orgReadFailed") })
+          setOrgChainCheck({ state: "failed", error: error instanceof Error ? error.message : tRef.current("dkg.orgReadFailed") })
         })
       } catch (error) { console.warn("Failed to restore DAO state", error) }
     }

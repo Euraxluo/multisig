@@ -10,7 +10,7 @@ import { bcs, type BcsType } from '@mysten/sui/bcs';
 /** std::type_name::TypeName（唯一字段 name: String → vector<u8>）。 */
 export const TypeNameBcs = bcs.vector(bcs.u8());
 
-function vecMap<K extends BcsType<any, any>, V extends BcsType<any, any>>(name: string, key: K, value: V) {
+function vecMap<K, KIn, V, VIn>(name: string, key: BcsType<K, KIn>, value: BcsType<V, VIn>) {
   return bcs.struct(name, { contents: bcs.vector(bcs.struct('Entry', { key, value })) });
 }
 

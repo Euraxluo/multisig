@@ -88,7 +88,7 @@ export function DirectMessagesDialog({ open, onOpenChange, profile, initialRecip
     }
     load().catch(e => { if (!cancelled) setError(errorMessage(e)) })
     return () => { cancelled = true }
-  }, [open, profile, revision, active])
+  }, [open, profile, revision, active, t])
 
   useEffect(() => {
     setMessages([])

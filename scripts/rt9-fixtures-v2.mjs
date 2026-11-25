@@ -11,16 +11,16 @@ const K = (hex) => Uint8Array.from(hex.match(/.{2}/g).map((b) => parseInt(b, 16)
 const H = (b) => Buffer.from(b).toString('hex');
 const addr = (a) => K(a.replace(/^0x/, '').padStart(64, '0'));
 const CHAIN = Buffer.from('sui-testnet:');
-const vecItems = (items) => cat(uleb(BigInt(items.length)), ...items);
+const _vecItems = (items) => cat(uleb(BigInt(items.length)), ...items);
 
 // Keys
 const kpA = Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(0x01));        // PKA 8a88e3dd...
 const kp1 = Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(0xab));        // PK1 248acbdb...
 const kp2 = Ed25519Keypair.fromSecretKey(new Uint8Array(32).fill(0xcd));        // PK2 fc947730...
 const kpG = Ed25519Keypair.fromSecretKey(Uint8Array.from([0x69,0xd6,0x41,0x41,0x3a,0x36,0xd5,0xe5,0xc9,0xd3,0x74,0xc2,0xea,0xf0,0x7b,0x0b,0x78,0xf9,0xc7,0xae,0x0c,0x1a,0x18,0x26,0x3a,0x33,0x40,0x6c,0x60,0x59,0x36,0x64])); // PKG 1134f375...
-const PKA = kpA.getPublicKey().toRawBytes(), PK1 = kp1.getPublicKey().toRawBytes(), PK2 = kp2.getPublicKey().toRawBytes();
+const _PKA = kpA.getPublicKey().toRawBytes(), _PK1 = kp1.getPublicKey().toRawBytes(), _PK2 = kp2.getPublicKey().toRawBytes();
 
-const ALICE = addr('0xa11ce'), BOB = addr('0xb0b'), RECIPIENT = addr('0x9999');
+const _ALICE = addr('0xa11ce'), _BOB = addr('0xb0b'), RECIPIENT = addr('0x9999');
 const sig = async (kp, d) => H(await kp.sign(d));
 
 const ADV_V2 = (orgId, epoch, nonce, nextEpoch, keyGen) =>

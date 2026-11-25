@@ -13,6 +13,11 @@ import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { ed25519 } from "@noble/curves/ed25519.js"
 import { sha256 } from "@noble/hashes/sha2.js"
+import type { SuiClientTypes } from "@mysten/sui/client"
+
+interface TxStatus { success?: boolean; error?: { message?: string } | null }
+interface TxRecord { status?: TxStatus; digest?: string | { digest?: string } }
+interface TxResult { Transaction?: TxRecord; FailedTransaction?: TxRecord }
 
 const PKG = "0x50739707bbb612bdfe320ef7f1d2653541f8bc7eeb2867dd7814fade5e5a6325"
 const CLOCK = "0x0000000000000000000000000000000000000000000000000000000000000006"
@@ -32,20 +37,20 @@ const cat = (...xs: Uint8Array[]) => { const l = xs.reduce((a, x) => a + x.lengt
 async function run(kp: Ed25519Keypair, tx: Transaction) {
   try {
     tx.setSender(kp.toSuiAddress())
-    const bytes = await tx.build({ client } as any)
+    const bytes = await tx.build({ client })
     const sig = await kp.signTransaction(bytes)
-    const res: any = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
+    const res: TxResult = await client.executeTransaction({ transaction: bytes, signatures: [sig.signature] })
     const t = res.Transaction ?? res.FailedTransaction
     if (t?.status?.success) return { ok: true, digest: typeof t.digest === "string" ? t.digest : t.digest?.digest }
     return { ok: false, err: t?.status?.error?.message?.slice(0, 120) }
-  } catch (e: any) { return { ok: false, err: (e?.message ?? "").slice(0, 120) } }
+  } catch (e) { return { ok: false, err: ((e as { message?: string })?.message ?? "").slice(0, 120) } }
 }
-async function eventsOf(d: string): Promise<any[]> {
-  for (let i = 0; i < 8; i++) { try { const f: any = await client.getTransaction({ digest: d, include: { events: true } }); return f?.Transaction?.events ?? [] } catch { await new Promise(r => setTimeout(r, 600)) } }
+async function eventsOf(d: string): Promise<SuiClientTypes.Event[]> {
+  for (let i = 0; i < 8; i++) { try { const f = await client.getTransaction<{ events: true }>({ digest: d, include: { events: true } }); return f?.Transaction?.events ?? [] } catch { await new Promise(r => setTimeout(r, 600)) } }
   return []
 }
 let pass = 0, total = 0
-const check = (l: string, r: any, want: "exec" | "block", code?: string) => {
+const check = (l: string, r: { ok: boolean; err?: string }, want: "exec" | "block", code?: string) => {
   total++
   const good = want === "exec" ? r.ok : !r.ok && (!code || r.err?.includes(code))
   if (good) pass++
@@ -94,7 +99,7 @@ async function main() {
     check("D1 32B X25519 密钥注册", await run(a1, tx), "exec")
   }
   // 补流程：承诺+确认+attest+finalize
-  const { sha256: sh } = { sha256 }
+  const { sha256: _sh } = { sha256 }
   const attestKeys: Record<string, Uint8Array> = {}, attestPks: Record<string, Uint8Array> = {}
   for (const kp of [a1, a2]) { const k = new Uint8Array(32); crypto.getRandomValues(k); attestKeys[kp.toSuiAddress()] = k; attestPks[kp.toSuiAddress()] = ed25519.getPublicKey(k) }
   for (const kp of [a1, a2]) {

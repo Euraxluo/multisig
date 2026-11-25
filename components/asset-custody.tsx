@@ -121,7 +121,7 @@ export function AssetCustodyPanel({ orgId, readOnly, run, busy }: AssetCustodyPa
       setInventory(null)
       setSnapshotError(cause instanceof Error ? cause.message : t("walrus.custodyReadInventoryFailed"))
     }
-  }, [custodyId])
+  }, [custodyId, t])
 
   useEffect(() => { void refreshInventory() }, [refreshInventory])
 

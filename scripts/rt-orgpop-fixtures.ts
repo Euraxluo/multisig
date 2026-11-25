@@ -1,4 +1,3 @@
-/* eslint-disable */
 // Regenerates org_pop_tests.move fixtures for the V3 key-rotation digest:
 //   H("SUI_ORG_KEY_ROTATION_V3:" || chain || bcs(org_id) || bcs(epoch) ||
 //     bcs(nonce) || new_group_pk || bcs(new_signers) || bcs(key_threshold))
@@ -7,7 +6,6 @@
 // Step 2 emits the V3 rotation signatures for the updated tests.
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519';
 import { sha256 } from '@noble/hashes/sha2.js';
-import { keccak_256 } from '@noble/hashes/sha3.js';
 
 
 const K = (hex: string) => Uint8Array.from(hex.match(/.{2}/g)!.map((b) => parseInt(b, 16)));
@@ -30,14 +28,6 @@ const concat = (...xs: Uint8Array[]) => {
   let o = 0; for (const x of xs) { out.set(x, o); o += x.length; }
   return out;
 };
-const txDigest = (txn: bigint) => {
-  const h = uleb(txn);
-  const out = new Uint8Array(32).fill(0);
-  out.set(h);
-  return out;
-};
-// object::derive_id = keccak_256(tx_hash ++ le_bytes(ids_created)) in the Move VM
-const deriveId = (txn: bigint, ids: bigint) => keccak_256(concat(txDigest(txn), le(ids)));
 // BCS vector<address>/vector<u64> = ULEB(len) ++ items
 const vecItems = (items: Uint8Array[]) => concat(uleb(BigInt(items.length)), ...items);
 

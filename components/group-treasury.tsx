@@ -124,6 +124,10 @@ export function GroupTreasury({ groupId, orgId, readOnly = false, data, error, l
 
 export function TreasuryDepositDialog({ open, onOpenChange, orgId, treasuryId, allowFunding = true }: { open: boolean; onOpenChange: (open: boolean) => void; orgId: string; treasuryId: string; allowFunding?: boolean }) {
   const { t } = useI18n()
+  // Latest-ref for the vault-load effect: re-running it on locale change would
+  // clear the user's typed deposit amount.
+  const tRef = useRef(t)
+  tRef.current = t
   const [row, setRow] = useState<GroupVaultRow | null>(null)
   const [error, setError] = useState("")
   const [notice, setNotice] = useState("")
@@ -146,7 +150,7 @@ export function TreasuryDepositDialog({ open, onOpenChange, orgId, treasuryId, a
     const url = new URL("/", window.location.origin)
     url.searchParams.set("treasury", treasuryId); url.searchParams.set("org", orgId)
     setLink(url.toString())
-    groupVaults.readTreasury(treasuryId, orgId).then(value => { if (run === generation.current) setRow(value) }).catch(cause => { if (run === generation.current) setError(cause instanceof Error ? cause.message : t("groups.readVaultsFailed")) })
+    groupVaults.readTreasury(treasuryId, orgId).then(value => { if (run === generation.current) setRow(value) }).catch(cause => { if (run === generation.current) setError(cause instanceof Error ? cause.message : tRef.current("groups.readVaultsFailed")) })
     const invalidate = () => { generation.current++; setPreparing(false); setNotice("") }
     window.addEventListener("sui-account-switched", invalidate); window.addEventListener("sui-account-changed", invalidate); window.addEventListener("storage", invalidate)
     return () => { invalidate(); window.removeEventListener("sui-account-switched", invalidate); window.removeEventListener("sui-account-changed", invalidate); window.removeEventListener("storage", invalidate) }

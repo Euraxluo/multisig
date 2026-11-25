@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test, beforeEach } from "node:test"
 import { normalizeSuiAddress } from "@mysten/sui/utils"
+import type { SuiClientTypes } from "@mysten/sui/client"
 import { POLL_FIELDS, POLL_FIELD_TYPES, PollContent, preparePollPublication, buildPublishPoll, buildCastPollBallot, validatePollBallot, pollScores, pollVoteView, createPollReader, pollLinks, rememberPoll, POLL_LINKS_KEY, type PollDraft, type PollSnapshot } from "./governance-poll-client"
 import { proposalClient } from "./proposal-chain"
 
@@ -83,9 +84,16 @@ test("object link hints are never proof of voting and malformed historical store
   assert.equal(values.get(POLL_LINKS_KEY), '{"history":true}')
 })
 
+/** One node of the raw protobuf type tree the fixture descriptor carries. */
+interface RawTypeNode {
+  type: number
+  typeParameterInstantiation: RawTypeNode[]
+  typeName?: string
+}
+
 // Independent raw protobuf ABI fixture; numeric type enums come from the pinned
 // installed Sui protocol definition, rather than the reader's decoder.
-function rawType(type: string): any {
+function rawType(type: string): RawTypeNode {
   if (type.startsWith("vector<")) return { type: 9, typeParameterInstantiation: [rawType(type.slice(7, -1))] }
   const primitive = ({ address: 1, bool: 2, u8: 3, u64: 6 } as Record<string, number>)[type]
   if (primitive) return { type: primitive, typeParameterInstantiation: [] }
@@ -94,14 +102,14 @@ function rawType(type: string): any {
 }
 function fixtureClient(poll = snapshot()) {
   const descriptor = { typeName: `${pkg}::governance_poll::Poll`, definingId: pkg, module: "governance_poll", name: "Poll", kind: 1, abilities: [4], typeParameters: [], variants: [], fields: POLL_FIELDS.map((name, index) => ({ name, position: index, type: rawType(POLL_FIELD_TYPES[index]) })) }
-  let owner: any = { $kind: "Shared", Shared: { initialSharedVersion: "1" } }
+  let owner: SuiClientTypes.ObjectOwner = { $kind: "Shared", Shared: { initialSharedVersion: "1" } }
   let type = descriptor.typeName
   const client = {
     getObject: async () => ({ object: { objectId: pollId, type, owner, content: PollContent.serialize(poll).toBytes() } }),
     getMoveFunction: async () => { throw new Error("Unexpected function call") },
     movePackageService: { getDatatype: async () => ({ response: { datatype: descriptor } }) },
   } as unknown as Pick<typeof proposalClient, "getObject" | "getMoveFunction" | "movePackageService">
-  return { descriptor, client, setOwner(value: any) { owner = value }, setType(value: string) { type = value } }
+  return { descriptor, client, setOwner(value: SuiClientTypes.ObjectOwner) { owner = value }, setType(value: string) { type = value } }
 }
 
 test("raw shared object reader resolves added-module type origins and rejects wrong owner, type, ABI and malformed ballots", async () => {

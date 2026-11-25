@@ -3,6 +3,8 @@ import { afterEach, beforeEach, mock, test } from "node:test"
 import { bcs } from "@mysten/sui/bcs"
 import { SuiGrpcClient } from "@mysten/sui/grpc"
 import { normalizeSuiAddress } from "@mysten/sui/utils"
+import type { Transaction } from "@mysten/sui/transactions"
+import type { Wallet } from "@mysten/wallet-standard"
 import { approveProposal, executeProposal, findCreatedProtocolObject, getProposals, getUserGroups, persistGroupOrganization, proposalAmountMist, saveProposals, type ProposalItem } from "./onchain-store"
 import { OrganizationContent, ProposalContent, PROPOSAL_TYPE_ORIGIN, proposalClient } from "./proposal-chain"
 import { proposalVoteView } from "./governance"
@@ -224,13 +226,13 @@ test("confirmed execution receipt survives refresh failure without fabricating e
   unregister = getWallets().register({ version: "1.0.0", name: "Test wallet", icon: "data:image/png;base64,", chains: ["sui:testnet"],
     accounts: [{ address: sender, publicKey: new Uint8Array(32), chains: ["sui:testnet"], features: [] }],
     features: { "standard:connect": { version: "1.0.0", connect: async () => ({ accounts: [] }) },
-      "sui:signAndExecuteTransaction": { version: "2.0.0", signAndExecuteTransaction: async ({ transaction }: any) => {
+      "sui:signAndExecuteTransaction": { version: "2.0.0", signAndExecuteTransaction: async ({ transaction }: { transaction: Transaction }) => {
         assert.equal(transaction.getData().sender, sender)
         saveProposals([...getProposals(), proposal({ id: "concurrent", onChainId: id(99) })])
         mock.method(proposalClient, "getObject", async () => { throw new Error("read unavailable") })
         return { digest: "confirmed-execution" }
       } } },
-  } as any)
+  } as Wallet)
   mock.method(SuiGrpcClient.prototype, "waitForTransaction", async () => ({ $kind: "Transaction", Transaction: {
     digest: "confirmed-execution", status: { success: true }, effects: { status: { success: true }, changedObjects: [] }, transaction: { sender },
   } }))

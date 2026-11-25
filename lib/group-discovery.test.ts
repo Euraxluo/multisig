@@ -4,6 +4,7 @@ import { bcs } from "@mysten/sui/bcs"
 import { ObjectError, type SuiClientTypes } from "@mysten/sui/client"
 import {
   ORGANIZATION_CREATED_TYPE, ORGANIZATION_TYPE, createGroupDiscovery, discoveredGroupRecord, mergeDiscoveredGroups,
+  type GroupDiscoveryClient,
 } from "./group-discovery"
 import { OrganizationContent, PROPOSAL_TYPE_ORIGIN } from "./proposal-chain"
 
@@ -17,13 +18,19 @@ const created = (id: string) => ({ eventType: ORGANIZATION_CREATED_TYPE, bcs: bc
   org_id: bcs.Address, group_pk: bcs.vector(bcs.u8()), threshold_weight: bcs.u64(), member_count: bcs.u64(),
 }).serialize({ org_id: id, group_pk: Array.from({ length: 32 }, (_, i) => i), threshold_weight: "2", member_count: "3" }).toBytes(), transactionDigest: digest })
 
-const page = (events: any[], extra: { hasNextPage?: boolean; endCursor?: string | null } = {}) => ({
+/** What one `created()` fixture looks like inside an events page. */
+type CreatedEvent = ReturnType<typeof created>
+
+const page = (events: CreatedEvent[], extra: { hasNextPage?: boolean; endCursor?: string | null } = {}) => ({
   events, hasNextPage: extra.hasNextPage ?? false, endCursor: extra.endCursor ?? null, startCursor: null,
 })
 
+/** One page of the paginated `listEvents` answer, as the fake serves it. */
+type EventPage = ReturnType<typeof page>
+
 function organization(id: string, table: string, size = "3") {
   return {
-    objectId: id, type: ORGANIZATION_TYPE, owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } },
+    objectId: id, type: ORGANIZATION_TYPE, owner: { $kind: "Shared", Shared: { initialSharedVersion: "1" } } as SuiClientTypes.ObjectOwner,
     content: OrganizationContent.serialize({
       id, group_pk: Array.from({ length: 32 }, (_, i) => 255 - i), threshold_weight: "2", epoch_version: "4",
       last_nonce: "0", chain_id: Array.from(new TextEncoder().encode("sui-testnet:")),
@@ -36,7 +43,7 @@ const notFound = () => new ObjectError("notExists", "not found", { reason: "notF
 
 /** A client whose org membership table answers only for the ids in `members`. */
 function client(options: {
-  events?: any[]
+  events?: EventPage[]
   orgs?: Record<string, string | null>
   weights?: Record<string, Record<string, string>>
   onOrg?: (id: string) => void
@@ -77,7 +84,7 @@ function client(options: {
 afterEach(() => mock.restoreAll())
 
 test("discovers a member organization with the live roster, not the creation-time event values", async () => {
-  const reader = createGroupDiscovery(client({ events: [page([created(orgId)])] }) as any)
+  const reader = createGroupDiscovery(client({ events: [page([created(orgId)])] }) as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member)
   assert.equal(result.truncated, false)
   assert.deepEqual(result.failures, [])
@@ -102,7 +109,7 @@ test("excludes organizations where the account has no membership row", async () 
     events: [page([created(orgId), created(otherOrg)])],
     orgs: { [orgId]: tableId, [otherOrg]: otherTable },
     weights: { [tableId]: { [member]: "1" }, [otherTable]: {} },
-  }) as any)
+  }) as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member)
   assert.deepEqual(result.organizations.map(org => org.orgId), [orgId])
   // An examined non-member is a recorded negative, which lets the merge layer
@@ -116,7 +123,7 @@ test("a failed organization read is a failure, never reported as non-membership"
     events: [page([created(orgId), created(otherOrg)])],
     orgs: { [orgId]: tableId, [otherOrg]: null },
     weights: { [tableId]: { [member]: "1" } },
-  }) as any)
+  }) as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member)
   assert.deepEqual(result.organizations.map(org => org.orgId), [orgId])
   assert.deepEqual(result.checked, [orgId])
@@ -127,8 +134,8 @@ test("a failed organization read is a failure, never reported as non-membership"
 
 test("only a typed notFound dynamic field means absent; other errors surface", async () => {
   const fake = client({ events: [page([created(orgId)])], weights: { [tableId]: { [member]: "1" } } })
-  fake.getDynamicField = mock.fn(async () => { throw new Error("rpc unavailable") }) as any
-  const reader = createGroupDiscovery(fake as any)
+  fake.getDynamicField = mock.fn<(input: SuiClientTypes.GetDynamicFieldOptions) => Promise<never>>(async () => { throw new Error("rpc unavailable") })
+  const reader = createGroupDiscovery(fake as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member)
   assert.deepEqual(result.organizations, [])
   assert.equal(result.failures.length, 1)
@@ -138,7 +145,7 @@ test("only a typed notFound dynamic field means absent; other errors surface", a
 test("marks a page-capped scan as truncated so absence is never implied", async () => {
   const reader = createGroupDiscovery(client({
     events: [page([created(orgId)], { hasNextPage: true, endCursor: "cursor-1" })],
-  }) as any)
+  }) as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member, { maxPages: 1 })
   assert.equal(result.truncated, true)
   assert.equal(result.organizations.length, 1)
@@ -155,7 +162,7 @@ test("follows cursors across pages and collapses repeated organizations", async 
     orgs: { [orgId]: tableId, [otherOrg]: otherTable },
     weights: { [tableId]: { [member]: "1" }, [otherTable]: { [member]: "3" } },
     onPage: index => seen.push(index),
-  }) as any)
+  }) as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member)
   assert.equal(result.truncated, false)
   assert.deepEqual(seen, [0, 1, 2])
@@ -167,7 +174,7 @@ test("follows cursors across pages and collapses repeated organizations", async 
 test("rejects a cursor that does not advance instead of looping", async () => {
   const reader = createGroupDiscovery(client({
     events: [page([created(orgId)], { hasNextPage: true, endCursor: "same" })],
-  }) as any)
+  }) as unknown as GroupDiscoveryClient)
   // Second page reports the same cursor, so the guard throws.
   await assert.rejects(reader.discover(member), /分页未前进/)
 })
@@ -178,7 +185,7 @@ test("caps the candidate count and reports the cap as truncation", async () => {
     events: [page(ids.map(created))],
     orgs: { [ids[0]]: tableId, [ids[1]]: otherTable },
     weights: { [tableId]: { [member]: "1" }, [otherTable]: { [member]: "1" } },
-  }) as any)
+  }) as unknown as GroupDiscoveryClient)
   const result = await reader.discover(member, { maxOrganizations: 1 })
   assert.equal(result.truncated, true)
   assert.deepEqual(result.organizations.map(org => org.orgId), [ids[0]])
@@ -186,21 +193,21 @@ test("caps the candidate count and reports the cap as truncation", async () => {
 
 test("rejects events from a different contract and non-organization objects", async () => {
   const wrongEvent = { ...created(orgId), eventType: `${PROPOSAL_TYPE_ORIGIN}::other::OrganizationCreatedEvent` }
-  const bad = createGroupDiscovery(client({ events: [page([wrongEvent])] }) as any)
+  const bad = createGroupDiscovery(client({ events: [page([wrongEvent])] }) as unknown as GroupDiscoveryClient)
   await assert.rejects(bad.discover(member), /事件类型不匹配/)
 
   const fake = client({ events: [page([created(orgId)])] })
   fake.getObject = mock.fn(async ({ objectId }: SuiClientTypes.GetObjectOptions) => ({
-    object: { ...organization(objectId, tableId), owner: { $kind: "AddressOwner", AddressOwner: member } },
-  })) as any
-  const result = await createGroupDiscovery(fake as any).discover(member)
+    object: { ...organization(objectId, tableId), owner: { $kind: "AddressOwner", AddressOwner: member } as SuiClientTypes.ObjectOwner },
+  }))
+  const result = await createGroupDiscovery(fake as unknown as GroupDiscoveryClient).discover(member)
   assert.deepEqual(result.organizations, [])
   assert.match(result.failures[0].reason, /共享对象/)
 })
 
 test("validates the account address and scan bounds before any network read", async () => {
   const fake = client({ events: [page([])] })
-  const reader = createGroupDiscovery(fake as any)
+  const reader = createGroupDiscovery(fake as unknown as GroupDiscoveryClient)
   await assert.rejects(reader.discover("not-an-address"), /钱包地址/)
   await assert.rejects(reader.discover(member, { maxPages: 0 }), /扫描页数/)
   await assert.rejects(reader.discover(member, { pageSize: 51 }), /分页大小/)

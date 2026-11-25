@@ -20,7 +20,6 @@ import { describe, expect, it } from './vitest-shim';
 import { Transaction } from '@mysten/sui/transactions';
 import { ed25519 } from '@noble/curves/ed25519.js';
 import { generatePolynomial, evaluatePolynomial } from '../../dkg/vss';
-import { ThresholdSignerNode } from '../../dkg/threshold_signer';
 import {
   computeTreasuryAgentDelegationDigest,
   computeTreasuryOutflowPolicyDigest,
@@ -35,7 +34,6 @@ import {
   type SessionAction, type SessionShareMaterial, type SessionShareProvider, type SigningIntent,
 } from './session';
 import type { OrganizationSnapshot } from './reader';
-import { BcsReader, u64le } from './bcs';
 import { AGENT_VAULT_PACKAGE_ID, DOMAINS, TREASURY_ERRORS, TREASURY_EVENTS, explainAbort } from './constants';
 import type { SuiGrpcClient } from '@mysten/sui/grpc';
 
@@ -50,7 +48,7 @@ const ORG = A(ORGID);
 const TREASURY = A('0x' + 'ee'.repeat(32));
 const VAULT = A('0x' + 'ff'.repeat(32));
 const OPERATOR = A('0x' + '99'.repeat(32));
-const PK = Buffer.alloc(32, 0x01);
+const _PK = Buffer.alloc(32, 0x01);
 
 const agentInput = {
   chainId: CHAIN, orgId: ORGID, epochVersion: 2n, nonce: 31n,

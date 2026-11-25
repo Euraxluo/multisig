@@ -74,6 +74,10 @@ interface BatchTransaction {
 
 export function CreateTransactionDialog({ open, onOpenChange, groupId, initialTemplate }: CreateTransactionDialogProps) {
   const { t } = useI18n()
+  // Latest-ref for hooks that must not re-run on locale change: the group/treasury
+  // load effect resets user-entered selections (selectedTreasuryId, legacySource).
+  const tRef = useRef(t)
+  tRef.current = t
   const [step, setStep] = useState(1)
   const [transactionType, setTransactionType] = useState("transfer")
   const [advancedMode, setAdvancedMode] = useState(false)
@@ -113,7 +117,7 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId, initialTe
     const generation = ++groupGeneration.current
     const load = async () => {
       const found = getUserGroups().find(group => group.id === groupId)
-      const next = { id: found?.id || "", name: found?.name || t("vault.noOrgSelected"), balance: "—", token: "SUI", orgObjectId: found?.orgObjectId || "", vaultId: found?.vaultId || "", masterCapId: found?.masterCapId || "" }
+      const next = { id: found?.id || "", name: found?.name || tRef.current("vault.noOrgSelected"), balance: "—", token: "SUI", orgObjectId: found?.orgObjectId || "", vaultId: found?.vaultId || "", masterCapId: found?.masterCapId || "" }
       setCurrentGroup(next)
       setTreasuries([])
       setSelectedTreasuryId("")
@@ -127,10 +131,10 @@ export function CreateTransactionDialog({ open, onOpenChange, groupId, initialTe
         setTreasuries(choices)
         const first = choices[0]
         if (first) {
-          setCurrentGroup(value => ({ ...value, balance: t("vault.pickTreasury"), token: "SUI" }))
+          setCurrentGroup(value => ({ ...value, balance: tRef.current("vault.pickTreasury"), token: "SUI" }))
         }
       } catch (error) {
-        if (!cancelled && generation === groupGeneration.current) setErrorMessage(error instanceof Error ? error.message : t("vault.treasuryReadFailed"))
+        if (!cancelled && generation === groupGeneration.current) setErrorMessage(error instanceof Error ? error.message : tRef.current("vault.treasuryReadFailed"))
       }
     }
     void load()
