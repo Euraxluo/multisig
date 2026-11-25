@@ -20,6 +20,7 @@ jobs:
       SUI_RELEASE: testnet-v1.82.1
       SUI_ASSET: sui-testnet-v1.82.1-ubuntu-x86_64.tgz
     steps:
+      - uses: actions/checkout@v4
       - name: Cache sui CLI binary
         id: sui
         uses: actions/cache@v4
