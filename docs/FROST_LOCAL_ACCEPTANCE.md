@@ -61,7 +61,7 @@
 
 - FROST 私信承载（会话协议、信封加密、私信事件投影与发送管线、round 传输）从 `lib/` 下沉至 `packages/multisig/src/bridge`，经 `multisig/bridge` 子路径导出；`lib/frost-session.ts`、`lib/frost-session-store.ts`、`lib/message-crypto.ts`、`lib/dkg-key-package.ts`、`lib/private-messages.ts`、`lib/frost-private-transport.ts` 变为薄壳，公开 API 不变。IndexedDB、设备密钥库、钱包签名与 env 配置仍留在前端，通过 `FrostSessionStore` / `DeviceVault` / `MessageKeyStore` / `execute(tx, profile)` 注入。
 - 离线双节点 E2E（`packages/multisig/src/bridge/e2e.test.ts`）：两个 SDK `PrivateMessaging` 实例经假链事件总线互发加密私信，跑完 request→round1→transcript→round2→aggregate，聚合签名对群公钥验签通过。依赖链闭合成为每次 CI 可验证项；不代表 identity 部署、真实钱包提示、链上事件索引或真实多设备网络已验收。
-- 门禁：`pnpm sdk:typecheck`、`pnpm test:sdk`（118/118）、全前端离线测试（727/727）、`tsc --noEmit`、production build、golden vectors 零漂移。
+- 门禁：`pnpm sdk:typecheck`、`pnpm test:sdk`（177/177）、全前端离线测试（735/735）、`tsc --noEmit`、production build、golden vectors 零漂移。
 
 ## 复现
 

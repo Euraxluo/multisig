@@ -220,7 +220,7 @@ All primitives are standard and mapped to their specifications and attack litera
 
 ## 6. Security posture
 
-**Process evidence.** The codebase has been through ten rounds of internal adversarial review (35+ findings, all closed), one internal white-box security review (`docs/SECURITY_REVIEW.md`), a critical-vulnerability discovery→fix→deploy→re-review cycle with on-chain evidence (§4.1), and a formal-model pass. Test gates at the time of writing: **424/424** Move tests, **48/48** identity tests, **727/727** frontend offline tests, **118/118** SDK tests, TypeScript clean, ESLint 0 errors, golden vectors zero-drift in CI, production build passing with CSP (`default-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`), `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and `X-Frame-Options: DENY` verified on pages, API routes, and 404 paths. Two gaps in the gates themselves: CI runs the Move tests for `agent_vault` only, so the identity package's 48 tests are not exercised, and its frontend gate omits the test files under `lib/crypto` and `lib/i18n`.
+**Process evidence.** The codebase has been through ten rounds of internal adversarial review (35+ findings, all closed), one internal white-box security review (`docs/SECURITY_REVIEW.md`), a critical-vulnerability discovery→fix→deploy→re-review cycle with on-chain evidence (§4.1), and a formal-model pass. Test gates at the time of writing: **527/527** Move tests, **48/48** identity tests, **735/735** frontend offline tests, **177/177** SDK tests, TypeScript clean, ESLint 0 errors / 0 warnings, golden vectors zero-drift in CI, production build passing with CSP (`default-src 'self'`, `object-src 'none'`, `frame-ancestors 'none'`), `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and `X-Frame-Options: DENY` verified on pages, API routes, and 404 paths. Two gaps in the gates themselves: CI runs the Move tests for `agent_vault` only, so the identity package's 48 tests are not exercised, and its frontend gate omits the test files under `lib/crypto` and `lib/i18n`.
 
 **Open findings** (internal review, severity-ranked; full detail in `docs/SECURITY_REVIEW.md`):
 
@@ -289,12 +289,12 @@ Every claim above maps to a command or artifact:
 
 ```sh
 # Contract gates
-cd contracts/agent_vault && sui move test          # 424/424 (2026-11-24)
+cd contracts/agent_vault && sui move test          # 527/527 (2026-11-24)
 cd contracts/identity  && sui move test            # 48/48, coverage 99.15%
 
 # Application gates
-pnpm sdk:typecheck && pnpm test:sdk                # SDK 118/118
-pnpm exec tsx --test lib/*.test.ts lib/crypto/*.test.ts   # frontend 727/727
+pnpm sdk:typecheck && pnpm test:sdk                # SDK 177/177
+pnpm exec tsx --test lib/*.test.ts lib/crypto/*.test.ts   # frontend 735/735
 pnpm exec tsc --noEmit && pnpm lint && pnpm build
 
 # Digest layout integrity (zero drift enforced in CI)

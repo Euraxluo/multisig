@@ -1,33 +1,26 @@
-# Sui Multisig — Group Vaults, DAO Governance & Threshold Signatures
+# Sui Multisig
 
-A Sui application consisting of a Next.js frontend, a TypeScript SDK (`packages/multisig`), and Move contracts. It turns a group chat into an on-chain organization: the organization is not a multisig address but a set of FROST threshold key shares held on members' own devices.
+A Sui application that turns a group of people into an on-chain organization without a single shared multisig address. Instead, each member holds a FROST threshold key share on their own device, and a threshold of members jointly signs proposals, roster changes, and treasury transfers.
 
-## Core capabilities
+The repository has three parts:
 
-- **Organizations & vaults** — weighted member voting, proposals, treasury transfers
-- **FROST threshold signatures (RFC 9591)** — roster updates and key rotation; shares are sealed on-device (non-extractable AES-GCM key in IndexedDB)
+- `app/` and `components/` — the Next.js frontend
+- `packages/multisig/` — the TypeScript SDK
+- `contracts/` — the Move contracts (`agent_vault` and `identity`)
+
+What it does:
+
+- **Organizations and vaults** — weighted member voting, proposals, treasury transfers
+- **FROST threshold signatures (RFC 9591)** — roster updates and key rotation; shares are sealed on-device in a non-extractable AES-GCM key in IndexedDB
 - **DKG** — sealed-mailbox share delivery; the group key is fixed on-chain by threshold member attestations
-- **Agent vaults** — sub-accounts constrained by per-day budgets and per-epoch outflow caps
-- **Identity & encrypted DMs** — on-chain identities (`.id`), follows, ECDH P-256 + HKDF + AES-256-GCM direct messages, used as the FROST round transport
+- **Agent vaults** — sub-accounts with per-day budgets and per-epoch outflow caps
+- **Identity and encrypted DMs** — on-chain identities (`.id`), follows, and ECDH P-256 + HKDF + AES-256-GCM direct messages used as the FROST round transport
 
-## Repository layout
+Status:
 
-| Path | Contents |
-|---|---|
-| `app/`, `components/` | Next.js pages and UI |
-| `lib/` | Frontend logic and offline tests |
-| `packages/multisig/` | SDK: `agent-vault/*`, `namespace/*`, `dkg/*`, `account/*`, `bridge/*` |
-| `contracts/agent_vault/` | Move contracts: organization, vault, proposals, DKG, custody, polls, payments |
-| `contracts/identity/` | Move contracts: identity and private messages |
-| `formal/` | TLA+ and Alloy formal models |
-| `scripts/` | On-chain E2E, UI regression, digest-vector generation |
-| `docs/` | Project documentation — see the [documentation guide](docs/README.md) |
+This is development and testnet verification only. There is no mainnet deployment and no production hosting. Some capabilities are verified end-to-end on testnet; others are local-only or not yet deployed. The authoritative list of what is verified, what is local-only, and what must not be claimed yet is in `docs/PRELAUNCH_CHECKLIST.md`. If any document conflicts with that file, this one wins.
 
-## Status
-
-Development and testnet verification only. There is no mainnet deployment and no production hosting. Which capabilities are verified, which are local-only, and which claims must not be made yet are tracked authoritatively in the [pre-launch checklist](docs/PRELAUNCH_CHECKLIST.md).
-
-## Quick start
+Quick start:
 
 ```sh
 pnpm install
@@ -36,7 +29,7 @@ pnpm dev
 
 Environment variables: see `.env.example`.
 
-## Verification
+Verification:
 
 ```sh
 # SDK
@@ -46,7 +39,7 @@ pnpm test:sdk
 # Frontend
 pnpm exec tsx --test lib/*.test.ts lib/crypto/*.test.ts
 pnpm exec tsc --noEmit
-pnpm lint
+pnpm exec eslint . --max-warnings 0
 pnpm build
 
 # Digest vectors (must produce no diff)
@@ -56,13 +49,13 @@ node scripts/golden-vectors-gen.mjs && git diff --exit-code -- packages/multisig
 cd contracts/agent_vault && sui move test
 ```
 
-Browser regression requires a locally running app (`pnpm dev`, or `pnpm build && pnpm start`) and a separate Playwright install:
+Browser regression needs a locally running app and a separate Playwright install:
 
 ```sh
 UI_BASE_URL=http://127.0.0.1:3005 node scripts/ui-regression.mjs
 UI_BASE_URL=http://127.0.0.1:3005 UI_VIEWPORT_WIDTH=1280 node scripts/ui-regression.mjs
 ```
 
-## Documentation
+Documentation:
 
-The full documentation set is organized in [docs/README.md](docs/README.md): overview & product, protocol & cryptography, security review & audit materials, deployment & operations, and internal working records.
+`docs/README.md` is the documentation guide — product, protocol and cryptography, security review and audit, deployment and operations, and internal working records. It is written to be read, not checked off.
